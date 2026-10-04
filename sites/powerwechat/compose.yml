@@ -1,0 +1,10 @@
+services:
+  powerwechat-docs:
+    image: ${POWERWECHAT_IMAGE:?Initialize site configuration using scripts/hosting.sh}
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
