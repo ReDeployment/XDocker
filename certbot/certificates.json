@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "warning_days": 30,
+  "critical_days": 7,
+  "acme_directory": "https://acme-v02.api.letsencrypt.org/directory",
+  "certificates": [
+    {
+      "name": "artisan-cloud.com",
+      "domains": [
+        "artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "debug-ecommerce.artisan-cloud.com",
+      "domains": [
+        "debug-ecommerce.artisan-cloud.com",
+        "debug-scrm.artisan-cloud.com",
+        "debug.artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "dev.rentoken.cc",
+      "domains": [
+        "dev.rentoken.cc"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "powerwechat.artisan-cloud.com",
+      "domains": [
+        "powerwechat.artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "powerx-dev.artisan-cloud.com",
+      "domains": [
+        "powerx-dev.artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "powerx-doc.artisan-cloud.com",
+      "domains": [
+        "powerx-doc.artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "powerx.artisan-cloud.com",
+      "domains": [
+        "powerx.artisan-cloud.com"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "shopify.artisan-cloud.com",
+      "domains": [
+        "shopify.artisan-cloud.com"
+      ],
+      "enabled": true
+    }
+  ]
+}

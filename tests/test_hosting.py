@@ -29,6 +29,8 @@ printf '%s | %s\\n' "$COMPOSE_FILE" "$*" >> "$DOCKER_CALLS"
 case "$*" in
   *'run --rm --entrypoint /bin/sh certbot'*) [ "${NO_CERT:-0}" = 0 ] || exit 1 ;;
   *'exec -T nginx nginx -t'*) [ "${INVALID_CONFIG:-0}" = 0 ] || exit 1 ;;
+  *'certificates.py check'*) [ "${BAD_CERT:-0}" = 0 ] || exit 1 ;;
+  *'certificates.py acme-config'*) [ "${ACME_FAIL:-0}" = 0 ] || exit 1 ;;
 esac
 ''')
         docker.chmod(0o755)
@@ -96,8 +98,8 @@ esac
     def test_issue_targets_requested_domain_and_dry_run(self):
         self.enable_three()
         self.run_action("issue-test", "artisancloud-home")
-        self.assertIn("--cert-name artisan-cloud.com", self.calls())
-        self.assertIn("-d artisan-cloud.com --dry-run", self.calls())
+        self.assertIn("certificates.py issue-test artisan-cloud.com", self.calls())
+        self.assertIn("--email operator@example.com", self.calls())
         self.assertNotIn("-d powerx-doc", self.calls())
 
     def test_missing_certificate_preserves_http(self):
@@ -126,10 +128,34 @@ esac
         self.run_action("http", "powerxdoc", success=False)
         self.assertEqual(self.config_path("powerxdoc").read_text(), config)
 
+    def test_bad_certificate_refuses_tls_activation(self):
+        self.run_action("http", "powerxdoc")
+        original = self.config_path("powerxdoc").read_text()
+        self.run_action("https", "powerxdoc", success=False, BAD_CERT="1")
+        self.assertEqual(self.config_path("powerxdoc").read_text(), original)
+
+    def test_shared_san_certificate_uses_its_lineage_name(self):
+        with (self.root / "sites/powerxdoc/.env").open("a") as stream:
+            stream.write("SITE_CERT_NAME=shared.example.com\n")
+        self.run_action("http", "powerxdoc")
+        self.run_action("issue-test", "powerxdoc")
+        self.run_action("https", "powerxdoc")
+        self.assertIn("certificates.py issue-test shared.example.com", self.calls())
+        self.assertIn("/live/shared.example.com/fullchain.pem", self.config_path("powerxdoc").read_text())
+
+    def test_acme_generation_failure_preserves_existing_config(self):
+        self.run_action("http", "powerxdoc")
+        original = self.config_path("powerxdoc").read_text()
+        acme = self.root / "data/nginx/10-certificates-acme.conf"
+        acme.write_text("# Previous ACME configuration\n")
+        self.run_action("https", "powerxdoc", success=False, ACME_FAIL="1")
+        self.assertEqual(self.config_path("powerxdoc").read_text(), original)
+        self.assertEqual(acme.read_text(), "# Previous ACME configuration\n")
+
     def test_renew_test_is_scoped_to_one_certificate(self):
         self.enable_three()
         self.run_action("renew-test", "powerwechat")
-        self.assertIn("renew --cert-name powerwechat.artisan-cloud.com --dry-run", self.calls())
+        self.assertIn("certificates.py renew-test powerwechat.artisan-cloud.com", self.calls())
 
     def test_update_only_recreates_selected_service(self):
         self.enable_three()

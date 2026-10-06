@@ -30,7 +30,9 @@ sites/<site>/
   .env.example                # SITE_DOMAIN、SITE_IMAGE
 scripts/hosting.sh            # 通用的站点操作与 Compose 包装入口
 nginx/                        # 公共 HTTP/HTTPS 模板与续期 reload
-certbot/                      # 所有证书的续期检查
+certbot/                      # 独立 certificates.json 清单与续期
+scripts/certificates.sh        # 证书检查、续期、签发、公网验证
+docs/guides/certificates/      # 旧机兼容与容器证书操作指南
 docs/guides/hosting/           # 多站点部署与扩展指南
 docs/guides/powerxdoc/         # PowerXDoc 镜像推送与使用指南
 ```
@@ -53,6 +55,8 @@ sh scripts/hosting.sh https powerxdoc
 ```
 
 服务器只需要 Docker、Compose 和 POSIX shell，不需要宿主机安装 Nginx、Certbot 或 Node。
+
+证书清单独立于网站配置，已登记 8 份证书/10 个域名；旧服务器可执行 `sudo sh scripts/certificates.sh --host check`，容器入口执行 `sh scripts/certificates.sh check`。详细步骤见 [证书管理指南](docs/guides/certificates/README.md)。
 
 完整步骤见 [多站点部署指南](docs/guides/hosting/README.md) 和 [PowerXDoc 镜像推送指南](docs/guides/powerxdoc/README.md)。
 

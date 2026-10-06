@@ -72,7 +72,7 @@ sh scripts/hosting.sh http powerxdoc --no-pull
 
 ## 4. 按站点部署与申请证书
 
-以下用 `powerxdoc` 演示，其他站点替换 key、域名即可。每个域名 A/AAAA 要正确解析到服务器；公网 TCP 80/443 放行，现有服务不得占用端口。Certbot 使用 HTTP-01 webroot，域名的公网 80 端口必须可达。首次启用一个站点不会改动其他站点的 Nginx 配置或证书。
+以下用 `powerxdoc` 演示，其他站点替换 key、域名即可。每个站点证书都需登记在 `certbot/certificates.json`（或本机 `.local.json`），其完整 SAN 与 Certificate Name 必须一致。`SITE_CERT_NAME` 可指定共享 SAN 组名称，默认等于 `SITE_DOMAIN`。每个域名 A/AAAA 要正确解析到服务器；公网 TCP 80/443 放行，现有服务不得占用端口。Certbot 使用 HTTP-01 webroot，域名的公网 80 端口必须可达。首次启用一个站点不会改动其他站点的 Nginx 配置或证书。
 
 ### 4.1 HTTP
 
@@ -196,7 +196,9 @@ sh scripts/hosting.sh compose stop powerwechat-docs
 
 ## 7. 自动续期与持久化
 
-一个 `certbot-renew` 服务每 12 小时检查所有已保存证书。成功续期的 deploy hook 更新共享事件，公共 Nginx 在 30 秒内检测并通过语法检查后 reload。Certbot 没有 Docker socket 权限，无需宿主机 cron。[Certbot 官方指南](https://eff-certbot.readthedocs.io/en/stable/using.html)
+一个 `certbot-renew` 服务每 12 小时检查独立清单中已启用的证书，保留每份证书的原续期选项。实际叶证书更新后写入共享事件，公共 Nginx 在 30 秒内检测并通过语法检查后 reload。Certbot 没有 Docker socket 权限，无需宿主机 cron。[Certbot 官方指南](https://eff-certbot.readthedocs.io/en/stable/using.html)
+
+独立的检查、旧机续期、完整 SAN 签发及公网验证见 [证书管理指南](../certificates/README.md)。迁移部分证书时使用本机清单禁用仍由旧机负责的项，不要通过网站启用列表隐式忽略证书。
 
 备份根目录及各站点 `.env`、整个 `data/letsencrypt/`、`data/nginx/`，保留证书符号链接和权限，不要只复制 `live/`。升级时不得删除 `data/`。
 
@@ -227,6 +229,6 @@ sh scripts/hosting.sh compose exec -T nginx nginx -t
 
 开发机可运行 `python3 -m unittest discover -s tests -v`；Python 不是服务器运行依赖。测试使用 Docker stub 检查多站点隔离、证书切换回滚，并使用真实 Compose CLI 检查默认与三站合并结果，不启动容器或签发证书。
 
-本次验证：14 项测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。HTTPS 测试使用临时自签名证书，没有申请真实证书或启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
+本次验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。HTTPS 测试使用临时自签名证书，没有申请真实证书或启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
 
 本次验收仍需区分配置测试和运行测试：本机 Docker daemon 未启动，完整容器运行、正式签发、实际续期 reload、服务器部署及重启尚未完成。每个实际接入站点还需验证页面、HTTPS、续期和独立回滚。

@@ -34,10 +34,12 @@ load_site() {
     valid_key "$1"
     [ -f "sites/$1/site.conf" ] && [ -f "sites/$1/compose.yml" ] || die "Unknown site: $1"
     [ -f "sites/$1/.env" ] || die "Initialize sites/$1/.env first."
-    unset SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE
+    unset SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME
     . "./sites/$1/site.conf"
     . "./sites/$1/.env"
     case ${SITE_DOMAIN:-} in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_DOMAIN for $1." ;; esac
+    SITE_CERT_NAME=${SITE_CERT_NAME:-$SITE_DOMAIN}
+    case $SITE_CERT_NAME in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_CERT_NAME for $1." ;; esac
     case ${SITE_SERVICE:-} in ''|*[!a-z0-9-]*) die "Invalid SITE_SERVICE for $1." ;; esac
     case ${SITE_IMAGE_VAR:-} in ''|*[!A-Z0-9_]*) die "Invalid SITE_IMAGE_VAR for $1." ;; esac
     case ${SITE_IMAGE:-} in ''|*REPLACE_WITH*) die "Set a published SITE_IMAGE for $1 before enabling it." ;; esac
@@ -86,7 +88,7 @@ config="data/nginx/$site.conf"
 backup="data/$site.conf.backup"
 
 render() {
-    sed -e "s/__DOMAIN__/$SITE_DOMAIN/g" -e "s/__SERVICE__/$SITE_SERVICE/g" \
+    sed -e "s/__DOMAIN__/$SITE_DOMAIN/g" -e "s/__SERVICE__/$SITE_SERVICE/g" -e "s/__CERT_NAME__/$SITE_CERT_NAME/g" \
         "nginx/$1.conf.template" > "$config.tmp"
     mv "$config.tmp" "$config"
 }
@@ -97,9 +99,24 @@ save_config() {
 restore_config() {
     if [ -f "$backup" ]; then mv "$backup" "$config"; else rm -f "$config"; fi
 }
+refresh_acme() {
+    if [ -f data/nginx/10-certificates-acme.conf ]; then
+        if ! compose run --rm --no-deps --entrypoint python3 certbot \
+            /opt/xdocker/scripts/certificates.py acme-config > data/nginx/10-certificates-acme.conf.tmp; then
+            rm -f data/nginx/10-certificates-acme.conf.tmp
+            return 1
+        fi
+        mv data/nginx/10-certificates-acme.conf.tmp data/nginx/10-certificates-acme.conf
+    fi
+}
 validate_reload() {
+    if ! refresh_acme; then
+        restore_config
+        die 'Could not refresh inventory ACME paths; site configuration restored.'
+    fi
     if ! compose exec -T nginx nginx -t || ! compose exec -T nginx nginx -s reload; then
         restore_config
+        refresh_acme || true
         die "Nginx rejected $site configuration; previous file restored."
     fi
     rm -f "$backup"
@@ -108,9 +125,10 @@ issue() {
     case ${CERTBOT_EMAIL:-} in
         ''|replace-with-*|*[!a-zA-Z0-9@._+-]*) die 'Set CERTBOT_EMAIL in .env.' ;;
     esac
-    compose run --rm certbot certonly --non-interactive --agree-tos \
-        --webroot --webroot-path /var/www/certbot --cert-name "$SITE_DOMAIN" \
-        --email "$CERTBOT_EMAIL" -d "$SITE_DOMAIN" "$@"
+    cert_action=issue
+    if [ "${1:-}" = --dry-run ]; then cert_action=issue-test; fi
+    compose run --rm --no-deps --entrypoint python3 certbot /opt/xdocker/scripts/certificates.py \
+        "$cert_action" "$SITE_CERT_NAME" --email "$CERTBOT_EMAIL" --runtime container --reload container-event
 }
 case "$action" in
     http)
@@ -130,7 +148,9 @@ case "$action" in
     issue) issue ;;
     https)
         compose run --rm --entrypoint /bin/sh certbot -c \
-            'test -s "/etc/letsencrypt/live/$1/fullchain.pem" && test -s "/etc/letsencrypt/live/$1/privkey.pem"' sh "$SITE_DOMAIN"
+            'test -s "/etc/letsencrypt/live/$1/fullchain.pem" && test -s "/etc/letsencrypt/live/$1/privkey.pem"' sh "$SITE_CERT_NAME"
+        compose run --rm --no-deps --entrypoint python3 certbot /opt/xdocker/scripts/certificates.py \
+            check "$SITE_CERT_NAME" --runtime container --require-usable
         [ -f "$config" ] || die "Start HTTP for $site first."
         save_config
         render https
@@ -138,8 +158,8 @@ case "$action" in
         compose --profile tls up -d certbot-renew
         ;;
     renew-test)
-        compose run --rm certbot renew --cert-name "$SITE_DOMAIN" --dry-run \
-            --webroot --webroot-path /var/www/certbot
+        compose run --rm --no-deps --entrypoint python3 certbot /opt/xdocker/scripts/certificates.py \
+            renew-test "$SITE_CERT_NAME" --runtime container
         ;;
     update)
         compose pull "$SITE_SERVICE"

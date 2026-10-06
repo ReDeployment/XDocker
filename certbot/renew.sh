@@ -2,10 +2,17 @@
 set -eu
 trap 'exit 0' TERM INT
 while :; do
-    if ! certbot renew --non-interactive --webroot --webroot-path /var/www/certbot \
-        --deploy-hook 'date -u +%s > /var/lib/certbot-events/reload'; then
-        echo 'Certificate renewal failed; inspect certbot-renew logs.' >&2
+    python3 /opt/xdocker/scripts/certificates.py check --runtime container \
+        --report /var/lib/certbot-events/certificates-check.json || \
+        echo 'Certificate inventory needs attention; see check report and logs.' >&2
+    if ! python3 /opt/xdocker/scripts/certificates.py renew --runtime container \
+        --reload container-event --report /var/lib/certbot-events/certificates-renew.json; then
+        echo 'Certificate renewal has failures or expiry warnings; inspect reports and logs.' >&2
     fi
+    # Refresh the expiry report after renewal so it does not retain resolved warnings.
+    python3 /opt/xdocker/scripts/certificates.py check --runtime container \
+        --report /var/lib/certbot-events/certificates-check.json || \
+        echo 'Certificate inventory still needs attention after renewal.' >&2
     sleep 43200 &
     wait $! || true
 done
