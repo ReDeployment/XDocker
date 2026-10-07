@@ -3,6 +3,7 @@ name: xdocker-web-hosting
 services:
   nginx:
     image: ${NGINX_IMAGE:-nginx:alpine}
+    pull_policy: ${NGINX_PULL_POLICY:-missing}
     restart: unless-stopped
     ports:
       - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-80}:80"
@@ -17,6 +18,7 @@ services:
 
   certbot:
     image: ${CERTBOT_IMAGE:-certbot/certbot:latest}
+    pull_policy: ${CERTBOT_PULL_POLICY:-missing}
     profiles: [tools]
     volumes:
       - ./data/nginx:/etc/nginx/conf.d:ro
@@ -28,6 +30,7 @@ services:
 
   certbot-renew:
     image: ${CERTBOT_IMAGE:-certbot/certbot:latest}
+    pull_policy: ${CERTBOT_PULL_POLICY:-missing}
     profiles: [tls]
     restart: unless-stopped
     depends_on:
