@@ -32,31 +32,41 @@ scripts/hosting.sh            # 通用的站点操作与 Compose 包装入口
 nginx/                        # 公共 HTTP/HTTPS 模板与续期 reload
 certbot/                      # 独立 certificates.json 清单与续期
 scripts/certificates.sh        # 证书检查、续期、签发、公网验证
-docs/guides/certificates/      # 旧机兼容与容器证书操作指南
+docs/guides/server-setup/      # 新机用户、SSH、Git、Docker 与首次验证
+docs/guides/certificates/      # 新机容器证书操作与可选旧机兼容
 docs/guides/hosting/           # 多站点部署与扩展指南
 docs/guides/powerxdoc/         # PowerXDoc 镜像推送与使用指南
 ```
 
 ## 开始使用
 
+按这个顺序阅读：
+
+1. [服务器准备指南](docs/guides/server-setup/README.md)：Ubuntu 用户、SSH 公钥、root 密钥登录、VS Code、Git、Docker 安装与换源。
+2. [证书管理指南](docs/guides/certificates/README.md)：先验证 Certbot 容器，再验证域名挑战路径与签发。
+3. [多站点部署指南](docs/guides/hosting/README.md)：部署网站、HTTPS、更新与回滚。
+4. [PowerXDoc 镜像推送指南](docs/guides/powerxdoc/README.md)：需要发布新镜像时使用。
+
+已有服务器完成准备后，使用 ubuntu 账号初始化。下面的服务器 Docker 操作使用 sudo：
+
 ```bash
 sh scripts/hosting.sh init
 # 编辑 .env 和 sites/powerxdoc/.env
-sh scripts/hosting.sh compose config --quiet
-sh scripts/hosting.sh http powerxdoc
+sudo sh scripts/hosting.sh compose config --quiet
+sudo sh scripts/hosting.sh http powerxdoc
 ```
 
 后续按站点申请证书并启用 HTTPS：
 
 ```bash
-sh scripts/hosting.sh issue-test powerxdoc
-sh scripts/hosting.sh issue powerxdoc
-sh scripts/hosting.sh https powerxdoc
+sudo sh scripts/hosting.sh issue-test powerxdoc
+sudo sh scripts/hosting.sh issue powerxdoc
+sudo sh scripts/hosting.sh https powerxdoc
 ```
 
 服务器只需要 Docker、Compose 和 POSIX shell，不需要宿主机安装 Nginx、Certbot 或 Node。
 
-证书清单独立于网站配置，已登记 8 份证书/10 个域名；旧服务器可执行 `sudo sh scripts/certificates.sh --host check`，容器入口执行 `sh scripts/certificates.sh check`。详细步骤见 [证书管理指南](docs/guides/certificates/README.md)。
+证书清单独立于网站配置，已登记 8 份证书/10 个域名；新服务器执行 `sudo sh scripts/certificates.sh list` 和 `sudo sh scripts/certificates.sh preflight`；旧机的 `--host` 只是可选兼容入口。详细步骤见 [证书管理指南](docs/guides/certificates/README.md)。
 
 完整步骤见 [多站点部署指南](docs/guides/hosting/README.md) 和 [PowerXDoc 镜像推送指南](docs/guides/powerxdoc/README.md)。
 

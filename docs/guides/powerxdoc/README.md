@@ -1,5 +1,7 @@
 # PowerXDoc：镜像推送与全容器部署指南
 
+新服务器先完成 [Ubuntu、SSH、Git 与 Docker 准备指南](../server-setup/README.md)，然后进入容器验证和部署。已有 GHCR 镜像时无需为了服务器安装重新发布镜像。
+
 ## 1. 两个仓库分别推送什么
 
 | 仓库 | 本地位置 | 推送目标 | 职责 |
@@ -150,14 +152,16 @@ curl -I -H 'Host: powerx-doc.artisan-cloud.com' http://127.0.0.1:8080/
 
 ## 7. 服务器 HTTPS 与更新
 
+下列命令按 Ubuntu 新机使用 sudo，保持与服务器准备指南一致。
+
 域名正确指向服务器，公网 80/443 可用。根目录 `.env` 的服务器端口保持 80/443，按顺序执行：
 
 ```bash
-sh scripts/hosting.sh http powerxdoc
-sh scripts/hosting.sh issue-test powerxdoc
-sh scripts/hosting.sh issue powerxdoc
-sh scripts/hosting.sh https powerxdoc
-sh scripts/hosting.sh renew-test powerxdoc
+sudo sh scripts/hosting.sh http powerxdoc
+sudo sh scripts/hosting.sh issue-test powerxdoc
+sudo sh scripts/hosting.sh issue powerxdoc
+sudo sh scripts/hosting.sh https powerxdoc
+sudo sh scripts/hosting.sh renew-test powerxdoc
 curl -I https://powerx-doc.artisan-cloud.com/
 ```
 
@@ -166,7 +170,7 @@ curl -I https://powerx-doc.artisan-cloud.com/
 修改 `sites/powerxdoc/.env` 的镜像版本后，只更新本站：
 
 ```bash
-sh scripts/hosting.sh update powerxdoc
+sudo sh scripts/hosting.sh update powerxdoc
 ```
 
 回滚恢复上一版本，再执行同一命令。日常整体启动使用 `sh scripts/hosting.sh compose --profile tls up -d`。不要直接在根目录运行 `docker compose up`，否则不会加载网站服务文件。

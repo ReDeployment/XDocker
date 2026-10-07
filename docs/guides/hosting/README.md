@@ -1,5 +1,7 @@
 # XDocker 多站点全容器部署指南
 
+从新机器开始时，先完成 [服务器准备指南](../server-setup/README.md)，其中包含 Ubuntu 用户、SSH、VS Code、Git 与 Docker 安装。本文面向已经能运行 Docker 的服务器。Ubuntu 新机默认使用 sudo；本地 Mac Docker Desktop 验证则按第 3 节直接使用本机 Docker。
+
 ## 1. 配置边界
 
 根目录 `compose.yml` 只维护公共入口 Nginx、一次性 Certbot 工具和持续续期服务。每个 `sites/<key>/` 有独立服务与镜像配置。网站容器不对宿主机暴露端口，通过共享 Compose 网络访问。
@@ -38,7 +40,7 @@ git commit -m "feat: support independent sites with shared nginx and certbot"
 git push origin HEAD
 ```
 
-服务器需要 Docker Engine、Docker Compose 和 POSIX shell。首次下载：
+服务器需要 Docker Engine、Docker Compose 和 POSIX shell。SSH Deploy key 与指定密钥的下载命令见 [准备指南第 6 节](../server-setup/README.md)。首次下载：
 
 ```bash
 mkdir -p ~/workspace
@@ -77,8 +79,8 @@ sh scripts/hosting.sh http powerxdoc --no-pull
 ### 4.1 HTTP
 
 ```bash
-sh scripts/hosting.sh http powerxdoc
-sh scripts/hosting.sh status
+sudo sh scripts/hosting.sh http powerxdoc
+sudo sh scripts/hosting.sh status
 curl -I -H 'Host: powerx-doc.artisan-cloud.com' http://127.0.0.1/
 mkdir -p data/acme/.well-known/acme-challenge
 printf 'xdocker-acme-ok\n' > data/acme/.well-known/acme-challenge/probe
@@ -90,8 +92,8 @@ curl http://powerx-doc.artisan-cloud.com/.well-known/acme-challenge/probe
 ### 4.2 测试与正式签发
 
 ```bash
-sh scripts/hosting.sh issue-test powerxdoc
-sh scripts/hosting.sh issue powerxdoc
+sudo sh scripts/hosting.sh issue-test powerxdoc
+sudo sh scripts/hosting.sh issue powerxdoc
 ```
 
 第一步是 dry-run，不保存测试证书。第二步正式签发，会同意 Let's Encrypt 服务条款并使用配置邮箱注册账户。证书名称为本站域名，写入共享的 `data/letsencrypt/live/<域名>/`，其他域名使用独立证书。
@@ -101,10 +103,10 @@ sh scripts/hosting.sh issue powerxdoc
 ### 4.3 HTTPS
 
 ```bash
-sh scripts/hosting.sh https powerxdoc
+sudo sh scripts/hosting.sh https powerxdoc
 curl -I http://powerx-doc.artisan-cloud.com/
 curl -I https://powerx-doc.artisan-cloud.com/
-sh scripts/hosting.sh renew-test powerxdoc
+sudo sh scripts/hosting.sh renew-test powerxdoc
 ```
 
 预期 HTTP 301，HTTPS 200 且证书验证成功，本站续期 dry-run 成功。HTTPS 操作只替换 `data/nginx/powerxdoc.conf`。证书缺失时不切换；Nginx 检查或 reload 失败时恢复该站前一文件。不要同时运行多个配置切换命令。
@@ -124,11 +126,11 @@ ENABLED_SITES="powerxdoc powerwechat artisancloud-home"
 4. 验证合并结果，只对新站执行启动与签发：
 
 ```bash
-sh scripts/hosting.sh compose config --quiet
-sh scripts/hosting.sh http powerwechat
-sh scripts/hosting.sh issue-test powerwechat
-sh scripts/hosting.sh issue powerwechat
-sh scripts/hosting.sh https powerwechat
+sudo sh scripts/hosting.sh compose config --quiet
+sudo sh scripts/hosting.sh http powerwechat
+sudo sh scripts/hosting.sh issue-test powerwechat
+sudo sh scripts/hosting.sh issue powerwechat
+sudo sh scripts/hosting.sh https powerwechat
 ```
 
 ArtisanCloudHome 同样替换 key。每个站点独立验证页面、路由、资源、HTTPS；已有 PowerXDoc 配置和镜像不会因新增站点被替换。
@@ -167,9 +169,9 @@ SITE_IMAGE=ghcr.io/your-org/my-docs:verified-version
 所有 Compose 操作使用包装入口，它加载各站点独立配置，再组合公共与已启用的服务：
 
 ```bash
-sh scripts/hosting.sh compose --profile tls up -d
-sh scripts/hosting.sh status
-sh scripts/hosting.sh compose logs --tail=100 nginx certbot-renew
+sudo sh scripts/hosting.sh compose --profile tls up -d
+sudo sh scripts/hosting.sh status
+sudo sh scripts/hosting.sh compose logs --tail=100 nginx certbot-renew
 ```
 
 默认 `.env` 只启用 PowerXDoc，因此这些命令不会拉取或启动另外两个模板。新增已启用站点在 HTTP 配置建立前也不会有公网域名入口。公共 Nginx 不依赖所有网站健康，单个网站故障不会阻止其他网站入口启动。
@@ -177,7 +179,7 @@ sh scripts/hosting.sh compose logs --tail=100 nginx certbot-renew
 修改目标站点 `.env` 的 `SITE_IMAGE`，独立升级：
 
 ```bash
-sh scripts/hosting.sh update powerxdoc
+sudo sh scripts/hosting.sh update powerxdoc
 curl -I https://powerx-doc.artisan-cloud.com/
 ```
 
@@ -187,9 +189,9 @@ curl -I https://powerx-doc.artisan-cloud.com/
 
 ```bash
 mv data/nginx/powerwechat.conf data/powerwechat.conf.disabled
-sh scripts/hosting.sh compose exec -T nginx nginx -t
-sh scripts/hosting.sh compose exec -T nginx nginx -s reload
-sh scripts/hosting.sh compose stop powerwechat-docs
+sudo sh scripts/hosting.sh compose exec -T nginx nginx -t
+sudo sh scripts/hosting.sh compose exec -T nginx nginx -s reload
+sudo sh scripts/hosting.sh compose stop powerwechat-docs
 ```
 
 确认成功后从 `ENABLED_SITES` 移除 `powerwechat`；证书不会被删除，共享 renew 仍检查已保存证书。若长期停用且 HTTP 验证不再可达，需先备份，再通过 Certbot 正常删除其证书配置，以免持续续期失败。移除启用列表不会自动删除容器、证书或已有域名配置。
@@ -202,7 +204,7 @@ sh scripts/hosting.sh compose stop powerwechat-docs
 
 备份根目录及各站点 `.env`、整个 `data/letsencrypt/`、`data/nginx/`，保留证书符号链接和权限，不要只复制 `live/`。升级时不得删除 `data/`。
 
-容器使用 `restart: unless-stopped`。服务器重启后应自动恢复，仍需实际验收；如果执行过 down，使用 `compose --profile tls up -d` 恢复续期服务。
+容器使用 `restart: unless-stopped`。服务器重启后应自动恢复，仍需实际验收；如果执行过 down，使用 `sudo sh scripts/hosting.sh compose --profile tls up -d` 恢复续期服务。
 
 ## 8. 从上一版单站配置迁移
 
@@ -220,15 +222,15 @@ sh scripts/hosting.sh compose stop powerwechat-docs
 ## 9. 检查与验收
 
 ```bash
-sh scripts/hosting.sh list
-sh scripts/hosting.sh compose config --quiet
-sh scripts/hosting.sh compose --profile tls config --quiet
-sh scripts/hosting.sh compose logs --tail=100 nginx powerx-doc certbot-renew
-sh scripts/hosting.sh compose exec -T nginx nginx -t
+sudo sh scripts/hosting.sh list
+sudo sh scripts/hosting.sh compose config --quiet
+sudo sh scripts/hosting.sh compose --profile tls config --quiet
+sudo sh scripts/hosting.sh compose logs --tail=100 nginx powerx-doc certbot-renew
+sudo sh scripts/hosting.sh compose exec -T nginx nginx -t
 ```
 
 开发机可运行 `python3 -m unittest discover -s tests -v`；Python 不是服务器运行依赖。测试使用 Docker stub 检查多站点隔离、证书切换回滚，并使用真实 Compose CLI 检查默认与三站合并结果，不启动容器或签发证书。
 
 本次验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。HTTPS 测试使用临时自签名证书，没有申请真实证书或启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
 
-本次验收仍需区分配置测试和运行测试：本机 Docker daemon 未启动，完整容器运行、正式签发、实际续期 reload、服务器部署及重启尚未完成。每个实际接入站点还需验证页面、HTTPS、续期和独立回滚。
+本次验收仍需区分配置测试和运行测试：开发机 Docker daemon 未启动；新服务器已回传 Docker Engine 29.8.2 / Compose 5.6.0 和初始化成功，Certbot/网站容器、正式签发、续期 reload 及重启仍待验收，见准备指南的状态记录。每个实际接入站点还需验证页面、HTTPS、续期和独立回滚。
