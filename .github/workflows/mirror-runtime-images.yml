@@ -1,0 +1,79 @@
+name: Mirror Runtime Images to GHCR
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mirror-runtime-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-runtime-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Copy upstream multi-platform images
+        id: copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror_owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for name in certbot nginx; do
+            if [ "$name" = certbot ]; then
+              upstream=docker.io/certbot/certbot:latest
+              mirror="ghcr.io/$mirror_owner/xdocker-certbot:latest"
+            else
+              upstream=docker.io/library/nginx:alpine
+              mirror="ghcr.io/$mirror_owner/xdocker-nginx:alpine"
+            fi
+            # Resolve the moving upstream tag once and copy that exact index.
+            digest=$(docker buildx imagetools inspect "$upstream" --format '{{json .Manifest}}' | jq -r '.digest')
+            test -n "$digest" && test "$digest" != null
+            docker buildx imagetools create \
+              --annotation "index:org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+              --annotation "index:io.xdocker.upstream=$upstream@$digest" \
+              --tag "$mirror" "$upstream@$digest"
+            docker buildx imagetools inspect "$mirror"
+            docker buildx imagetools inspect "$mirror" --raw > "/tmp/$name-index.json"
+            for arch in amd64 arm64; do
+              jq -e --arg arch "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch)' "/tmp/$name-index.json" >/dev/null
+            done
+            printf '%s=%s\n' "$name" "$mirror" >> "$GITHUB_OUTPUT"
+            printf '\n### %s\nUpstream: `%s@%s`\nMirror: `%s`\n' "$name" "$upstream" "$digest" "$mirror" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Run the mirrored Certbot and inventory tool
+        env:
+          CERTBOT_MIRROR: ${{ steps.copy.outputs.certbot }}
+          NGINX_MIRROR: ${{ steps.copy.outputs.nginx }}
+        run: |
+          set -eu
+          docker run --rm "$CERTBOT_MIRROR" --version
+          docker run --rm --entrypoint python3 \
+            -v "$PWD/scripts:/opt/xdocker/scripts:ro" \
+            -v "$PWD/certbot:/opt/xdocker/certbot:ro" \
+            "$CERTBOT_MIRROR" /opt/xdocker/scripts/certificates.py list
+          docker run --rm --entrypoint nginx "$NGINX_MIRROR" -v
