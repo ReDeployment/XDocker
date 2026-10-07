@@ -169,6 +169,20 @@ Host xdocker-server
 
 SSH 连接成功不替代 VS Code Server 安装验收。安装失败时查看 Remote-SSH 输出中的实际错误和下载地址。[VS Code 官方连接步骤](https://code.visualstudio.com/docs/remote/ssh)
 
+### 5.1 macOS 的 Cmd+K 不再清理终端
+
+扩展可能覆盖默认快捷键。打开本机 VS Code 的 Preferences: Open Keyboard Shortcuts (JSON)，在现有数组末尾追加下列规则，并保留原来的其他绑定：
+
+```json
+{
+  "key": "cmd+k",
+  "command": "workbench.action.terminal.clear",
+  "when": "terminalFocus"
+}
+```
+
+保存后点进集成终端，再按 Cmd+K 验证；该规则只在终端有焦点时触发。若仍无效，用 Developer: Toggle Keyboard Shortcuts Troubleshooting 记录实际命中的规则；文件修改成功不替代运行中的按键验证。[VS Code 终端快捷键说明](https://code.visualstudio.com/docs/terminal/advanced#macos-clear-screen)
+
 ## 6. 配置服务器 → GitHub 的独立密钥，并拉取 XDocker
 
 两段连接不同：本机公钥放在服务器 authorized_keys；服务器访问 GitHub 的公钥放在 GitHub。服务器上创建独立 Deploy key，不复制本机私钥。
@@ -320,7 +334,7 @@ sudo sh scripts/certificates.sh preflight
 | list | REGISTERED，默认 8 份证书/10 个域名 | 挂载脚本与清单可读 |
 | preflight | REACHABLE 和 ACME directory URL | 容器内能访问证书 API |
 
-如果第一条镜像拉取超时，停在镜像下载问题，不把它解释成域名或证书配置错误。新服务器尚未签发时，check 报缺少证书是预期；第一阶段先运行 list/preflight。API 连通之后还需要 Nginx 挑战路径、DNS 和 dry-run 验证。
+如果第一条镜像拉取超时，按 [自有 GHCR 镜像副本指南](../runtime-images/README.md) 设置 Package 权限并执行 `sh scripts/runtime-images.sh ghcr` 切换现有 .env，再重试版本验证，不把下载错误解释成域名或证书配置错误。新服务器尚未签发时，check 报缺少证书是预期；第一阶段先运行 list/preflight。API 连通之后还需要 Nginx 挑战路径、DNS 和 dry-run 验证。
 
 接下来先编辑根 `.env` 的真实 CERTBOT_EMAIL，选择本机负责的证书项和测试域名，再按 [新服务器证书操作](../certificates/README.md) 完成挑战路径、测试签发、正式签发及公网 TLS 验证。业务网站部署见 [多站点指南](../hosting/README.md)，PowerXDoc 的镜像发布见 [PowerXDoc 指南](../powerxdoc/README.md)。
 
@@ -332,7 +346,8 @@ sudo sh scripts/certificates.sh preflight
 - SSH：用户已确认账号和密钥登录成功；GitHub SSH 克隆成功。最终 sshd 有效配置未提供完整回传。
 - Docker：Client/Server 都为 29.8.2，containerd 2.3.6，Compose 5.6.0，服务已启动。
 - XDocker init：已输出正常初始化提示。
-- Certbot 容器版本、清单读取、容器 ACME preflight：尚待实际回传。
+- 服务器首次拉取 certbot/certbot:latest 已回传 Docker Hub 超时，尚未运行 Certbot；已增加自有 GHCR 副本及切换方案。
+- 自有副本已在 Actions 中验证 Certbot 5.8.0、清单读取及 Nginx 1.31.6；目标服务器的版本验证、清单读取与 ACME preflight 尚待回传。
 - 正式域名 DNS、HTTP-01、签发、HTTPS、续期 reload 和服务器重启：尚待验收。
 
 复用本指南到其他服务器时重新验证各项网络和运行状态，不把本次日志当作新机器的验收结果。

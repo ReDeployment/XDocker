@@ -32,6 +32,7 @@ scripts/hosting.sh            # 通用的站点操作与 Compose 包装入口
 nginx/                        # 公共 HTTP/HTTPS 模板与续期 reload
 certbot/                      # 独立 certificates.json 清单与续期
 scripts/certificates.sh        # 证书检查、续期、签发、公网验证
+scripts/runtime-images.sh      # Docker Hub / 自有 GHCR 副本切换
 docs/guides/server-setup/      # 新机用户、SSH、Git、Docker 与首次验证
 docs/guides/certificates/      # 新机容器证书操作与可选旧机兼容
 docs/guides/hosting/           # 多站点部署与扩展指南
@@ -39,6 +40,8 @@ docs/guides/powerxdoc/         # PowerXDoc 镜像推送与使用指南
 ```
 
 ## 开始使用
+
+Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-images/README.md) 同步运行镜像并切换现有 `.env`，无需改变网站源码或证书。
 
 按这个顺序阅读：
 
