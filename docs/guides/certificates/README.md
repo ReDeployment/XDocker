@@ -43,7 +43,7 @@ sudo sh scripts/certificates.sh list
 sudo sh scripts/certificates.sh preflight
 ```
 
-Docker Hub 拉取超时先按 [运行镜像副本指南](../runtime-images/README.md) 切换现有 .env。分别应输出 Certbot 版本、REGISTERED 清单和 REACHABLE。新机 data/letsencrypt 尚为空，先运行 check 会报告证书缺失；待签发后再检查有效期。新服务器无需经过后面的旧机兼容章节，也不用复制旧证书。
+Docker Hub 拉取超时先按 [运行镜像副本指南](../runtime-images/README.md) 切换现有 .env。副本保持 Private 时先按 [认证指南](../ghcr-auth/README.md) 执行 sudo docker login，SSH 公钥不能替代镜像认证。分别应输出 Certbot 版本、REGISTERED 清单和 REACHABLE。新机 data/letsencrypt 尚为空，先运行 check 会报告证书缺失；待签发后再检查有效期。新服务器无需经过后面的旧机兼容章节，也不用复制旧证书。
 
 已有证书签发成功后，下面是日常维护命令示例，不是新机首次执行顺序。容器入口只使用根目录公共 Compose：
 

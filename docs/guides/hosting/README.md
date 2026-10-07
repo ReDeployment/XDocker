@@ -1,6 +1,6 @@
 # XDocker 多站点全容器部署指南
 
-从新机器开始时，先完成 [服务器准备指南](../server-setup/README.md)，其中包含 Ubuntu 用户、SSH、VS Code、Git 与 Docker 安装。本文面向已经能运行 Docker 的服务器。Ubuntu 新机默认使用 sudo；本地 Mac Docker Desktop 验证则按第 3 节直接使用本机 Docker。
+从新机器开始时，先完成 [服务器准备指南](../server-setup/README.md)，其中包含 Ubuntu 用户、SSH、VS Code、Git 与 Docker 安装。本文面向已经能运行 Docker 的服务器。使用 Private GHCR 镜像时先完成 [PAT 与 sudo Docker 登录](../ghcr-auth/README.md)，无需公开镜像。Ubuntu 新机默认使用 sudo；本地 Mac Docker Desktop 验证则按第 3 节直接使用本机 Docker。
 
 ## 1. 配置边界
 

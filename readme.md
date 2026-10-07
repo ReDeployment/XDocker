@@ -43,6 +43,8 @@ docs/guides/powerxdoc/         # PowerXDoc 镜像推送与使用指南
 
 Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-images/README.md) 同步运行镜像并切换现有 `.env`，无需改变网站源码或证书。
 
+**GHCR 镜像可以保持 Private，不必公开。** 服务器使用 PAT classic + read:packages 认证，账号同时须有目标包 Read 权限；本仓库服务器命令使用 sudo，所以登录使用 `sudo docker login ghcr.io -u YOUR_GITHUB_USERNAME`。详细操作见 [私有镜像认证指南](docs/guides/ghcr-auth/README.md)。
+
 按这个顺序阅读：
 
 1. [服务器准备指南](docs/guides/server-setup/README.md)：Ubuntu 用户、SSH 公钥、root 密钥登录、VS Code、Git、Docker 安装与换源。

@@ -321,6 +321,8 @@ Edit .env and sites/<site>/.env. Then run: sh scripts/hosting.sh http <site>
 
 ## 9. 第一阶段验证 Certbot 容器
 
+使用私有 GHCR 副本时，先按 [认证指南](../ghcr-auth/README.md) 创建有 read:packages 且能读取该包的 PAT classic，然后 `sudo docker login ghcr.io -u YOUR_GITHUB_USERNAME`。Package 保持 Private 即可，SSH 密钥认证 Git 成功不会替代这一步。登录成功后实际 pull 验证；已有 .env 的镜像切换仍使用运行镜像指南。
+
 ```bash
 cd ~/workspace/XDocker
 sudo docker compose -f compose.yml run --rm --no-deps certbot --version
@@ -334,7 +336,7 @@ sudo sh scripts/certificates.sh preflight
 | list | REGISTERED，默认 8 份证书/10 个域名 | 挂载脚本与清单可读 |
 | preflight | REACHABLE 和 ACME directory URL | 容器内能访问证书 API |
 
-如果第一条镜像拉取超时，按 [自有 GHCR 镜像副本指南](../runtime-images/README.md) 设置 Package 权限并执行 `sh scripts/runtime-images.sh ghcr` 切换现有 .env，再重试版本验证，不把下载错误解释成域名或证书配置错误。新服务器尚未签发时，check 报缺少证书是预期；第一阶段先运行 list/preflight。API 连通之后还需要 Nginx 挑战路径、DNS 和 dry-run 验证。
+如果第一条镜像拉取超时，按 [自有 GHCR 镜像副本指南](../runtime-images/README.md) 完成 Private 镜像的 sudo Docker/PAT 认证并执行 `sh scripts/runtime-images.sh ghcr` 切换现有 .env，再重试版本验证，不把下载错误解释成域名或证书配置错误。新服务器尚未签发时，check 报缺少证书是预期；第一阶段先运行 list/preflight。API 连通之后还需要 Nginx 挑战路径、DNS 和 dry-run 验证。
 
 接下来先编辑根 `.env` 的真实 CERTBOT_EMAIL，选择本机负责的证书项和测试域名，再按 [新服务器证书操作](../certificates/README.md) 完成挑战路径、测试签发、正式签发及公网 TLS 验证。业务网站部署见 [多站点指南](../hosting/README.md)，PowerXDoc 的镜像发布见 [PowerXDoc 指南](../powerxdoc/README.md)。
 

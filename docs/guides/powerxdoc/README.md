@@ -138,7 +138,7 @@ SITE_DOMAIN=powerx-doc.artisan-cloud.com
 SITE_IMAGE=ghcr.io/artisancloud/powerxdoc:sha-94cb21895e8bf42c45a9bc55fa6f711b7d3d0572
 ```
 
-将 `SITE_IMAGE` 替换为你实际推送的版本、手动标签或 digest。镜像 Private 时先使用 `read:packages` PAT 登录 GHCR。
+将 `SITE_IMAGE` 替换为你实际推送的版本、手动标签或 digest。镜像可保持 Private；服务器按 [认证指南](../ghcr-auth/README.md) 使用有 read:packages 和包读取权限的 PAT classic 执行 sudo docker login ghcr.io。GitHub SSH 密钥不能替代此认证。
 
 本地验证时根目录 `.env` 使用回环地址与 8080/8443 端口：
 

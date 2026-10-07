@@ -22,22 +22,23 @@ APT 的 Docker CE 镜像源只解决 Docker 安装包下载，不能加速 Docke
 
 副本保留上游运行层，不重新构建业务代码；镜像索引附加来源仓库和上游 digest 注解。移动标签只代表最近一次同步的上游版本，不会自行持续同步上游。生产可在 `.env` 中固定已验证的副本 digest。
 
-## 3. 先解决副本的拉取权限
+## 3. 默认保持 Private，通过 PAT 认证拉取
 
-新 GHCR Package 默认 Private，首次发布后的匿名检查返回 401。想无需 Token 拉取，可把这两份公开上游镜像副本改成 Public：
+**镜像不必改成 Public。** Private 是支持的部署方式，按 [私有 GHCR 登录指南](../ghcr-auth/README.md) 创建 PAT classic、勾选 read:packages，并确认该账号对目标包有 Read 权限；需要 SSO 时授权对应组织。
 
-1. 打开 [xdocker-certbot](https://github.com/orgs/ReDeployment/packages/container/package/xdocker-certbot) 和 [xdocker-nginx](https://github.com/orgs/ReDeployment/packages/container/package/xdocker-nginx)。
-2. 进入各自的 **Package settings**。
-3. 找到 **Change visibility**，选择 **Public**，按页面要求输入名称确认。
-4. Public 后服务器无需 Docker login；仍需实际拉镜像确认网络。
-
-如果希望保留 Private，使用有 `read:packages` 的 GitHub PAT classic 登录。后续命令使用 sudo，因此也要用 sudo 登录，避免凭证只保存在 ubuntu 用户而 Docker 命令读取 root 配置：
+服务器后续使用 sudo Docker，因此先执行：
 
 ```bash
 sudo docker login ghcr.io -u YOUR_GITHUB_USERNAME
+sudo docker pull ghcr.io/redeployment/xdocker-certbot:latest
+sudo docker pull ghcr.io/redeployment/xdocker-nginx:alpine
 ```
 
-在交互密码提示输入 PAT，不把 Token 写进仓库、镜像地址或聊天。GitHub SSH Deploy key 仅用于 Git 仓库，不能用于 Docker registry 认证。[GHCR 官方说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+Docker 的 Password 提示处输入 PAT，用户名填 PAT 所属的 GitHub 账号名；不是 Linux 用户名、组织名或 GitHub 账号密码。SSH Deploy key 仅用于 Git，不能用于 registry 登录。普通 docker login 与 sudo docker login 是不同的用户配置，不能混用。
+
+成功应看到 Login Succeeded，并完成实际 pull。新包匿名访问返回 401 是 Private 的预期，不代表镜像没有发布。需要主动提供匿名下载时才选择 Public，不是部署前提。
+
+可选 Public 设置：在 [xdocker-certbot](https://github.com/orgs/ReDeployment/packages/container/package/xdocker-certbot) 和 [xdocker-nginx](https://github.com/orgs/ReDeployment/packages/container/package/xdocker-nginx) 的 Package settings → Change visibility 中选择 Public。保持 Private 时跳过此操作。
 
 ## 4. 切换服务器的现有 .env
 
@@ -63,7 +64,7 @@ sudo sh scripts/certificates.sh preflight
 预期拉取地址为 ghcr.io/redeployment，Certbot 版本可读，清单出现 REGISTERED，ACME API 为 REACHABLE。这里没有申请证书。只验证 Certbot 时可以先单独执行 `pull certbot`。
 
 - 超时：检查服务器访问 GHCR token 与镜像层下载地址的实际网络，接口 401 不等于完整镜像可下载。
-- unauthorized/denied：检查 Package 是否 Public，或者 sudo Docker 的 PAT 登录是否成功。
+- unauthorized/denied：按私有登录指南检查 PAT classic、read:packages、包 Read 权限、组织 SSO，以及 sudo Docker 的登录上下文；不用自动改 Public。
 - 仍显示 docker.io：检查 `.env` 中两项 IMAGE 值及当前目录。
 
 ## 5. 更新副本或恢复上游
@@ -82,4 +83,4 @@ sh scripts/runtime-images.sh upstream
 
 ## 6. 当前验收范围
 
-Actions 发布、多平台索引检查及 CI 实际运行已完成。首次匿名访问仍需要 Package Public 或认证；浏览器连接不可用，代理未代改可见性。目标服务器的副本拉取、Certbot 容器和 ACME preflight 仍需回传验证。
+Actions 发布、多平台索引检查及 CI 实际运行已完成。当前副本允许保持 Private，匿名访问拒绝认证是预期。尚未代创建 Token 或修改 Package 可见性。目标服务器的副本拉取、Certbot 容器和 ACME preflight 仍需回传验证。
