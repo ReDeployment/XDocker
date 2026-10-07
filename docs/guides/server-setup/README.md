@@ -342,14 +342,16 @@ sudo sh scripts/certificates.sh preflight
 
 ## 10. 本次服务器的已确认状态与剩余验收
 
-以下是 2026-10-07 用户从新服务器 SYG962131 回传的结果，不代表后续服务自动通过：
+以下是 2026-10-07 用户回传及随后通过 SSH 在新服务器 SYG962131 实际验证的结果，不代表后续服务自动通过：
 
 - 系统：Ubuntu 22.04 LTS / x86_64。
 - SSH：用户已确认账号和密钥登录成功；GitHub SSH 克隆成功。最终 sshd 有效配置未提供完整回传。
 - Docker：Client/Server 都为 29.8.2，containerd 2.3.6，Compose 5.6.0，服务已启动。
 - XDocker init：已输出正常初始化提示。
-- 服务器首次拉取 certbot/certbot:latest 已回传 Docker Hub 超时，尚未运行 Certbot；已增加自有 GHCR 副本及切换方案。
-- 自有副本已在 Actions 中验证 Certbot 5.8.0、清单读取及 Nginx 1.31.6；目标服务器的版本验证、清单读取与 ACME preflight 尚待回传。
+- Docker Hub 直连超时；GHCR 大镜像层下载缓慢且连接 reset，原始在线 pull 未完整成功。
+- 已从相同 AMD64 manifest 的官方上游在本机导出，经 SSH 上传、校验 SHA256 后导入 Certbot 和 Nginx；GHCR 包仍保持 Private。
+- 服务器实际输出 Certbot 5.8.0、Nginx 1.31.6，8 份证书/10 个域名的清单可读，容器内 ACME 生产 API 返回 REACHABLE。
+- 服务器 .env 已备份并设置 CERTBOT_PULL_POLICY=never、NGINX_PULL_POLICY=never，日常使用完整本地缓存；升级先显式拉取或导入。
 - 正式域名 DNS、HTTP-01、签发、HTTPS、续期 reload 和服务器重启：尚待验收。
 
 复用本指南到其他服务器时重新验证各项网络和运行状态，不把本次日志当作新机器的验收结果。

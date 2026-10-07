@@ -144,4 +144,6 @@ sh scripts/runtime-images.sh upstream
 
 ## 6. 当前验收范围
 
-Actions 发布、多平台索引检查及 CI 实际运行已完成。当前副本允许保持 Private，匿名访问拒绝认证是预期。尚未代创建 Token 或修改 Package 可见性。目标服务器的副本拉取、Certbot 容器和 ACME preflight 仍需回传验证。
+Actions 发布、多平台索引检查及 CI 实际运行已完成。Private 包认证保持原配置，可见性未改。服务器直接 GHCR pull 曾在大层传输中 reset；现已通过本机导出相同 AMD64 manifest、SSH 上传和校验后导入，实际运行 Certbot 5.8.0、Nginx 1.31.6、清单读取及容器 ACME 生产 API 检查均通过。
+
+本地缓存恢复成功不代表 GHCR 下载线路已修复，也不代表真实证书已经签发。DNS、HTTP-01、正式 HTTPS、真实续期 reload 和重启仍待验收。服务器备份包位于 /root/.cache/xdocker-recovery/，未包含个人 Token 或证书；本地缓存策略已启用。

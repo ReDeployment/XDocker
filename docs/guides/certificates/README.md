@@ -146,7 +146,7 @@ python3 -m unittest discover -s tests -v
 
 41 项测试通过，覆盖有效期、过期、私钥/SAN 不匹配、网络失败时零续期操作、旧 nginx 插件保护、SAN 组完整签发、真正更新才 reload、Nginx 检查失败、TLS/SNI 验证逻辑和本地/对端叶证书不一致。开发测试用 cryptography 生成临时证书和本地 TLS 服务；不会访问 ACME 或更改生产服务器。
 
-另外，临时宿主机 Nginx 验证了清单中全部 10 个域名的 ACME 路径返回 200，未部署业务的路径返回 404。开发机 Docker daemon 尚未启动；新服务器已回传 Docker/Compose 运行及 init 成功，但 Certbot 容器、旧机证书读取/续期、正式签发和公网 HTTPS 验证均未完成，不能据此称原证书已恢复。
+另外，临时宿主机 Nginx 验证了清单中全部 10 个域名的 ACME 路径返回 200，未部署业务的路径返回 404。开发机 Docker daemon 尚未启动；新服务器已经实际通过离线镜像导入验证 Certbot 5.8.0、清单读取和容器 ACME 生产 API 连通性。旧机证书读取/续期、真实 HTTP-01、正式签发和公网 HTTPS 验证均未完成，不能据此称原证书已恢复。
 
 保留旧 renewal 选项、dry-run、`--cert-name` 及 hook 的语义参见 [Certbot 官方用户指南](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates)。如另行改变旧验证方式，官方建议用 reconfigure 并先验证成功，而不是手改 renewal 文件；当前工具没有自动重写这些文件。
 
