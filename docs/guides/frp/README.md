@@ -54,7 +54,7 @@ FRPC_BIN=/private/var/www/html/ArtisanCloud/dev/frp/frp_0.52.3_darwin_arm64/frpc
 sh scripts/frp.sh stop-client
 ```
 
-`start-client` 用于并行验证，会脱离当前终端继续运行，但尚未提供 macOS 重启自启动配置。FRPC 0.52.3 登录失败可能仍返回退出码 0，必须核对进程、登录/注册日志及真实业务请求。根路径 404 对 API 服务可能正常，应使用实际健康接口、API 或 WebSocket 做验收。
+macOS 的 `start-client` 使用当前用户的 LaunchAgent，在关闭终端后持续运行，并在用户登录后自动启动；首次创建和控制 LaunchAgent 的辅助脚本需要本机 Python 3。其他系统暂使用 nohup，并行验证后应配置系统服务。FRPC 0.52.3 登录失败可能仍返回退出码 0，必须核对进程、登录/注册日志及真实业务请求。根路径 404 对 API 服务可能正常，应使用实际健康接口、API 或 WebSocket 做验收。
 
 ## 4. 域名与证书迁移
 

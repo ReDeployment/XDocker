@@ -76,6 +76,9 @@ case "$action" in
         if [ -f "$directory/frpc.pid" ] && kill -0 "$(cat "$directory/frpc.pid")" 2>/dev/null; then die 'Managed client is already running.'; fi
         "$binary" verify -c "$directory/frpc.ini"
         : > "$directory/frpc.log"
+        if [ "$(uname -s)" = Darwin ]; then
+            exec python3 scripts/frp_client_launchd.py start "$binary"
+        fi
         nohup "$binary" -c "$directory/frpc.ini" </dev/null > "$directory/frpc.log" 2>&1 &
         client_pid=$!
         printf '%s\n' "$client_pid" > "$directory/frpc.pid"
@@ -84,6 +87,9 @@ case "$action" in
         echo 'Started managed FRPC; private log is data/frp/frpc.log.'
         ;;
     stop-client)
+        if [ "$(uname -s)" = Darwin ]; then
+            exec python3 scripts/frp_client_launchd.py stop
+        fi
         [ -f "$directory/frpc.pid" ] || die 'No managed client PID.'
         pid=$(cat "$directory/frpc.pid")
         case $pid in ''|*[!0-9]*) die 'Invalid managed PID.' ;; esac
