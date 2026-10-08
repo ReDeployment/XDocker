@@ -355,7 +355,8 @@ sudo sh scripts/certificates.sh preflight
 - PowerXDoc：已导入发布镜像的 AMD64 版本，网站容器健康；共享 Nginx 已启动并监听 80/443。
 - `powerx-doc.artisan-cloud.com` 已解析到 `160.202.238.184`。供应商处理公网访问后，首页和 HTTP-01 挑战路径均可从外部访问。测试签发首次遇到二次验证连接超时，重试通过后才正式签发。
 - 已为 PowerXDoc 正式签发 Let's Encrypt 证书，有效期至 `2027-01-06T03:19:39+00:00`；公网 HTTP 301 跳转 HTTPS，HTTPS 首页、产品概览和静态资源均返回 200，未知路径返回 404，TLS 信任、域名及本地证书匹配检查通过。
-- 本机使用被 Git 忽略的 `certbot/certificates.local.json`，只启用 PowerXDoc；根 `.env` 配置真实证书联系邮箱。其他 7 组证书尚未迁移或签发。
+- PowerWechat：源码仓库已发布经过 Actions 运行检查的 AMD64/ARM64 镜像，服务器已部署健康的独立站点容器；用户将 `powerwechat.artisan-cloud.com` 切到新 IP 后，测试签发、正式签发、公网 HTTPS、文档及资源检查、续期 dry-run 均通过，证书有效期至 `2027-01-06T04:29:07+00:00`。详细记录见 [PowerWechat 指南](../powerwechat/README.md)。
+- 本机使用被 Git 忽略的 `certbot/certificates.local.json`，启用 PowerXDoc 和 PowerWechat；根 `.env` 配置真实证书联系邮箱。其他 6 组证书尚未迁移或签发。
 - `certbot-renew` 已启动，正常检查报告 `LOCAL_VALID`，新证书未到续期窗口时报告 `UNCHANGED`；PowerXDoc 续期 dry-run 成功。
 - 真实到期续期后的自动 reload、服务器重启恢复和其他站点：尚待验收；本次没有强制续期或重启服务器。
 

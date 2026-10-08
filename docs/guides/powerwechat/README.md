@@ -94,4 +94,8 @@ sudo sh scripts/hosting.sh renew-test powerwechat
 
 新服务器 SYG962131 已同步 XDocker 配置，导入校验后的发布镜像，启动健康的 `powerwechat-docs` 容器及其独立 HTTP 路由。服务器本机请求和外部指定新 IP 的首页、安装文档直链均返回 200；现有 PowerXDoc 的公网 HTTPS 继续返回 200。
 
-HTTP 入口准备好后，用户已将 `powerwechat.artisan-cloud.com` 的 A 记录从旧 IP `111.170.35.252` 切到 `160.202.238.184`，未查到 AAAA。下一步为 PowerWechat 测试签发、正式签发、HTTPS 和续期验收；签发前本机证书清单仍只启用已经完成签发的 PowerXDoc。
+HTTP 入口准备好后，用户已将 `powerwechat.artisan-cloud.com` 的 A 记录从旧 IP `111.170.35.252` 切到 `160.202.238.184`，未查到 AAAA。测试签发、正式签发、公网 TLS 信任和本地证书匹配检查均通过，证书有效期至 `2027-01-06T04:29:07+00:00`。
+
+`https://powerwechat.artisan-cloud.com/` 首页、安装文档、小程序登录文档和 CSS 返回 200，HTTP 301 跳转 HTTPS，未知路径返回 404。PowerXDoc 公网 HTTPS 继续返回 200。本机证书清单启用 PowerWechat 和 PowerXDoc，使用共享的 `certbot-renew` 服务，其他证书项保持未启用。
+
+PowerWechat 续期 dry-run 成功。主动 `renew-test` 曾因 Certbot 随机调度等待约 7.5 分钟；已在本地修改脚本、通过 41 项测试、推送并同步服务器，让主动测试跳过随机等待，重新运行也成功，普通自动续期仍保留原有调度。真实到期续期后的 reload 和服务器重启恢复仍待实际验收。
