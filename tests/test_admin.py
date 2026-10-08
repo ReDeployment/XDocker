@@ -93,6 +93,7 @@ class AdminTests(unittest.TestCase):
 
     def test_auth_required_no_secret_in_public_page(self):
         self.assertEqual(self.client.get('/api/snapshot').status_code,401)
+        self.assertEqual(self.client.get('/api/backups').status_code,401)
         page=self.client.get('/')
         self.assertEqual(page.status_code,200)
         self.assertNotIn(TOKEN,page.text)
@@ -134,6 +135,9 @@ class AdminTests(unittest.TestCase):
         services=self.client.get('/api/snapshot').json['services']
         self.assertEqual({s['service'] for s in services},{'nginx','powerx-dev/postgres'})
         self.assertEqual(self.post('/api/services/'+OTHER+'/action',{'action':'stop','confirmation':'postgres'}).status_code,400)
+        self.assertEqual(self.post('/api/backups/action',{'instance':'unrelated','action':'create','confirmation':'unrelated'}).status_code,400)
+        self.assertEqual(self.post('/api/backups/action',{'instance':'powerx-dev','action':'create','confirmation':'wrong'}).status_code,400)
+        self.assertEqual(self.post('/api/backups/action',{'instance':'powerx-dev','action':'restore-overwrite','confirmation':'powerx-dev'}).status_code,400)
 
     def test_unrelated_container_and_self_controls_blocked(self):
         self.login()

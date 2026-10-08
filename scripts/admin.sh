@@ -33,6 +33,11 @@ token.chmod(0o600)
 if os.geteuid() == 0:
     os.chown(state, owner.st_uid, owner.st_gid)
     os.chown(token, owner.st_uid, owner.st_gid)
+backups = Path('data/instance-backups')
+backups.mkdir(mode=0o700, parents=True, exist_ok=True)
+backups.chmod(0o700)
+if os.geteuid() == 0:
+    os.chown(backups, owner.st_uid, owner.st_gid)
 p = Path('services/admin/.env')
 text = p.read_text()
 git = ['git', 'rev-parse', 'HEAD']
@@ -41,8 +46,12 @@ if os.geteuid() == 0 and owner.st_uid != 0:
 revision = subprocess.check_output(git, text=True).strip()
 for key, value in {'ADMIN_UID':owner.st_uid,'ADMIN_GID':owner.st_gid,
                    'ADMIN_DOCKER_GID':socket.stat().st_gid,
-                   'ADMIN_DEPLOY_REVISION':revision}.items():
-    text = re.sub(r'^'+key+r'=.*$',key+'='+str(value),text,flags=re.M)
+                   'ADMIN_DEPLOY_REVISION':revision,
+                   'ADMIN_HOST_ROOT':str(Path.cwd())}.items():
+    if re.search(r'^'+key+r'=',text,re.M):
+        text = re.sub(r'^'+key+r'=.*$',key+'='+str(value),text,flags=re.M)
+    else:
+        text += '\n'+key+'='+str(value)+'\n'
 p.write_text(text)
 p.chmod(0o600)
 if os.geteuid() == 0:

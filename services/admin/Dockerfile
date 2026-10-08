@@ -2,7 +2,7 @@ FROM python:3.13-alpine3.22
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py docker_api.py ./
+COPY app.py docker_api.py backups.py ./
 COPY static ./static
 ARG REVISION=development
 ENV XDOCKER_REVISION=$REVISION PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

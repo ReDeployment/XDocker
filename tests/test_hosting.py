@@ -154,6 +154,7 @@ esac
     def test_admin_is_private_nonroot_and_does_not_mount_certificate_keys(self):
         self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="admin"')
         self.edit(self.root / "services/admin/.env", 'ghcr.io/redeployment/xdocker-admin:REPLACE_WITH_PUBLISHED_TAG', 'example:admin')
+        self.edit(self.root / "services/admin/.env", 'ADMIN_HOST_ROOT=', 'ADMIN_HOST_ROOT=/test/xdocker')
         result = subprocess.run(["sh", "scripts/hosting.sh", "compose", "config", "--format", "json"],
                                 cwd=self.root, env=dict(self.env, PATH=os.environ["PATH"]),
                                 capture_output=True, text=True, check=True)

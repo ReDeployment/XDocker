@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 die() { echo "$*" >&2; exit 1; }
 action=${1:-help}
-[ "$action" != help ] || { echo 'Usage: sh scripts/apps.sh init|start|status|logs|credentials|migrate|stop|compose <instance> [args]'; exit 0; }
+[ "$action" != help ] || { echo 'Usage: sh scripts/apps.sh init|start|status|logs|setup-values|migrate|stop|compose <instance> [args]'; exit 0; }
 instance=${2:-}
 case $instance in ''|*[!a-z0-9-]*) die 'Invalid instance key.' ;; esac
 directory="$root/instances/$instance"
@@ -40,10 +40,10 @@ case $action in
     start)
         compose run --rm --no-deps init init
         compose up -d --wait --wait-timeout 180 postgres redis
-        compose run --rm --no-deps init bootstrap
         compose up -d --wait --wait-timeout 300 backend web-admin
         ;;
     credentials) compose run --rm --no-deps init credentials ;;
+    setup-values) compose run --rm --no-deps init setup-values ;;
     migrate) compose run --rm --no-deps init migrate ;;
     status) compose ps ;;
     logs) compose logs --tail 100 backend web-admin ;;

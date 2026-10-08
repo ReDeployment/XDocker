@@ -7,6 +7,8 @@ on:
       - scripts/admin.sh
       - tests/test_admin.py
       - tests/admin_smoke.py
+      - tests/backup_smoke.py
+      - tests/test_backups.py
       - .github/workflows/publish-admin.yml
   workflow_dispatch:
 permissions:
@@ -56,3 +58,4 @@ jobs:
         run: |
           docker pull --platform linux/amd64 "$ADMIN_SMOKE_IMAGE"
           python tests/admin_smoke.py
+          python tests/backup_smoke.py

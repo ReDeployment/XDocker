@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 import urllib.request
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_from_directory, send_file
 from werkzeug.exceptions import HTTPException
 from docker_api import Docker, DockerError, log_text
+from backups import InstanceBackups
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -89,6 +90,7 @@ def create_app(settings=None, docker=None):
     app = Flask(__name__, static_folder='static', static_url_path='/assets')
     app.config.update(STATE=os.getenv('ADMIN_STATE', '/state'), CONFIG=os.getenv('ADMIN_CONFIG', '/config'),
                       REPORTS=os.getenv('ADMIN_REPORTS', '/reports'), MAX_CONTENT_LENGTH=8192,
+                      BACKUPS=os.getenv('ADMIN_BACKUPS', '/backups'), HOST_ROOT=os.getenv('ADMIN_HOST_ROOT', ''),
                       TRUSTED_HOSTS=['localhost', '127.0.0.1', '[::1]'])
     app.config.update(settings or {})
     state, config, reports = (Path(app.config[name]) for name in ('STATE', 'CONFIG', 'REPORTS'))
@@ -99,6 +101,7 @@ def create_app(settings=None, docker=None):
     engine = docker or Docker()
     database = state / 'admin.sqlite3'
     operation_lock = threading.Lock()
+    backup_manager = InstanceBackups(engine, app.config['BACKUPS'], app.config['HOST_ROOT'])
 
     def db():
         connection = sqlite3.connect(database, timeout=10)
@@ -206,7 +209,7 @@ def create_app(settings=None, docker=None):
         response.delete_cookie('xdocker_session')
         return response
 
-    def managed_containers():
+    def managed_projects():
         _, allowed = configuration(config)
         projects = {PROJECT: allowed}
         for file in (config / 'instances').glob('*/instance.json'):
@@ -217,6 +220,14 @@ def create_app(settings=None, docker=None):
                     projects[project] = {'postgres', 'redis', 'backend', 'web-admin'}
             except (ValueError, OSError, TypeError):
                 continue
+        return projects
+
+    # Startup recovery restores only the application services this control
+    # plane itself paused; unfinished helper containers were removed above.
+    backup_manager.recover([p for p in managed_projects() if p != PROJECT])
+
+    def managed_containers():
+        projects = managed_projects()
         filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project']})})
         containers = engine.request('GET', '/containers/json?' + filters)
         return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project') in projects
@@ -467,5 +478,57 @@ def create_app(settings=None, docker=None):
     def audits():
         with db() as connection:
             return jsonify(events=[dict(row) for row in connection.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 100')])
+
+    def backup_instances():
+        return [p for p in managed_projects() if p != PROJECT]
+
+    @app.get('/api/backups')
+    def list_backups():
+        instances = backup_instances()
+        sites, _ = configuration(config)
+        return jsonify(instances=instances, backups=backup_manager.records(instances),
+            application_centers=[{'instance':p, 'url':'https://'+s['domain']+'/ops/backup'}
+                for p in instances for s in sites if s['kind']=='app' and s['service']==p+'-web' and s['enabled']])
+
+    @app.post('/api/backups/action')
+    def backup_action():
+        body = command_payload()
+        instance = body.get('instance')
+        if not isinstance(instance, str) or instance not in backup_instances():
+            return jsonify(error='请选择明确登记的 PowerX 实例。'), 400
+        action = body.get('action')
+        identifier = body.get('id', '')
+        target = instance if action in ('create','prune') else identifier
+        if not isinstance(target, str) or body.get('confirmation') != target:
+            return jsonify(error='请输入完整目标名称确认。'), 400
+        if action == 'create':
+            containers = {c['Labels']['com.docker.compose.service']:c for c in managed_containers()
+                if c['Labels']['com.docker.compose.project']==instance}
+            return job('backup', instance, 'backup-create', lambda jid: backup_manager.create(instance, containers, jid))
+        if action in ('verify','drill'):
+            try:backup_manager.read(instance, identifier)
+            except (OSError, ValueError):return jsonify(error='备份不存在或身份不匹配。'), 404
+            work = (lambda jid: '备份文件及下载包 SHA256 校验通过。' if backup_manager.verify(instance, identifier) else '') if action=='verify' else (lambda jid: backup_manager.drill(instance, identifier, jid))
+            return job('backup', instance, 'backup-'+action, work)
+        if action == 'prune':
+            keep = body.get('keep')
+            if not isinstance(keep, int) or isinstance(keep, bool) or not 1 <= keep <= 100:
+                return jsonify(error='保留份数须为 1–100。'), 400
+            return job('backup', instance, 'backup-prune', lambda jid: backup_manager.prune(instance, keep))
+        return jsonify(error='Unsupported backup action'), 400
+
+    @app.get('/api/backups/<instance>/<identifier>/download')
+    def download_backup(instance, identifier):
+        if instance not in backup_instances():
+            return jsonify(error='Unknown registered instance'), 404
+        try:
+            folder, record = backup_manager.verify(instance, identifier)
+        except (OSError, ValueError):
+            return jsonify(error='备份未完成或校验失败，拒绝下载。'), 409
+        audit('backup-download', instance+'/'+identifier, 'success')
+        response = send_file(folder/'backup.tar.gz', as_attachment=True,
+                             download_name=instance+'-'+identifier+'.tar.gz', mimetype='application/gzip')
+        response.headers['X-Backup-SHA256'] = record['bundle_sha256']
+        return response
 
     return app
