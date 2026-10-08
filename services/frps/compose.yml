@@ -1,0 +1,16 @@
+services:
+  frps:
+    image: ${FRPS_IMAGE:?Initialize services/frps/.env}
+    pull_policy: ${FRPS_PULL_POLICY:-missing}
+    restart: unless-stopped
+    ports:
+      - "${FRPS_BIND:-0.0.0.0}:${FRPS_PORT:-7000}:7000"
+    volumes:
+      - ./data/frp:/etc/frp:ro
+    command: ["-c", "/etc/frp/frps.ini"]
+    healthcheck:
+      test: [CMD-SHELL, "nc -z 127.0.0.1 7000 && nc -z 127.0.0.1 8080"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

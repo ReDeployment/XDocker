@@ -1,0 +1,61 @@
+name: Build and Publish FRPS
+on:
+  push:
+    branches: [main]
+    paths:
+      - services/frps/**
+      - scripts/frp.sh
+      - tests/frp_smoke.py
+      - .github/workflows/publish-frps.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: frps-publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: services/frps
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/redeployment/xdocker-frps:0.52.3
+            ghcr.io/redeployment/xdocker-frps:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ReDeployment/XDocker
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=frps
+          cache-to: type=gha,mode=max,scope=frps
+      - name: Verify published binaries and real authenticated tunnel
+        env:
+          IMAGE: ghcr.io/redeployment/xdocker-frps:sha-${{ github.sha }}
+        run: |
+          set -eu
+          docker pull --platform linux/amd64 "$IMAGE"
+          container=$(docker create "$IMAGE")
+          trap 'docker rm -f "$container"' EXIT
+          mkdir -p /tmp/frp-binaries
+          docker cp "$container:/usr/local/bin/frps" /tmp/frp-binaries/frps
+          docker cp "$container:/usr/local/bin/frpc" /tmp/frp-binaries/frpc
+          test "$(/tmp/frp-binaries/frps --version)" = 0.52.3
+          test "$(/tmp/frp-binaries/frpc --version)" = 0.52.3
+          python3 tests/frp_smoke.py --frps /tmp/frp-binaries/frps --frpc /tmp/frp-binaries/frpc
+          sh scripts/frp.sh init
+          test "$(docker run --rm --pull never -v "$PWD/data/frp:/etc/frp:ro" "$IMAGE" --version)" = 0.52.3
+          docker run --rm --pull never -v "$PWD/data/frp:/etc/frp:ro" "$IMAGE" verify -c /etc/frp/frps.ini

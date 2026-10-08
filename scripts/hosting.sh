@@ -20,6 +20,10 @@ if [ "$action" = init ]; then
         [ -d "$directory" ] || continue
         [ -f "$directory/.env" ] || cp "$directory/.env.example" "$directory/.env"
     done
+    for directory in services/*; do
+        [ -d "$directory" ] || continue
+        [ -f "$directory/.env" ] || cp "$directory/.env.example" "$directory/.env"
+    done
     [ -f data/nginx/00-default.conf ] || cp nginx/default.conf data/nginx/00-default.conf
     echo 'Edit .env and sites/<site>/.env. Then run: sh scripts/hosting.sh http <site>'
     exit 0
@@ -32,14 +36,22 @@ set +a
 
 load_site() {
     valid_key "$1"
-    [ -f "sites/$1/site.conf" ] && [ -f "sites/$1/compose.yml" ] || die "Unknown site: $1"
+    [ -f "sites/$1/site.conf" ] || die "Unknown site: $1"
     [ -f "sites/$1/.env" ] || die "Initialize sites/$1/.env first."
-    unset SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME
+    unset SITE_KIND SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME
     . "./sites/$1/site.conf"
     . "./sites/$1/.env"
     case ${SITE_DOMAIN:-} in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_DOMAIN for $1." ;; esac
     SITE_CERT_NAME=${SITE_CERT_NAME:-$SITE_DOMAIN}
     case $SITE_CERT_NAME in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_CERT_NAME for $1." ;; esac
+    SITE_KIND=${SITE_KIND:-static}
+    if [ "$SITE_KIND" = frp_http ]; then
+        case " ${ENABLED_SERVICES:-} " in *" frps "*) ;; *) die 'Enable frps in ENABLED_SERVICES first.' ;; esac
+        SITE_SERVICE=frps
+        return
+    fi
+    [ "$SITE_KIND" = static ] || die "Unknown SITE_KIND for $1."
+    [ -f "sites/$1/compose.yml" ] || die "Missing site compose file: $1"
     case ${SITE_SERVICE:-} in ''|*[!a-z0-9-]*) die "Invalid SITE_SERVICE for $1." ;; esac
     case ${SITE_IMAGE_VAR:-} in ''|*[!A-Z0-9_]*) die "Invalid SITE_IMAGE_VAR for $1." ;; esac
     case ${SITE_IMAGE:-} in ''|*REPLACE_WITH*) die "Set a published SITE_IMAGE for $1 before enabling it." ;; esac
@@ -49,15 +61,29 @@ load_site() {
 # Compose merges the shared infrastructure with exactly the enabled sites.
 COMPOSE_FILE=compose.yml
 COMPOSE_PATH_SEPARATOR=:
+infrastructure_names=''
+for infrastructure in ${ENABLED_SERVICES:-}; do
+    [ "$infrastructure" = frps ] || die "Unknown infrastructure service: $infrastructure"
+    case " $infrastructure_names " in *" $infrastructure "*) die "Duplicate infrastructure: $infrastructure" ;; esac
+    infrastructure_names="$infrastructure_names $infrastructure"
+    [ -f services/frps/.env ] || die 'Run hosting.sh init and configure services/frps/.env.'
+    set -a
+    . ./services/frps/.env
+    set +a
+    case ${FRPS_IMAGE:-} in ''|*REPLACE_WITH*) die 'Set a published FRPS_IMAGE.' ;; esac
+    COMPOSE_FILE="$COMPOSE_FILE:services/frps/compose.yml"
+done
 domains=''
-services=''
+services="$infrastructure_names"
 image_vars=''
+[ -z "$infrastructure_names" ] || image_vars=' FRPS_IMAGE'
 for enabled in ${ENABLED_SITES:-}; do
     load_site "$enabled"
     case " $domains " in *" $SITE_DOMAIN "*) die "Duplicate domain: $SITE_DOMAIN" ;; esac
+    domains="$domains $SITE_DOMAIN"
+    if [ "$SITE_KIND" = frp_http ]; then continue; fi
     case " $services " in *" $SITE_SERVICE "*) die "Duplicate service: $SITE_SERVICE" ;; esac
     case " $image_vars " in *" $SITE_IMAGE_VAR "*) die "Duplicate image variable: $SITE_IMAGE_VAR" ;; esac
-    domains="$domains $SITE_DOMAIN"
     services="$services $SITE_SERVICE"
     image_vars="$image_vars $SITE_IMAGE_VAR"
     COMPOSE_FILE="$COMPOSE_FILE:sites/$enabled/compose.yml"
@@ -88,8 +114,13 @@ config="data/nginx/$site.conf"
 backup="data/$site.conf.backup"
 
 render() {
+    template=$1
+    if [ "$SITE_KIND" = frp_http ]; then
+        template="frp-$1"
+        [ -f data/nginx/01-frp-headers.conf ] || cp nginx/frp-headers.conf data/nginx/01-frp-headers.conf
+    fi
     sed -e "s/__DOMAIN__/$SITE_DOMAIN/g" -e "s/__SERVICE__/$SITE_SERVICE/g" -e "s/__CERT_NAME__/$SITE_CERT_NAME/g" \
-        "nginx/$1.conf.template" > "$config.tmp"
+        "nginx/$template.conf.template" > "$config.tmp"
     mv "$config.tmp" "$config"
 }
 save_config() {
@@ -162,6 +193,7 @@ case "$action" in
             renew-test "$SITE_CERT_NAME" --runtime container
         ;;
     update)
+        [ "$SITE_KIND" != frp_http ] || die 'FRP routes share frps; update the infrastructure image and use frp.sh start.'
         compose pull "$SITE_SERVICE"
         compose up -d --wait --wait-timeout 120 "$SITE_SERVICE"
         ;;

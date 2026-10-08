@@ -16,7 +16,7 @@ class HostingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="xdocker-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for directory in ("scripts", "nginx", "sites", "certbot"):
+        for directory in ("scripts", "nginx", "sites", "certbot", "services", "clients"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns(".env"))
         for file in (".env.example", "compose.yml"):
@@ -97,6 +97,40 @@ esac
         result = self.run_action("compose", "config", success=False)
         self.assertIn("published SITE_IMAGE", result.stderr)
         self.assertEqual(self.calls(), "")
+
+    def test_multiple_frp_routes_share_one_service_without_site_images(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-ecommerce debug-scrm"')
+        self.run_action("http", "debug-ecommerce", "--no-pull")
+        self.run_action("http", "debug-scrm", "--no-pull")
+        self.assertIn("http://frps:8080", self.config_path("debug-scrm").read_text())
+        self.assertIn("proxy_buffering off", self.config_path("debug-scrm").read_text())
+        self.assertEqual(self.calls().splitlines()[0].split(" | ")[0].count("services/frps/compose.yml"), 1)
+        self.assertNotIn("sites/debug-scrm/compose.yml", self.calls())
+        self.assertTrue((self.root / "data/nginx/01-frp-headers.conf").is_file())
+
+    def test_frp_route_requires_enabled_infrastructure(self):
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug"')
+        result = self.run_action("compose", "config", success=False)
+        self.assertIn("Enable frps", result.stderr)
+        self.assertEqual(self.calls(), "")
+
+    def test_site_cannot_override_shared_frps_service(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
+        self.edit(self.root / "sites/powerxdoc/site.conf", "SITE_SERVICE=powerx-doc", "SITE_SERVICE=frps")
+        result = self.run_action("compose", "config", success=False)
+        self.assertIn("Duplicate service", result.stderr)
+        self.assertEqual(self.calls(), "")
+
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
+    def test_frp_compose_only_publishes_control_port(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-ecommerce debug-scrm"')
+        result = subprocess.run(["sh", "scripts/hosting.sh", "compose", "config", "--format", "json"],
+                                cwd=self.root, env=dict(self.env, PATH=os.environ["PATH"]), capture_output=True, text=True, check=True)
+        service = json.loads(result.stdout)["services"]["frps"]
+        self.assertEqual([p["target"] for p in service["ports"]], [7000])
+        self.assertTrue(service["volumes"][0]["read_only"])
 
     def test_issue_targets_requested_domain_and_dry_run(self):
         self.enable_three()

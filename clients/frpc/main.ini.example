@@ -1,0 +1,38 @@
+[common]
+server_addr = __SERVER_ADDR__
+server_port = __SERVER_PORT__
+token = __TOKEN__
+tls_enable = true
+tls_server_name = xdocker-frps
+tls_trusted_ca_file = data/frp/server.crt
+login_fail_exit = true
+
+[ecommerce]
+type = http
+local_ip = 127.0.0.1
+local_port = 8091
+subdomain = debug-ecommerce
+
+[scrm]
+type = http
+local_ip = 127.0.0.1
+local_port = 8092
+subdomain = debug-scrm
+
+[powerx_debug]
+type = http
+local_ip = 127.0.0.1
+local_port = 8078
+subdomain = debug
+
+[shopify]
+type = http
+local_ip = 127.0.0.1
+local_port = 8110
+subdomain = shopify
+
+[court_mate_api_dev]
+type = http
+local_ip = 127.0.0.1
+local_port = 8111
+subdomain = court-mate-api-dev
