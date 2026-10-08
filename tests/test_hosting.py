@@ -151,6 +151,21 @@ esac
             self.assertFalse(any(v["target"] == "/var/run/docker.sock" for v in services[name].get("volumes", [])))
 
     @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
+    def test_admin_is_private_nonroot_and_does_not_mount_certificate_keys(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="admin"')
+        self.edit(self.root / "services/admin/.env", 'ghcr.io/redeployment/xdocker-admin:REPLACE_WITH_PUBLISHED_TAG', 'example:admin')
+        result = subprocess.run(["sh", "scripts/hosting.sh", "compose", "config", "--format", "json"],
+                                cwd=self.root, env=dict(self.env, PATH=os.environ["PATH"]),
+                                capture_output=True, text=True, check=True)
+        admin = json.loads(result.stdout)["services"]["admin"]
+        self.assertEqual(admin["user"], "1000:1000")
+        self.assertTrue(admin["read_only"])
+        self.assertEqual(admin["ports"][0]["host_ip"], "127.0.0.1")
+        self.assertEqual(set(admin["networks"]), {"admin-control"})
+        self.assertNotIn("/etc/letsencrypt", [v["target"] for v in admin["volumes"]])
+        self.assertTrue(next(v for v in admin["volumes"] if v["target"] == "/config/root.env")["read_only"])
+
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
     def test_frp_compose_only_publishes_control_port(self):
         self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
         self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-ecommerce debug-scrm"')

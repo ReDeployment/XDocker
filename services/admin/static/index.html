@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>XDocker · 管理控制台</title>
+  <link rel="stylesheet" href="/assets/style.css"><script src="/assets/app.js" defer></script>
+</head>
+<body>
+<section id="login" class="login hidden">
+  <div class="login-intro"><div class="brandmark">X</div><p class="eyebrow">XDOCKER CONTROL</p><h1>你的服务，<br>尽在掌握。</h1><p>网站、容器、证书与穿透链路，<br>在一个界面里查看和管理。</p><div class="connection"><span class="dot"></span> 通过 SSH 私有连接访问</div></div>
+  <form id="login-form" class="login-card"><p class="eyebrow">管理员访问</p><h2>进入控制台</h2><p class="muted">在服务器终端执行以下命令，获取本机管理令牌。</p><code>sudo sh scripts/admin.sh token</code><label for="token">管理访问令牌</label><input id="token" type="password" autocomplete="off" required placeholder="粘贴服务器生成的令牌"><p id="login-error" class="error" role="alert"></p><button class="primary" type="submit">连接 XDocker <span>→</span></button><p class="fine">令牌仅用于登录，不存入浏览器本地存储。</p></form>
+</section>
+<div id="shell" class="shell hidden">
+  <aside class="sidebar"><a class="brand" href="/"><span class="brandmark small">X</span><span>XDocker<small>管理控制台</small></span></a><div class="nav-label">工作空间</div><nav aria-label="主要导航">
+    <button data-tab="overview" class="active"><span>◈</span>运行概览</button><button data-tab="services"><span>▦</span>容器服务</button><button data-tab="sites"><span>◎</span>网站入口</button><button data-tab="certificates"><span>◇</span>HTTPS 证书</button><button data-tab="frp"><span>⇄</span>FRP 穿透</button><button data-tab="audit"><span>≡</span>操作记录</button>
+  </nav><div class="sidebar-bottom"><div class="connection"><span class="dot"></span>私有管理入口</div><p>配置由 Git 管理<br>运行操作在此完成</p><button id="logout">退出登录 ↗</button></div></aside>
+  <div class="workspace"><header><div><p class="eyebrow">基础设施 / XDOCKER</p><h1 id="page-title">运行概览</h1></div><div class="header-tools"><span id="last-update" class="muted"></span><button id="refresh">↻ 刷新</button><span class="avatar">管</span></div></header><div id="notice" class="notice hidden" role="status"></div><main id="content"><div class="empty">正在读取服务器实际状态…</div></main><footer><span>XDocker 专属管理控制台</span><span id="revision"></span></footer></div>
+</div>
+<dialog id="confirm-dialog"><form id="confirm-form"><p class="eyebrow">确认运行操作</p><h2 id="confirm-title"></h2><p id="confirm-impact" class="muted"></p><label for="confirmation">输入完整名称确认</label><code id="confirm-target"></code><input id="confirmation" autocomplete="off" required><p id="confirm-error" class="error"></p><div class="dialog-actions"><button type="button" id="cancel-confirm">取消</button><button id="confirm-submit" class="primary" type="submit">确认执行</button></div></form></dialog>
+<dialog id="detail-dialog" class="detail"><div class="detail-head"><h2 id="detail-title"></h2><button id="close-detail" aria-label="关闭">✕</button></div><div id="detail-content"></div></dialog>
+</body></html>

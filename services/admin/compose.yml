@@ -1,0 +1,33 @@
+services:
+  admin:
+    image: ${ADMIN_IMAGE:?Configure services/admin/.env}
+    pull_policy: ${ADMIN_PULL_POLICY:-missing}
+    user: "${ADMIN_UID:-1000}:${ADMIN_GID:-1000}"
+    group_add: ["${ADMIN_DOCKER_GID:?Run admin.sh init}"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    environment:
+      ADMIN_DEPLOY_REVISION: ${ADMIN_DEPLOY_REVISION:-unknown}
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-9080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/admin:/state
+      - ./.env:/config/root.env:ro
+      - ./sites:/config/sites:ro
+      - ${CERTIFICATES_INVENTORY:-./certbot/certificates.json}:/config/certificates.json:ro
+      - ./data/events:/reports:ro
+      - ./clients/frpc/main.ini.example:/config/frpc-template.ini:ro
+    networks: [admin-control]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  admin-control:

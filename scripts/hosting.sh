@@ -67,6 +67,7 @@ for infrastructure in ${ENABLED_SERVICES:-}; do
     case $infrastructure in
         frps) infrastructure_image_var=FRPS_IMAGE ;;
         portainer) infrastructure_image_var=PORTAINER_IMAGE ;;
+        admin) infrastructure_image_var=ADMIN_IMAGE ;;
         *) die "Unknown infrastructure service: $infrastructure" ;;
     esac
     case " $infrastructure_names " in *" $infrastructure "*) die "Duplicate infrastructure: $infrastructure" ;; esac
