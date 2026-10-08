@@ -106,9 +106,10 @@ sudo sh scripts/hosting.sh issue-test powerx-dev
 sudo sh scripts/hosting.sh issue powerx-dev
 sudo sh scripts/hosting.sh https powerx-dev
 sudo sh scripts/hosting.sh renew-test powerx-dev
+sudo sh scripts/certificates.sh check --report /var/lib/certbot-events/certificates-check.json
 ```
 
-HTTP 接入可能重新创建 Nginx 以连接实例 ingress 网络，安排好对其他网站的短暂影响。签发失败先保留 HTTP 和应用数据，按证书工具的具体失败原因检查公网 80、DNS 与 ACME 网络，不反复强制签发。
+最后的 check 将真实证书检查结果保存到管理界面读取的报告中；未生成报告时界面显示“待检查”，不代表证书不存在。HTTP 接入可能重新创建 Nginx 以连接实例 ingress 网络，安排好对其他网站的短暂影响。签发失败先保留 HTTP 和应用数据，按证书工具的具体失败原因检查公网 80、DNS 与 ACME 网络，不反复强制签发。
 
 入口把页面代理到 Web Admin，`/api/`、`/ws/`、`/media/` 和 healthz 代理到后端，保留路径、Host 和 X-Forwarded-Proto；支持 WebSocket Upgrade、SSE 和长连接。部署脚本不安装宿主机 Nginx 或 Certbot。
 
@@ -151,3 +152,11 @@ sudo sh scripts/apps.sh start powerx-dev
 ```
 
 不要对共享入口执行整个 XDocker 的 down 或 remove-orphans，也不要把实例 config/数据目录拷贝给其他部署用户作为模板。用户收到的应是公开模板与固定镜像版本，每个部署自行生成私有配置。
+
+## 当前开发实例验收记录
+
+2026-10-08，在 `160.202.238.184` 部署 develop 固定 SHA `0e1c4a561b3ba997722d1724049671390120b184`：四个应用容器健康；公网 HTTPS 页面、健康 API、真实管理员登录及 `/api/v1/admin/user/auth/me/context` 返回 200。前端运行配置使用正确 HTTPS/WSS 域名，PostgreSQL、Redis、前后端均不发布宿主机端口。
+
+正式证书有效至 `2027-01-06T12:39:56+00:00`，签发测试与模拟续期通过，加入现有自动续期调度。专属控制台支持这四个登记服务及动态站点；原有三个静态网站、五条 FRP 健康入口均仍返回 HTTPS 200。除共享 Nginx 为新网络做了一次重建，其余既有容器保持 ID 和启动时间。
+
+XDocker 68 项回归通过，PowerX 的独立部署包在 CI 验证空库初始化、页面与管理员登录，并发布双架构镜像；匿名镜像访问验证通过。本机 Docker daemon 未启动，运行验证由 CI 和目标服务器完成。浏览器自动化当前不可用，浏览器实际交互、模型调用和具体插件安装没有据此标记为已验收。
