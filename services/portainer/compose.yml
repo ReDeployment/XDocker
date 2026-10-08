@@ -3,7 +3,7 @@ services:
     image: ${PORTAINER_IMAGE:?Initialize services/portainer/.env}
     pull_policy: ${PORTAINER_PULL_POLICY:-missing}
     restart: unless-stopped
-    command: ["--http-enabled", "--host", "unix:///var/run/docker.sock"]
+    command: ["--http-enabled", "--host", "unix:///var/run/docker.sock", "--log-mode", "NOCOLOR"]
     ports:
       - "127.0.0.1:${PORTAINER_PORT:-9000}:9000"
     volumes:

@@ -37,7 +37,7 @@ sudo sh scripts/hosting.sh compose config --quiet
 sudo sh scripts/hosting.sh compose pull portainer
 sudo sh scripts/portainer.sh start
 sudo sh scripts/portainer.sh status
-curl -fsS http://127.0.0.1:9000/api/status
+curl -fsS http://127.0.0.1:9000/api/system/status
 ```
 
 预期：容器 `Up`，API 返回 Portainer 版本。只启动面板，不重新创建网站、FRPS 或 Nginx。确认镜像已缓存后，可设 `PORTAINER_PULL_POLICY=never`；缺少该镜像时会立即失败。
@@ -103,3 +103,9 @@ sudo sh scripts/portainer.sh start
 ```
 
 要从配置中取消启用，先 `stop` 再从 `ENABLED_SERVICES` 移除 `portainer`。不执行整个 XDocker 的 `down` 或 `--remove-orphans`。
+
+## 当前验证记录
+
+2026-10-08，`160.202.238.184` 已运行 CE 2.45.2，页面及本地 JS 资源经 SSH 隧道返回 200，版本 API 返回 2.45.2，未登录容器 API 返回 401。其余六个运行容器的 ID 与启动时间保持一致；三个静态网站和五条 FRP `/healthz` 均返回 HTTPS 200。
+
+本地 49 项回归与 Compose 配置检查通过；本机未运行 Docker daemon，容器运行验证在同步已推送提交后的服务器完成。浏览器自动化当前不可用；首次管理员创建、登录后的容器管理操作需由管理员完成验收。
