@@ -6,6 +6,7 @@
 
 - 镜像：`ghcr.io/artisancloud/powerwechat-docs:sha-a23242c98e26e7da1e4cf2c6dadfc38030744efd`。
 - 发布提交：`a23242c98e26e7da1e4cf2c6dadfc38030744efd`。
+- 已核对 AMD64 manifest：`sha256:d268449344730480be719e961ccb8323c27576cb23f1dd38225f2b88f9a036d7`；ARM64 manifest：`sha256:47d419e298cbdbdc5830293fa68afa53180f4341eec457043e73350186287229`。
 - [Actions 发布与运行检查](https://github.com/ArtisanCloud/PowerWechatDocs/actions/runs/37731802946) 已成功，发布 Linux AMD64、ARM64，并实际运行 AMD64 镜像验证首页、文档直链、图片和未知路径 404。
 - [GHCR 镜像包页面](https://github.com/orgs/ArtisanCloud/packages/container/package/powerwechat-docs)。`ghcr.io` 是 registry 地址，网页管理入口位于 GitHub Packages。
 
@@ -60,6 +61,17 @@ curl -I -H 'Host: powerwechat.artisan-cloud.com' http://127.0.0.1/zh/start/insta
 
 HTTP 入口和文档直链检查通过后，将 **仅 `powerwechat.artisan-cloud.com`** 的 A 记录切到新服务器公网 IP `160.202.238.184`；存在 AAAA 时需同步处理。新服务器的供应商须允许该域名正常公网访问。DNS 切换后，先从其他网络检查首页和 `/.well-known/acme-challenge/` 测试文件，不要仅依据本机 200 判断签发条件已经满足。
 
+切换 DNS 前，可从其他电脑指定新服务器 IP 验证真实域名入口：
+
+```bash
+curl --noproxy '*' --resolve powerwechat.artisan-cloud.com:80:160.202.238.184 \
+  -I http://powerwechat.artisan-cloud.com/
+curl --noproxy '*' --resolve powerwechat.artisan-cloud.com:80:160.202.238.184 \
+  -I http://powerwechat.artisan-cloud.com/zh/start/installation
+```
+
+`--resolve` 只改变这次 curl 的目标地址，不修改 DNS，也不会让 Let's Encrypt 的验证请求使用该地址。
+
 ## 4. 独立证书与 HTTPS
 
 服务器使用 `certbot/certificates.local.json` 时，只将 `powerwechat.artisan-cloud.com` 对应项的 `enabled` 改为 true，保留已经启用的 PowerXDoc 和其他服务器实际负责的项。确认根 `.env` 的 `CERTIFICATES_INVENTORY` 指向该文件、`CERTBOT_EMAIL` 是实际联系邮箱；这些私有配置不提交 Git。
@@ -77,3 +89,9 @@ sudo sh scripts/hosting.sh renew-test powerwechat
 测试签发失败时不要继续正式签发。HTTP-01 的多地验证和公网异常响应排查见 [证书指南](../certificates/README.md#24-公网入口恢复后仍需验证签发与续期)。HTTPS 成功后检查两个站点的首页、文档、资源与证书，确认 PowerXDoc 继续正常服务。
 
 后续更新只执行 `sh scripts/hosting.sh update powerwechat`，共用一个 `certbot-renew` 服务管理本机已启用证书，不为每个网站重复安装 Nginx、Certbot 或宿主机 Node。
+
+## 5. 2026-10-08 部署记录
+
+新服务器 SYG962131 已同步 XDocker 配置，导入校验后的发布镜像，启动健康的 `powerwechat-docs` 容器及其独立 HTTP 路由。服务器本机请求和外部指定新 IP 的首页、安装文档直链均返回 200；现有 PowerXDoc 的公网 HTTPS 继续返回 200。
+
+HTTP 入口准备好后，用户已将 `powerwechat.artisan-cloud.com` 的 A 记录从旧 IP `111.170.35.252` 切到 `160.202.238.184`，未查到 AAAA。下一步为 PowerWechat 测试签发、正式签发、HTTPS 和续期验收；签发前本机证书清单仍只启用已经完成签发的 PowerXDoc。
