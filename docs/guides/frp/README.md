@@ -21,6 +21,8 @@ FRPS 启用 token 和强制 TLS。客户端使用通过可信 SSH 下载的 `ser
 
 所有代码先本地修改、验证并推送，再让服务器同步相同提交。`.github/workflows/publish-frps.yml` 发布 `ghcr.io/redeployment/xdocker-frps:0.52.3` 和完整 SHA 标签，包含 AMD64、ARM64。构建下载官方发行文件并核对 [官方校验和](https://github.com/fatedier/frp/releases/download/v0.52.3/frp_sha256_checksums.txt)。查看 [镜像包页面](https://github.com/orgs/ReDeployment/packages/container/package/xdocker-frps) 和 Actions 运行检查；Private 包按 [GHCR 认证指南](../ghcr-auth/README.md) 登录。
 
+外部部署者没有我们私有包的权限时，可以直接从本公开仓库执行 `docker build -t xdocker-frps:0.52.3 services/frps`，将自己的 `FRPS_IMAGE` 指向本地镜像；仍使用相同官方文件和固定校验和。
+
 ```bash
 cd ~/workspace/XDocker
 git pull --ff-only
@@ -88,3 +90,13 @@ python3 tests/frp_smoke.py --frps /path/to/frps --frpc /path/to/frpc --nginx /pa
 真实协议测试覆盖多 Host 路由、token 拒绝、服务端身份拒绝、明文连接拒绝，以及 Nginx 路径/头转发、SSE 首事件实时输出和 WebSocket 101。测试只启动临时本地进程，不连接或停止现有隧道。
 
 默认不把本地业务健康作为整个 Nginx 的启动依赖；单个本地服务离线不能导致三个静态站点下线。首次迁移先保持旧通道，回滚域名解析并停止新托管客户端即可；不删除本地业务数据。数据、传输证书、token 和服务器 `.env` 应独立备份。
+
+## 6. 2026-10-08 第一阶段验收
+
+- [Actions 37742310291](https://github.com/ReDeployment/XDocker/actions/runs/37742310291) 已发布并验证独立镜像，服务器运行固定 SHA 标签 `ghcr.io/redeployment/xdocker-frps:sha-e0bdee9c7cd89f0eba0d941ae5c87b32f4cf229f`。包保持 Private，未改变可见性。
+- 服务器 FRPS 健康，仅公开 7000，8080 只在 Docker 网络内监听；token、传输私钥和真实配置位于服务器 `data/frp/`，权限 600、目录 700。本地只接收客户端配置和服务端公开证书，不接收私钥或 GHCR PAT。
+- 私有镜像直连较慢时，使用服务器已有 Docker 凭据配合临时 SSH 转发到本机网络线路，daemonless 导出后导入 Docker。TLS 校验保持开启，未修改 Docker daemon 配置；临时转发已关闭。
+- 本机新增独立 LaunchAgent 托管 FRPC，原 FRPC 继续连接旧服务器。新客户端登录及 5 个代理注册成功，执行会话结束后仍存活。
+- 外部指定新 IP 验证五个域名的 `/healthz`，经 Nginx → FRPS → 本地 FRPC → 本地业务，全部返回 200。三个静态站点的公网 HTTPS 继续返回 200。
+- 47 项自动化测试通过；临时真实 FRP/Nginx 测试验证了 token、服务端身份、明文连接拒绝、多 Host、路径/头、SSE 与 WebSocket。
+- 本阶段未切换这五个业务域名的 DNS，也未为其签发新网站证书。下一阶段完成 debug 三域名组、Shopify 和 CourtMate 的 DNS/HTTPS 迁移；企业微信验证文件也需核对迁移。传输证书到期轮换和 Mac 重启后实际自动恢复仍待验收。
