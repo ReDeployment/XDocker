@@ -4,7 +4,7 @@
 
 当前目标是全新 `powerx-dev` 实例，域名 `powerx-dev.artisan-cloud.com`。本流程不迁移旧服务器数据库，也不创建正式 `powerx` 环境。
 
-当前固定版本来自远程 **develop**，源码 SHA `0e1c4a561b3ba997722d1724049671390120b184`，已通过[完整发布验收](https://github.com/ArtisanCloud/PowerX/actions/runs/37781060169)。独立部署用户可直接获取[镜像部署包](https://github.com/ArtisanCloud/PowerX/releases/tag/docker-dev-0e1c4a561b3b)，按包内指南启动，无需克隆源码。两个应用镜像已在无凭据环境验证访问；同一个版本同时支持上述两种部署方式。
+当前固定版本来自远程 **develop**，源码 SHA `2f28c9f830e0364d2383bfb0309df2ccbe98727a`，默认第一次启动保持未安装状态并进入 Setup。镜像通过[完整安装向导验收](https://github.com/ArtisanCloud/PowerX/actions/runs/37795862441)。独立用户可获取[镜像部署包](https://github.com/ArtisanCloud/PowerX/releases/tag/docker-dev-2f28c9f830e0)，无需克隆源码。
 
 ## 结构与隔离
 
@@ -68,11 +68,9 @@ REDIS_IMAGE=redis:7-alpine
 PULL_POLICY=missing
 PUBLIC_ORIGIN=https://powerx-dev.artisan-cloud.com
 PUBLIC_WS_ORIGIN=wss://powerx-dev.artisan-cloud.com
-ADMIN_USERNAME=admin
-ADMIN_EMAIL=your-email@example.com
 ```
 
-管理员邮箱由部署用户填写。`PUBLIC_ORIGIN` 是浏览器入口，`PUBLIC_WS_ORIGIN` 使用相同域名的 wss；不能填 `backend:8080` 或服务器内网地址。容器内部 HTTP 固定 8080、Web 固定 3000，与实例环境名无关。
+管理员账号、邮箱和密码在 Setup 页面由部署用户填写，启动脚本不代填。`PUBLIC_ORIGIN` 是浏览器入口，`PUBLIC_WS_ORIGIN` 使用相同域名的 wss；不能填 `backend:8080` 或服务器内网地址。容器内部 HTTP 固定 8080、Web 固定 3000，与实例环境名无关。
 
 镜像已下载/安全导入时可设 `PULL_POLICY=never`；缺少任何配置的镜像则启动失败。这里的策略同时作用于应用、PostgreSQL 和 Redis。
 
@@ -88,11 +86,9 @@ sudo sh scripts/apps.sh start powerx-dev
 sudo sh scripts/apps.sh status powerx-dev
 ```
 
-流程依次生成私有配置、启动并等待数据库/缓存健康、对新数据库执行 migrate 和 seed、保存初始化标记、启动前后端并等待健康。
+普通启动只生成 Docker 基础私有配置、启动数据库/缓存和前后端。第一次配置状态为 uninstalled，应用数据库没有迁移、种子和管理员；前端应进入 `/setup`。完成 Setup 后，后端经 Docker 重启加载完整运行状态。
 
-普通启动不会重新生成密钥，不重复 seed，不执行 refresh，也不清空数据。首次管理员密码独立随机生成。容器部署不创建 PowerX 公共本地开发 API keys；插件应通过后台创建和授权自己的 API key。
-
-若首次初始化部分失败，保留日志和目录，先查明阶段。不要删除 config、数据库或初始化标记来重试。重复启动已初始化实例会保留当前账号密码和数据。
+已有已安装配置会保留当前账号、数据和密钥，不通过升级自动重置为 Setup。若已初始化实例需要重新体验首次安装，必须先备份/验证，再明确选择全新目录；不得仅把 installed 标志改为 uninstalled 并复用旧数据库。
 
 ## 5. 接入域名和 HTTPS
 
@@ -115,13 +111,15 @@ sudo sh scripts/certificates.sh check --report /var/lib/certbot-events/certifica
 
 ## 6. 登录和验收
 
-在自己的服务器终端读取初始账号：
+打开 **https://powerx-dev.artisan-cloud.com/setup**。在自己的服务器终端读取数据库与 Redis 的 Docker 连接值：
 
 ```bash
-sudo sh scripts/apps.sh credentials powerx-dev
+sudo sh scripts/apps.sh setup-values powerx-dev
 ```
 
-使用输出中的邮箱和随机密码登录 **https://powerx-dev.artisan-cloud.com**。登录后修改初始密码。输出及 `initial-admin.json` 是私有凭据，不发到聊天、不分享截图、不提交 Git。
+数据库选择 PostgreSQL，主机 `postgres`、端口 `5432`、数据库和用户均为 `powerx`，密码使用输出 database.password；Redis 主机 `redis`、端口 `6379`、密码使用 cache.password。本地存储路径 `/data/uploads`，公开地址为域名加 `/media`。部署环境 dev，内部端口保持后端 8080、Web 3000；HTTPS 由 XDocker 管理，不在 PowerX 再签发。
+
+按页面顺序测试连接、保存和初始化，管理员账号、邮箱、密码由你设置，最后完成安装。脚本不会自动创建管理员或跳过向导。数据库迁移和种子只在用户明确点击初始化时执行；Setup 完成后进入登录，并使用自己设置的账号。
 
 ```bash
 curl -fsS https://powerx-dev.artisan-cloud.com/api/v1/health
@@ -144,7 +142,7 @@ sudo sh scripts/apps.sh migrate powerx-dev
 sudo sh scripts/apps.sh start powerx-dev
 ```
 
-升级不重新 init、不删除 initialized 标记、不调用 refresh。数据库迁移不兼容时，镜像回滚必须配合对应数据备份恢复。
+升级不重新 init、不调用 refresh。数据库迁移不兼容时，镜像回滚必须配合对应数据备份恢复。
 
 ```bash
 sudo sh scripts/apps.sh stop powerx-dev     # 只停该实例，保留数据
@@ -153,10 +151,14 @@ sudo sh scripts/apps.sh start powerx-dev
 
 不要对共享入口执行整个 XDocker 的 down 或 remove-orphans，也不要把实例 config/数据目录拷贝给其他部署用户作为模板。用户收到的应是公开模板与固定镜像版本，每个部署自行生成私有配置。
 
-## 当前开发实例验收记录
+## 旧自动初始化流程的历史验收（已纠正）
 
 2026-10-08，在 `160.202.238.184` 部署 develop 固定 SHA `0e1c4a561b3ba997722d1724049671390120b184`：四个应用容器健康；公网 HTTPS 页面、健康 API、真实管理员登录及 `/api/v1/admin/user/auth/me/context` 返回 200。前端运行配置使用正确 HTTPS/WSS 域名，PostgreSQL、Redis、前后端均不发布宿主机端口。
 
 正式证书有效至 `2027-01-06T12:39:56+00:00`，签发测试与模拟续期通过，加入现有自动续期调度。专属控制台支持这四个登记服务及动态站点；原有三个静态网站、五条 FRP 健康入口均仍返回 HTTPS 200。除共享 Nginx 为新网络做了一次重建，其余既有容器保持 ID 和启动时间。
 
 XDocker 68 项回归通过，PowerX 的独立部署包在 CI 验证空库初始化、页面与管理员登录，并发布双架构镜像；匿名镜像访问验证通过。本机 Docker daemon 未启动，运行验证由 CI 和目标服务器完成。浏览器自动化当前不可用，浏览器实际交互、模型调用和具体插件安装没有据此标记为已验收。
+
+## 备份管理
+
+XDocker 的“实例备份”支持维护窗口下的 PostgreSQL 逻辑导出、Redis RDB、配置/密钥和文件组合打包，私有下载、校验、隔离恢复演练和显式保留清理。它独立于 PowerX 应用内的数据库备份策略。详见 [实例备份与应用备份](backups.md)。
