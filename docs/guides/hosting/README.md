@@ -233,4 +233,4 @@ sudo sh scripts/hosting.sh compose exec -T nginx nginx -t
 
 开发阶段验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。这些测试使用临时自签名证书，没有启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
 
-2026-10-08 新服务器运行验收：PowerXDoc 和 PowerWechatDocs 容器健康，Nginx 和共享自动续期容器已启动；两个站点的 HTTP-01 测试签发、正式签发、HTTPS 公网信任及本地证书匹配、续期 dry-run 均通过。两个站点的首页、文档和静态资源返回 200，HTTP 跳转 HTTPS，未知路径返回 404。本机证书清单启用这两个域名，其他站点尚未部署。PowerXDoc 证书到期时间为 `2027-01-06T03:19:39+00:00`，PowerWechat 为 `2027-01-06T04:29:07+00:00`，详见 [PowerWechat 部署记录](../powerwechat/README.md)。真实到期续期后的自动 reload、服务器重启恢复及独立回滚仍待验收，见准备指南的状态记录。
+2026-10-08 新服务器运行验收：PowerXDoc、PowerWechatDocs 和 ArtisanCloud 官网容器健康，Nginx 和共享自动续期容器已启动；三个站点的 HTTP-01 测试签发、正式签发、HTTPS 公网信任及本地证书匹配、续期 dry-run 均通过。两个 VitePress 站点的文档和未知路径 404 已验证；Vue 官网的 SPA 直链回退及缺失静态资源 404 已验证。本机证书清单启用这三个域名，其他证书尚未迁移。官网续期 dry-run 首次遇到二次验证连接超时，复测通过；多地链路稳定性仍需观察。详细记录见 [PowerWechat 指南](../powerwechat/README.md) 和 [官网指南](../artisancloud-home/README.md)。浏览器交互、真实到期续期后的自动 reload、服务器重启恢复及独立回滚仍待验收，见准备指南的状态记录。

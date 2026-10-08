@@ -21,6 +21,8 @@ git rev-parse HEAD
 
 本次发布提交为 `30b8b4a17f575f44552dd75c05b3d737694d2137`；[发布工作流](https://github.com/ArtisanCloud/artisan-cloud-home/actions/runs/37735140140) 的构建、推送和实际容器验证均已成功。后续发布同样须检查全部步骤成功后再部署。镜像网页入口为 [GitHub Packages](https://github.com/orgs/ArtisanCloud/packages/container/package/artisan-cloud-home)。若包为 Private，先按 [认证指南](../ghcr-auth/README.md) 登录，无需公开包。
 
+已核对 AMD64 manifest 为 `sha256:86df8b2c7b82db93eadaf767053d9a94e9052bb5b01b6b33b34103199b85e1a1`，ARM64 为 `sha256:a07e6cb53618280f418efeb07705a0039f5252e5e1c496fe0d882a367c3fd217`。服务器导入的是校验后的 AMD64 包，镜像 revision 与发布提交一致。
+
 本地干净构建及临时 Nginx 路由检查通过，生成的主 JS/CSS 文件名与迁移前线上一致。开发机 Docker daemon 未运行，镜像运行由 Actions 和服务器验证；浏览器逐页面交互需单独确认。
 
 ## 2. Vue Router 与静态资源
@@ -71,3 +73,13 @@ sudo sh scripts/hosting.sh status
 ```
 
 检查三个域名的 HTTPS、证书、首页和资源，并确认官网直链刷新正常。一个共享 `certbot-renew` 管理本机启用证书，无需重复安装宿主机 Nginx、Certbot 或 Node。主动续期测试跳过随机调度等待，普通自动续期保留原有调度。
+
+## 5. 2026-10-08 部署记录
+
+用户已将 `artisan-cloud.com` 解析到 `160.202.238.184`，未查到 AAAA。服务器上的官网容器健康；HTTP-01 测试签发、正式签发、公网 TLS 信任与本地证书匹配检查成功，正式证书有效期至 `2027-01-06T05:08:13+00:00`。
+
+公网 HTTP 301 跳转 HTTPS，HTTPS 首页及产品、案例、联系页面的 SPA 入口返回 200；JS/CSS MIME 正确，主 JS 与迁移前线上文件内容一致；缺失 JS 和图片返回 404。PowerXDoc、PowerWechat 的公网 HTTPS 继续返回 200。
+
+首次续期 dry-run 出现二次验证节点连接 80 端口超时，复测成功。供应商入站链路的多地稳定性仍需持续观察，不能用一次客户端 200 保证未来验证总能通过。共享续期服务已重新加载包含官网、PowerWechat、PowerXDoc 的清单；其他 5 组证书尚未迁移。
+
+浏览器连接工具不可用，本次未做浏览器逐页面交互验收。真实到期续期后的自动 reload 和服务器重启恢复也尚未实测。
