@@ -53,4 +53,10 @@ sudo sh scripts/admin.sh start
 
 不提供点击覆盖当前数据库的按钮。当前也不自动设置定时全实例备份、异地存储、加密密钥托管或 PITR；应用内数据库定时计划继续由 PowerX 备份中心管理。后续增加这些能力时，应沿用实例隔离、明确权限、操作记录和恢复验收。
 
+## 已完成的运行验证
+
+2026-10-08，Admin 镜像 `sha-ec70aab2a18d758164490639d04d26f5b8366831` 在真实 `powerx-dev` 实例创建备份 `25fd8c0b0039dd54e2094a20edc3161a`，状态为 ready。组合包 667163 字节，SHA256 为 `44c51e3b5f83352c0e47f202bde65cd6d63d63bcb9e8e3c0ab35f3540262665d`。PostgreSQL 隔离恢复验证成功，认证下载的内容与 SHA256 一致，匿名下载返回 401；维护窗口结束后前后端恢复健康，原实例数据未替换。
+
+本地 75 项检查与 CI 的真实 PostgreSQL/Redis 备份、恢复演练通过。浏览器实际点击流程尚未单独验收；当前实例仍使用原已安装数据，切换到空白 Setup 实例前需明确选择保留方式。
+
 参考：[PostgreSQL 一致性逻辑备份](https://www.postgresql.org/docs/16/backup-dump.html)、[pg_dump 自定义格式](https://www.postgresql.org/docs/16/app-pgdump.html)。
