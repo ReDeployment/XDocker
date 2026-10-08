@@ -62,21 +62,26 @@ load_site() {
 COMPOSE_FILE=compose.yml
 COMPOSE_PATH_SEPARATOR=:
 infrastructure_names=''
+image_vars=''
 for infrastructure in ${ENABLED_SERVICES:-}; do
-    [ "$infrastructure" = frps ] || die "Unknown infrastructure service: $infrastructure"
+    case $infrastructure in
+        frps) infrastructure_image_var=FRPS_IMAGE ;;
+        portainer) infrastructure_image_var=PORTAINER_IMAGE ;;
+        *) die "Unknown infrastructure service: $infrastructure" ;;
+    esac
     case " $infrastructure_names " in *" $infrastructure "*) die "Duplicate infrastructure: $infrastructure" ;; esac
     infrastructure_names="$infrastructure_names $infrastructure"
-    [ -f services/frps/.env ] || die 'Run hosting.sh init and configure services/frps/.env.'
+    [ -f "services/$infrastructure/.env" ] || die "Run hosting.sh init and configure services/$infrastructure/.env."
     set -a
-    . ./services/frps/.env
+    . "./services/$infrastructure/.env"
     set +a
-    case ${FRPS_IMAGE:-} in ''|*REPLACE_WITH*) die 'Set a published FRPS_IMAGE.' ;; esac
-    COMPOSE_FILE="$COMPOSE_FILE:services/frps/compose.yml"
+    eval 'infrastructure_image=${'"$infrastructure_image_var"':-}'
+    case $infrastructure_image in ''|*REPLACE_WITH*) die "Set a published $infrastructure_image_var." ;; esac
+    image_vars="$image_vars $infrastructure_image_var"
+    COMPOSE_FILE="$COMPOSE_FILE:services/$infrastructure/compose.yml"
 done
 domains=''
 services="$infrastructure_names"
-image_vars=''
-[ -z "$infrastructure_names" ] || image_vars=' FRPS_IMAGE'
 for enabled in ${ENABLED_SITES:-}; do
     load_site "$enabled"
     case " $domains " in *" $SITE_DOMAIN "*) die "Duplicate domain: $SITE_DOMAIN" ;; esac

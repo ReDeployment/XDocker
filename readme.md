@@ -34,6 +34,9 @@ certbot/                      # 独立 certificates.json 清单与续期
 scripts/certificates.sh        # 证书检查、续期、签发、公网验证
 scripts/runtime-images.sh      # Docker Hub / 自有 GHCR 副本切换
 services/frps/                 # 共享 FRPS 服务镜像与 Compose
+services/portainer/            # 可选 Docker 管理面板，仅回环端口
+scripts/portainer.sh           # 面板启动、状态及首次设置令牌
+docs/guides/portainer/         # SSH 隧道访问与容器管理
 clients/frpc/                  # 本地客户端映射模板
 scripts/frp.sh                 # 穿透初始化、启动和验证
 docs/guides/server-setup/      # 新机用户、SSH、Git、Docker 与首次验证
@@ -59,6 +62,7 @@ Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-
 5. [PowerWechat 静态站指南](docs/guides/powerwechat/README.md)：接入 PowerWechatDocs 时使用。
 6. [ArtisanCloud 官网指南](docs/guides/artisancloud-home/README.md)：使用当前 develop 分支官网并迁移主域名。
 7. [FRP 穿透指南](docs/guides/frp/README.md)：共享 FRPS、客户端私有配置和开发域名迁移。
+8. [Portainer 管理面板指南](docs/guides/portainer/README.md)：可选启用容器状态、日志、资源和启停管理；首次通过 SSH 隧道访问。
 
 已有服务器完成准备后，使用 ubuntu 账号初始化。下面的服务器 Docker 操作使用 sudo：
 

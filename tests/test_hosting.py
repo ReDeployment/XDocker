@@ -122,6 +122,34 @@ esac
         self.assertIn("Duplicate service", result.stderr)
         self.assertEqual(self.calls(), "")
 
+    def test_site_cannot_override_portainer_image(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="portainer"')
+        self.edit(self.root / "sites/powerxdoc/site.conf", "POWERXDOC_IMAGE", "PORTAINER_IMAGE")
+        result = self.run_action("compose", "config", success=False)
+        self.assertIn("Duplicate image variable", result.stderr)
+        self.assertEqual(self.calls(), "")
+
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
+    def test_portainer_is_optional_loopback_only_and_separate_from_frps(self):
+        def config():
+            result = subprocess.run(["sh", "scripts/hosting.sh", "compose", "config", "--format", "json"],
+                                    cwd=self.root, env=dict(self.env, PATH=os.environ["PATH"]),
+                                    capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+        self.assertNotIn("portainer", config()["services"])
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps portainer"')
+        services = config()["services"]
+        service = services["portainer"]
+        self.assertEqual(len(service["ports"]), 1)
+        self.assertEqual(service["ports"][0]["host_ip"], "127.0.0.1")
+        self.assertEqual(service["ports"][0]["target"], 9000)
+        self.assertEqual(set(service["networks"]), {"portainer-admin"})
+        self.assertEqual(set(services["frps"]["networks"]), {"default"})
+        socket = next(v for v in service["volumes"] if v["target"] == "/var/run/docker.sock")
+        self.assertEqual(socket["source"], "/var/run/docker.sock")
+        for name in ("nginx", "frps", "powerx-doc"):
+            self.assertFalse(any(v["target"] == "/var/run/docker.sock" for v in services[name].get("volumes", [])))
+
     @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
     def test_frp_compose_only_publishes_control_port(self):
         self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
