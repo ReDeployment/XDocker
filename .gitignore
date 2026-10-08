@@ -4,3 +4,5 @@ data/
 __pycache__/
 *.pyc
 certbot/*.local.json
+instances/*/config/
+instances/*/instance.json

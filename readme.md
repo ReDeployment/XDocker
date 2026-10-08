@@ -36,6 +36,9 @@ scripts/runtime-images.sh      # Docker Hub / 自有 GHCR 副本切换
 services/frps/                 # 共享 FRPS 服务镜像与 Compose
 services/portainer/            # 可选 Docker 管理面板，仅回环端口
 services/admin/                # XDocker 专属网页与受限管理 API
+apps/powerx/                   # PowerX 前后端及数据库模板，只拉取镜像
+instances/powerx-dev/           # 独立开发实例，运行配置与私有密钥
+scripts/apps.sh                 # 应用初始化、启动、升级及凭据读取
 scripts/admin.sh               # 管理令牌初始化与控制台启动
 docs/guides/admin/             # 专属控制台操作、验证和部署说明
 scripts/portainer.sh           # 面板启动、状态及首次设置令牌
@@ -67,6 +70,7 @@ Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-
 7. [FRP 穿透指南](docs/guides/frp/README.md)：共享 FRPS、客户端私有配置和开发域名迁移。
 8. [Portainer 管理面板指南](docs/guides/portainer/README.md)：可选启用容器状态、日志、资源和启停管理；首次通过 SSH 隧道访问。
 9. [XDocker 专属控制台](docs/guides/admin/README.md)：统一查看网站、证书、FRP 和容器，并执行有审计记录的运行操作。
+10. [PowerX Docker 部署指南](docs/guides/powerx/README.md)：独立镜像分发、开发实例与共享 HTTPS 入口。
 
 已有服务器完成准备后，使用 ubuntu 账号初始化。下面的服务器 Docker 操作使用 sudo：
 

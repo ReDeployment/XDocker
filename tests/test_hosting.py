@@ -16,7 +16,7 @@ class HostingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="xdocker-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for directory in ("scripts", "nginx", "sites", "certbot", "services", "clients"):
+        for directory in ("scripts", "nginx", "sites", "certbot", "services", "clients", "apps", "instances"):
             shutil.copytree(ROOT / directory, self.root / directory,
                             ignore=shutil.ignore_patterns(".env"))
         for file in (".env.example", "compose.yml"):
@@ -164,6 +164,32 @@ esac
         self.assertEqual(set(admin["networks"]), {"admin-control"})
         self.assertNotIn("/etc/letsencrypt", [v["target"] for v in admin["volumes"]])
         self.assertTrue(next(v for v in admin["volumes"] if v["target"] == "/config/root.env")["read_only"])
+
+    def test_powerx_ingress_starts_isolated_instance_and_routes_frontend_and_api(self):
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc powerx-dev"')
+        result=subprocess.run(['sh','scripts/apps.sh','init','powerx-dev'],cwd=self.root,env=self.env,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.run_action('http','powerx-dev','--no-pull')
+        config=self.config_path('powerx-dev').read_text()
+        self.assertIn('powerx-dev-backend:8080',config)
+        self.assertIn('powerx-dev-web:3000',config)
+        self.assertIn('proxy_buffering off',config)
+        self.assertIn('proxy_set_header Upgrade',config)
+        self.assertNotIn('compose up -d --wait --wait-timeout 120 powerx-dev-web',self.calls())
+        self.assertIn('compose -p powerx-dev --project-directory',self.calls())
+
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
+    def test_powerx_application_keeps_database_private_and_uses_pull_only_images(self):
+        subprocess.run(['sh','scripts/apps.sh','init','powerx-dev'],cwd=self.root,env=self.env,check=True,capture_output=True)
+        result=subprocess.run(['sh','scripts/apps.sh','compose','powerx-dev','config','--format','json'],cwd=self.root,
+                              env=dict(self.env,PATH=os.environ['PATH']),capture_output=True,text=True,check=True)
+        parsed=json.loads(result.stdout)
+        self.assertEqual(parsed['name'],'powerx-dev')
+        for name in ('backend','web-admin','postgres','redis'):
+            self.assertNotIn('build',parsed['services'][name])
+            self.assertNotIn('ports',parsed['services'][name])
+        self.assertTrue(parsed['networks']['private']['internal'])
+        self.assertEqual(parsed['networks']['ingress']['name'],'powerx-dev_ingress')
 
     @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
     def test_frp_compose_only_publishes_control_port(self):

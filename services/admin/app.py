@@ -55,7 +55,8 @@ def configuration(root):
         values = env_values(directory / 'site.conf') | env_values(directory / '.env')
         domain = values.get('SITE_DOMAIN', '')
         kind = values.get('SITE_KIND', 'static')
-        service = 'frps' if kind == 'frp_http' else values.get('SITE_SERVICE', '')
+        service = ('frps' if kind == 'frp_http' else
+                   values.get('SITE_INSTANCE', '')+'-web' if kind == 'app' else values.get('SITE_SERVICE', ''))
         if not DOMAIN.fullmatch(domain) or not KEY.fullmatch(service):
             continue
         sites.append({'key': directory.name, 'domain': domain, 'kind': kind,
@@ -207,11 +208,25 @@ def create_app(settings=None, docker=None):
 
     def managed_containers():
         _, allowed = configuration(config)
-        filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project='+PROJECT]})})
+        projects = {PROJECT: allowed}
+        for file in (config / 'instances').glob('*/instance.json'):
+            try:
+                instance = json.loads(file.read_text())
+                project = instance.get('project', '')
+                if instance.get('app') == 'powerx' and instance.get('enabled') is True and KEY.fullmatch(project) and project == file.parent.name and project != PROJECT:
+                    projects[project] = {'postgres', 'redis', 'backend', 'web-admin'}
+            except (ValueError, OSError, TypeError):
+                continue
+        filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project']})})
         containers = engine.request('GET', '/containers/json?' + filters)
-        return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project') == PROJECT
-                and c['Labels'].get('com.docker.compose.service') in allowed
+        return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project') in projects
+                and c['Labels'].get('com.docker.compose.service') in projects[c['Labels']['com.docker.compose.project']]
                 and c['Labels'].get('com.docker.compose.oneoff', 'False').lower() != 'true']
+
+    def service_name(container):
+        labels = container['Labels']
+        service = labels['com.docker.compose.service']
+        return service if labels['com.docker.compose.project'] == PROJECT else labels['com.docker.compose.project']+'/'+service
 
     def resolve(identifier):
         if not re.fullmatch(r'[a-f0-9]{64}', identifier):
@@ -266,7 +281,7 @@ def create_app(settings=None, docker=None):
     def snapshot():
         sites, _ = configuration(config)
         containers = managed_containers()
-        services = [{'id': c['Id'], 'service': c['Labels']['com.docker.compose.service'],
+        services = [{'id': c['Id'], 'service': service_name(c),
                      'name': c['Names'][0].lstrip('/'), 'image': c['Image'], 'state': c['State'],
                      'status': c['Status'], 'created': c['Created'], 'protected': c['Labels']['com.docker.compose.service'] == 'admin',
                      'ports': [{'ip': p.get('IP', ''), 'host': p.get('PublicPort'), 'container': p.get('PrivatePort')} for p in c.get('Ports', []) if p.get('PublicPort')]} for c in containers]
@@ -348,7 +363,7 @@ def create_app(settings=None, docker=None):
             return jsonify(error='Unknown managed service'), 404
         body = command_payload()
         action = body.get('action')
-        service = container['Labels']['com.docker.compose.service']
+        service = service_name(container)
         if service == 'admin':
             return jsonify(error='管理服务自身请通过 SSH 维护。'), 409
         if action not in ('start', 'stop', 'restart') or body.get('confirmation') != service:

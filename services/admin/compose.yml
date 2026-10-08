@@ -21,6 +21,7 @@ services:
       - ${CERTIFICATES_INVENTORY:-./certbot/certificates.json}:/config/certificates.json:ro
       - ./data/events:/reports:ro
       - ./clients/frpc/main.ini.example:/config/frpc-template.ini:ro
+      - ./instances:/config/instances:ro
     networks: [admin-control]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]

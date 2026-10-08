@@ -1,0 +1,10 @@
+# Application Compose owns this network; start its instance before hosting.http.
+services:
+  nginx:
+    networks:
+      - default
+      - powerx-dev-ingress
+networks:
+  powerx-dev-ingress:
+    external: true
+    name: powerx-dev_ingress

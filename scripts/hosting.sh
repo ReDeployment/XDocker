@@ -38,13 +38,20 @@ load_site() {
     valid_key "$1"
     [ -f "sites/$1/site.conf" ] || die "Unknown site: $1"
     [ -f "sites/$1/.env" ] || die "Initialize sites/$1/.env first."
-    unset SITE_KIND SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME
+    unset SITE_KIND SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME SITE_APP SITE_INSTANCE
     . "./sites/$1/site.conf"
     . "./sites/$1/.env"
     case ${SITE_DOMAIN:-} in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_DOMAIN for $1." ;; esac
     SITE_CERT_NAME=${SITE_CERT_NAME:-$SITE_DOMAIN}
     case $SITE_CERT_NAME in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_CERT_NAME for $1." ;; esac
     SITE_KIND=${SITE_KIND:-static}
+    if [ "$SITE_KIND" = app ]; then
+        [ "${SITE_APP:-}" = powerx ] || die 'Unsupported site application.'
+        valid_key "${SITE_INSTANCE:-}"
+        [ -f "sites/$1/compose.yml" ] || die 'Missing application ingress compose.'
+        SITE_SERVICE="$SITE_INSTANCE-web"
+        return
+    fi
     if [ "$SITE_KIND" = frp_http ]; then
         case " ${ENABLED_SERVICES:-} " in *" frps "*) ;; *) die 'Enable frps in ENABLED_SERVICES first.' ;; esac
         SITE_SERVICE=frps
@@ -87,6 +94,10 @@ for enabled in ${ENABLED_SITES:-}; do
     load_site "$enabled"
     case " $domains " in *" $SITE_DOMAIN "*) die "Duplicate domain: $SITE_DOMAIN" ;; esac
     domains="$domains $SITE_DOMAIN"
+    if [ "$SITE_KIND" = app ]; then
+        COMPOSE_FILE="$COMPOSE_FILE:sites/$enabled/compose.yml"
+        continue
+    fi
     if [ "$SITE_KIND" = frp_http ]; then continue; fi
     case " $services " in *" $SITE_SERVICE "*) die "Duplicate service: $SITE_SERVICE" ;; esac
     case " $image_vars " in *" $SITE_IMAGE_VAR "*) die "Duplicate image variable: $SITE_IMAGE_VAR" ;; esac
@@ -125,7 +136,12 @@ render() {
         template="frp-$1"
         [ -f data/nginx/01-frp-headers.conf ] || cp nginx/frp-headers.conf data/nginx/01-frp-headers.conf
     fi
+    if [ "$SITE_KIND" = app ]; then
+        template="powerx-$1"
+        [ -f data/nginx/02-powerx-headers.conf ] || cp nginx/powerx-headers.conf data/nginx/02-powerx-headers.conf
+    fi
     sed -e "s/__DOMAIN__/$SITE_DOMAIN/g" -e "s/__SERVICE__/$SITE_SERVICE/g" -e "s/__CERT_NAME__/$SITE_CERT_NAME/g" \
+        -e "s/__INSTANCE__/${SITE_INSTANCE:-unused}/g" \
         "nginx/$template.conf.template" > "$config.tmp"
     mv "$config.tmp" "$config"
 }
@@ -173,9 +189,13 @@ case "$action" in
         if [ -f "$config" ] && grep -q 'listen 443 ssl' "$config"; then
             die "HTTPS already configured for $site; use compose or update for routine operations."
         fi
-        if [ "${3:-}" != --no-pull ]; then compose pull "$SITE_SERVICE" nginx certbot; fi
-        # Start only the selected website, waiting for its static server to be healthy.
-        compose up -d --wait --wait-timeout 120 "$SITE_SERVICE"
+        if [ "$SITE_KIND" = app ]; then
+            sh scripts/apps.sh start "$SITE_INSTANCE"
+            if [ "${3:-}" != --no-pull ]; then compose pull nginx certbot; fi
+        else
+            if [ "${3:-}" != --no-pull ]; then compose pull "$SITE_SERVICE" nginx certbot; fi
+            compose up -d --wait --wait-timeout 120 "$SITE_SERVICE"
+        fi
         save_config
         render http
         if ! compose up -d nginx; then restore_config; die 'Nginx startup failed; previous config restored.'; fi
@@ -199,6 +219,7 @@ case "$action" in
             renew-test "$SITE_CERT_NAME" --runtime container
         ;;
     update)
+        [ "$SITE_KIND" != app ] || die 'Use apps.sh for application migrations and updates.'
         [ "$SITE_KIND" != frp_http ] || die 'FRP routes share frps; update the infrastructure image and use frp.sh start.'
         compose pull "$SITE_SERVICE"
         compose up -d --wait --wait-timeout 120 "$SITE_SERVICE"

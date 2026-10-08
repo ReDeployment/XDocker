@@ -120,6 +120,21 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(response.json['certificates'][0]['status'],'LOCAL_VALID')
         for secret in (TOKEN,'should-not-appear','do-not-echo'):self.assertNotIn(secret,response.text)
 
+    def test_only_explicit_powerx_instances_are_managed(self):
+        self.login()
+        directory=self.root/'config/instances/powerx-dev'
+        directory.mkdir(parents=True)
+        (directory/'instance.json').write_text(json.dumps({'project':'powerx-dev','app':'powerx','enabled':True}))
+        original=self.docker.request
+        def request(method,path,body=None,raw=False,timeout=15):
+            if path.startswith('/containers/json'):
+                return [container(),container(OTHER,'postgres','powerx-dev'),container(SELF,'postgres','unrelated')]
+            return original(method,path,body,raw,timeout)
+        self.docker.request=request
+        services=self.client.get('/api/snapshot').json['services']
+        self.assertEqual({s['service'] for s in services},{'nginx','powerx-dev/postgres'})
+        self.assertEqual(self.post('/api/services/'+OTHER+'/action',{'action':'stop','confirmation':'postgres'}).status_code,400)
+
     def test_unrelated_container_and_self_controls_blocked(self):
         self.login()
         self.assertEqual(self.post('/api/services/'+OTHER+'/action',{'action':'stop','confirmation':'nginx'}).status_code,404)
