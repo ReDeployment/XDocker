@@ -4,7 +4,7 @@
 
 ## 1. 配置边界
 
-根目录 `compose.yml` 只维护公共入口 Nginx、一次性 Certbot 工具和持续续期服务。每个 `sites/<key>/` 有独立服务与镜像配置。网站容器不对宿主机暴露端口，通过共享 Compose 网络访问。
+根目录 `compose.yml` 维护公共入口 Nginx、一次性 Certbot 工具和持续续期服务。默认 `SITE_KIND=static` 的站点有独立服务与镜像配置。`SITE_KIND=frp_http` 的站点只有域名与证书配置，共用 `services/frps`，不需要自己的镜像或 Compose 文件，详见 [FRP 指南](../frp/README.md)。网站容器和 FRPS 的 HTTP 入口不对宿主机暴露端口，通过共享 Compose 网络访问。
 
 根目录 `.env` 管理共享参数：
 
@@ -135,7 +135,7 @@ sudo sh scripts/hosting.sh https powerwechat
 
 ArtisanCloudHome 同样替换 key。每个站点独立验证页面、路由、资源、HTTPS；已有 PowerXDoc 配置和镜像不会因新增站点被替换。
 
-接入第四个站点时新增 `sites/<key>/site.conf`、`compose.yml`、`.env.example`。例如：
+接入新的镜像型站点时新增 `sites/<key>/site.conf`、`compose.yml`、`.env.example`。例如：
 
 ```sh
 # site.conf：每个站点服务名和镜像变量名必须唯一。
@@ -233,4 +233,4 @@ sudo sh scripts/hosting.sh compose exec -T nginx nginx -t
 
 开发阶段验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。这些测试使用临时自签名证书，没有启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
 
-2026-10-08 新服务器运行验收：PowerXDoc、PowerWechatDocs 和 ArtisanCloud 官网容器健康，Nginx 和共享自动续期容器已启动；三个站点的 HTTP-01 测试签发、正式签发、HTTPS 公网信任及本地证书匹配、续期 dry-run 均通过。两个 VitePress 站点的文档和未知路径 404 已验证；Vue 官网的 SPA 直链回退及缺失静态资源 404 已验证。本机证书清单启用这三个域名，其他证书尚未迁移。官网续期 dry-run 首次遇到二次验证连接超时，复测通过；多地链路稳定性仍需观察。详细记录见 [PowerWechat 指南](../powerwechat/README.md) 和 [官网指南](../artisancloud-home/README.md)。浏览器交互、真实到期续期后的自动 reload、服务器重启恢复及独立回滚仍待验收，见准备指南的状态记录。
+2026-10-08 新服务器运行验收：三个静态网站、FRPS、Nginx 和共享续期服务正常运行。三个静态站及五个 FRP 域名的证书签发、公网 TLS 与本地证书匹配、续期 dry-run 最终通过；五个穿透域名的 HTTPS `/healthz` 返回 200，企业微信验证响应已迁移。静态站文档、SPA 直链和缺失资源处理保留原有验证结果。私有清单共启用 6 组证书覆盖 8 个域名，详细记录见 [FRP 第二阶段](../frp/README.md)、[PowerWechat 指南](../powerwechat/README.md) 和 [官网指南](../artisancloud-home/README.md)。部分 ACME 二次验证曾连接超时，复测通过，多地链路稳定性仍需观察。浏览器业务交互、真实到期续期后的自动 reload、服务器重启恢复及独立回滚仍待验收。
