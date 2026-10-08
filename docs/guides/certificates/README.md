@@ -128,6 +128,8 @@ data/events/certificates-renew.json
 
 本次测试重试通过后才正式签发，公网 TLS 与本地证书匹配检查、续期 dry-run 随后均成功。首次签发成功后仍要执行续期测试，并检查自动续期容器日志；dry-run 成功不等于已经发生真实到期续期或自动 reload。
 
+`renew-test` 是操作员主动验证，传入 `--no-random-sleep-on-renew` 跳过 Certbot 非交互续期的随机等待，避免测试额外等待最多 8 分钟。普通 `renew` 和自动续期仍保留原有随机等待；测试不会替换正式证书或触发 reload。
+
 ## 3. 状态和返回码
 
 | 状态 | 意义 |

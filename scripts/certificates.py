@@ -207,7 +207,9 @@ def renew_item(item, args, data):
     command = [args.certbot_bin, "renew", "--config-dir", args.config_dir,
                "--cert-name", item["name"], "--non-interactive"]
     if args.action == "renew-test":
-        command.append("--dry-run")
+        # Operator-triggered validation should not wait up to eight minutes for
+        # Certbot's scheduled-renewal jitter. Normal renewals retain that jitter.
+        command.extend(["--dry-run", "--no-random-sleep-on-renew"])
     # Inherit Certbot stdout on stderr, keeping JSON report stdout parseable.
     completed = subprocess.run(command, stdout=sys.stderr, stderr=sys.stderr)
     if completed.returncode:

@@ -146,6 +146,7 @@ class CertificateTests(unittest.TestCase):
         self.assertEqual(code, 0)
         command = run.call_args.args[0]
         self.assertIn("--dry-run", command)
+        self.assertIn("--no-random-sleep-on-renew", command)
         self.assertEqual(command[command.index("--cert-name") + 1], "debug-ecommerce.example.com")
         self.assertNotIn("--webroot", command)
         self.assertNotIn("-d", command)
@@ -189,9 +190,10 @@ class CertificateTests(unittest.TestCase):
     def test_noop_renewal_does_not_reload_or_claim_renewed(self):
         self.certificate()
         event = self.root / "events/reload"
-        with patch.object(tool, "network_preflight", return_value=REACHABLE), patch.object(tool.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+        with patch.object(tool, "network_preflight", return_value=REACHABLE), patch.object(tool.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
             code, report = self.invoke("renew", "--reload", "container-event", "--reload-event", str(event))
         self.assertEqual((code, report["results"][0]["status"]), (0, "UNCHANGED"))
+        self.assertNotIn("--no-random-sleep-on-renew", run.call_args.args[0])
         self.assertFalse(event.exists())
 
     def test_success_exit_with_expired_certificate_is_not_success(self):
