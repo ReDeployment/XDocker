@@ -4,6 +4,8 @@
 
 当前目标是全新 `powerx-dev` 实例，域名 `powerx-dev.artisan-cloud.com`。本流程不迁移旧服务器数据库，也不创建正式 `powerx` 环境。
 
+当前固定版本来自远程 **develop**，源码 SHA `0e1c4a561b3ba997722d1724049671390120b184`，已通过[完整发布验收](https://github.com/ArtisanCloud/PowerX/actions/runs/37781060169)。独立部署用户可直接获取[镜像部署包](https://github.com/ArtisanCloud/PowerX/releases/tag/docker-dev-0e1c4a561b3b)，按包内指南启动，无需克隆源码。两个应用镜像已在无凭据环境验证访问；同一个版本同时支持上述两种部署方式。
+
 ## 结构与隔离
 
 ```text

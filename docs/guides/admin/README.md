@@ -14,7 +14,7 @@
        └── data/admin：访问令牌、登录会话、任务、审计、连接检查
 ```
 
-- 管理范围限定为 `xdocker-web-hosting` 项目中已启用的服务，过滤其他项目和临时 Compose 任务。
+- 管理范围包含 `xdocker-web-hosting` 已启用的服务，以及 instances 中明确登记、启用的 PowerX 项目的 backend、web-admin、postgres、redis；过滤未登记项目和临时 Compose 任务。实例服务使用 `powerx-dev/backend` 等完整名称确认操作。
 - 容器支持日志、实际 CPU/内存、启动、停止、重启；不提供任意命令、删除容器、删除卷或通用 Docker API 转发。
 - 网站与 FRP 支持 HTTPS 连接检查；FRP 使用 `/healthz` 验证整条链路。客户端端口来自公开模板，界面标注“客户端模板”，不当作实际客户端配置。FRPC 密钥和真实私有配置不展示。
 - 证书读取真实检查报告、剩余天数及检查时间；支持指定已启用证书的检查、续期测试、按需正式续期。禁止强制续期和新证书签发。正式续期继续使用既有自动 Nginx reload 机制。
