@@ -72,8 +72,8 @@ def redact(text, values=()):
     for value in sorted(set(values), key=len, reverse=True):
         if len(value) >= 6:
             text = text.replace(value, '[REDACTED]')
-    text = re.sub(r'(?i)((?:setup_token|token|password|secret|authorization|api[_-]?key)\s*[=:]\s*)([^\s,;]+)', r'\1[REDACTED]', text)
-    text = re.sub(r'(?i)(bearer\s+)[\w.+/=-]+', r'\1[REDACTED]', text)
+    text = re.sub(r'(?i)((?:bearer|basic)\s+)[\w.+/=-]+', r'\1[REDACTED]', text)
+    text = re.sub(r'''(?i)((?:setup_token|token|password|secret|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)''', r'\1[REDACTED]', text)
     text = re.sub(r'://[^\s/@]+:[^\s/@]+@', '://[REDACTED]@', text)
     text = re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----', '[PRIVATE KEY REDACTED]', text, flags=re.S)
     return text[-65536:]
@@ -223,7 +223,7 @@ def create_app(settings=None, docker=None):
         sensitive = [token]
         for assignment in details.get('Config', {}).get('Env', []):
             key, _, value = assignment.partition('=')
-            if re.search('TOKEN|SECRET|PASS|KEY|CREDENTIAL', key, re.I):
+            if re.search('TOKEN|SECRET|PASS|KEY|CREDENTIAL|AUTH', key, re.I):
                 sensitive.append(value)
         raw = engine.request('GET', f'/containers/{identifier}/logs?stdout=true&stderr=true&tail=200&timestamps=true', raw=True)
         return redact(log_text(raw), sensitive)

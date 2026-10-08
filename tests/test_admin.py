@@ -234,6 +234,9 @@ class AdminTests(unittest.TestCase):
         raw=b'\x01\x00\x00\x00\x00\x00\x00\x05hello'+b'\x02\x00\x00\x00\x00\x00\x00\x05error'
         self.assertEqual(log_text(raw),'helloerror')
         self.assertNotIn('PRIVATE KEY',redact('-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----').replace('[PRIVATE KEY REDACTED]',''))
+        text = redact('Authorization: Bearer never-expose-me\n{"api_key":"json-private-value"}\npassword="words with spaces"\nAuthorization: Basic cHJpdmF0ZTpwYXNz')
+        for value in ('never-expose-me','json-private-value','words with spaces','cHJpdmF0ZTpwYXNz'):
+            self.assertNotIn(value,text)
 
 
 if __name__=='__main__':unittest.main()
