@@ -433,7 +433,7 @@ def create_app(settings=None, docker=None):
                         code = response.status
                     status, detail = ('reachable', f'HTTPS {code}') if code == 200 else ('failed', f'HTTPS {code}')
                 except Exception as error:
-                    status, detail = 'failed', type(error).__name__ + ': TLS 或站点响应检查失败'
+                    status, detail = 'failed', type(error).__name__ + ': ' + redact(str(error), [token])[:300]
                 failures += int(status == 'failed')
                 with db() as connection:
                     connection.execute('INSERT OR REPLACE INTO probes VALUES(?,?,?,?)', (site['key'], now(), status, detail))

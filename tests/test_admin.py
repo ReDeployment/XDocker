@@ -6,6 +6,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch, Mock
+from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/admin'))
 from app import create_app, env_values, redact
@@ -201,6 +203,19 @@ class AdminTests(unittest.TestCase):
         finally:
             release.set()
             self.wait_job(first.json['id'])
+
+    def test_probe_failure_preserves_specific_reason_and_actual_state(self):
+        self.login()
+        opener=Mock()
+        opener.open.side_effect=URLError('temporary DNS failure')
+        with patch('app.urllib.request.build_opener',return_value=opener):
+            response=self.post('/api/sites/probe',{'site':'powerxdoc'})
+            row=self.wait_job(response.json['id'])
+        self.assertEqual(row['state'],'failed')
+        self.assertIn('temporary DNS failure',row['output'])
+        site=self.client.get('/api/snapshot').json['sites'][0]
+        self.assertEqual(site['probe']['status'],'failed')
+        self.assertIn('temporary DNS failure',site['probe']['output'])
 
     def test_logout_invalidates_session(self):
         self.login()

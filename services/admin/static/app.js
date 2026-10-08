@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const titles = {overview:'运行概览', services:'容器服务', sites:'网站入口', certificates:'HTTPS 证书', frp:'FRP 穿透', audit:'操作记录'};
-let csrf='', current='overview', snapshot=null, jobs=[], audit=[], pending=null, loggedIn=false, refreshing=false;
+let csrf='', current='overview', snapshot=null, jobs=[], audit=[], pending=null, trackedJob=null, loggedIn=false, refreshing=false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '尚无记录';
 const badge = (text, type='') => `<span class="badge ${type}">${esc(text)}</span>`;
@@ -22,7 +22,7 @@ function showLogin(){loggedIn=false;csrf='';$('shell').classList.add('hidden');$
 async function showShell(){loggedIn=true;$('login').classList.add('hidden');$('shell').classList.remove('hidden');await refresh();}
 async function refresh(){
   if(!loggedIn||refreshing)return;refreshing=true;$('refresh').disabled=true;
-  try{const wasBusy=busy();const results=await Promise.all([api('snapshot'),api('jobs'),api('audit')]);snapshot=results[0];jobs=results[1].jobs;audit=results[2].events;$('last-update').textContent='更新于 '+date(snapshot.at);$('revision').textContent='Git '+snapshot.revision.slice(0,12)+' · Docker '+snapshot.engine.Version;render();if(busy())notice('有操作正在执行。结果会自动更新，可在操作记录中查看。');else if(wasBusy)notice(jobs[0]?.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',jobs[0]?.state!=='success');}
+  try{const wasBusy=busy();const results=await Promise.all([api('snapshot'),api('jobs'),api('audit')]);snapshot=results[0];jobs=results[1].jobs;audit=results[2].events;$('last-update').textContent='更新于 '+date(snapshot.at);$('revision').textContent='Git '+snapshot.revision.slice(0,12)+' · Docker '+snapshot.engine.Version;render();const tracked=jobs.find(j=>j.id===trackedJob);if(tracked && tracked.state!=='running'){notice(tracked.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',tracked.state!=='success');trackedJob=null;}else if(busy())notice('有操作正在执行。结果会自动更新，可在操作记录中查看。');else if(wasBusy)notice(jobs[0]?.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',jobs[0]?.state!=='success');}
   catch(error){notice(error.message,true);}finally{refreshing=false;$('refresh').disabled=false;}
 }
 function serviceRows(services){return services.map(s=>`<tr><td><strong>${esc(s.service)}</strong><small>${esc(s.name)}</small></td><td>${stateBadge(s.state)}<small>${esc(s.status)}</small></td><td><small class="code-line">${esc(s.image)}</small></td><td>${s.ports.map(p=>`${esc(p.ip)}:${p.host} → ${p.container}`).join('<br>')||'内部网络'}</td><td><div class="actions">${btn('日志 / 资源',{detail:s.id},false)}${btn(s.state==='running'?'停止':'启动',{service:s.id,action:s.state==='running'?'stop':'start'},s.protected,s.state==='running'?'danger':'')}${btn('重启',{service:s.id,action:'restart'},s.protected||s.state!=='running')}</div></td></tr>`);}
@@ -57,7 +57,7 @@ function render(){
 }
 function jobTable(list){return table(['操作','目标','状态','开始时间','结果'],list.map(j=>`<tr class="job-row" data-job="${esc(j.id)}"><td>${esc({probe:'连接检查',check:'证书检查','renew-test':'续期测试',renew:'按需续期',start:'启动',stop:'停止',restart:'重启'}[j.action]||j.action)}</td><td>${esc(j.target)}</td><td>${stateBadge(j.state)}</td><td>${date(j.created)}</td><td>查看详情 ↗</td></tr>`));}
 function askOperation(path, body, target, title, impact){pending={path,body,target};$('confirm-title').textContent=title;$('confirm-impact').textContent=impact;$('confirm-target').textContent=target;$('confirmation').value='';$('confirm-error').textContent='';$('confirm-dialog').showModal();$('confirmation').focus();}
-async function submitOperation(path, body){const result=await api(path,body);notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();current='audit';render();return result;}
+async function submitOperation(path, body){const result=await api(path,body);trackedJob=result.id;notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();current='audit';render();return result;}
 async function detailService(id){const s=snapshot.services.find(s=>s.id===id);$('detail-title').textContent=s?.service||'服务详情';$('detail-content').innerHTML='<p class="muted">正在读取日志与资源…</p>';$('detail-dialog').showModal();const results=await Promise.allSettled([api('services/'+id+'/logs'),api('services/'+id+'/stats')]);const logs=results[0],stats=results[1];let html='';if(stats.status==='fulfilled'){const v=stats.value;html=`<div class="resource"><div><strong>${v.cpu_percent??'—'}%</strong><small>CPU 使用率（可超过单核 100%）</small></div><div><strong>${(v.memory_bytes/1048576).toFixed(1)} MB</strong><small>内存工作集</small></div><div><strong>${v.pids??'—'}</strong><small>进程数</small></div></div>`;}else html=`<p class="muted">${esc(stats.reason.message)}</p>`;html+=`<p class="muted">最近 200 行日志 · 已对常见凭据脱敏</p><pre>${esc(logs.status==='fulfilled'?logs.value.text:logs.reason.message)}</pre>`;$('detail-content').innerHTML=html;}
 document.addEventListener('click',async event=>{const button=event.target.closest('[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job]');if(!button||button.disabled||!snapshot)return;const d=button.dataset;try{
   if(d.tab){current=d.tab;render();}
