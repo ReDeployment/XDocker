@@ -184,7 +184,7 @@ class AdminTests(unittest.TestCase):
         self.assertIn('/var/lib/certbot-events/certificates-admin-'+response.json['id']+'.json',self.created['Entrypoint'])
         self.assertEqual({m['Target'] for m in self.created['HostConfig']['Mounts']},set(destinations))
         self.assertNotIn('/var/run/docker.sock',json.dumps(self.created))
-        self.assertEqual(self.deleted,'/containers/'+job_id+'?force=true')
+        self.assertEqual(self.deleted,'/containers/'+job_id+'?force=true&v=true')
 
     def test_concurrent_mutations_rejected_until_first_result(self):
         self.login()

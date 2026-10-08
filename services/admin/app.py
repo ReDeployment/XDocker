@@ -118,7 +118,7 @@ def create_app(settings=None, docker=None):
             orphan_jobs = engine.request('GET', '/containers/json?' + urlencode({'all':'true','filters':json.dumps({'label':['io.xdocker.admin.job']})}))
             for container in orphan_jobs:
                 if container.get('Labels', {}).get('io.xdocker.admin.job') in unfinished:
-                    engine.request('DELETE', '/containers/'+container['Id']+'?force=true')
+                    engine.request('DELETE', '/containers/'+container['Id']+'?force=true&v=true')
         connection.execute("UPDATE jobs SET state='interrupted', completed=?, output='管理服务重启，任务未确认完成；请检查实际状态。' WHERE state='running'", (now(),))
     database.chmod(0o600)
 
@@ -401,7 +401,7 @@ def create_app(settings=None, docker=None):
                 time.sleep(2)
             raise TimeoutError('证书操作超过十分钟；已停止该临时任务，请检查结果。')
         finally:
-            engine.request('DELETE', f'/containers/{container_id}?force=true')
+            engine.request('DELETE', f'/containers/{container_id}?force=true&v=true')
 
     @app.post('/api/certificates/action')
     def certificate_action():
