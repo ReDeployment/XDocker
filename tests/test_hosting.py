@@ -91,6 +91,9 @@ esac
 
     def test_unpublished_placeholder_cannot_be_enabled(self):
         self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc powerwechat"')
+        (self.root / "sites/powerwechat/.env").write_text(
+            "SITE_DOMAIN=powerwechat.artisan-cloud.com\n"
+            "SITE_IMAGE=ghcr.io/example/docs:REPLACE_WITH_PUBLISHED_TAG\n")
         result = self.run_action("compose", "config", success=False)
         self.assertIn("published SITE_IMAGE", result.stderr)
         self.assertEqual(self.calls(), "")

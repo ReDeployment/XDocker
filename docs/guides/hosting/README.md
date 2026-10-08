@@ -26,7 +26,7 @@ SITE_IMAGE=ghcr.io/artisancloud/powerxdoc:sha-94cb21895e8bf42c45a9bc55fa6f711b7d
 
 这些 `.env` 文件是可信的 shell 配置，使用 `KEY=value` 格式。初始化不覆盖已有文件。镜像版本和域名不放在公共 `.env` 中。共享 Nginx、Certbot 的镜像可通过根目录 `NGINX_IMAGE`、`CERTBOT_IMAGE` 固定为已验证的版本或 digest。
 
-默认只启用已有镜像的 PowerXDoc。PowerWechatDocs 和 ArtisanCloudHome 的镜像版本是占位值；必须先发布实际镜像、填写对应 `SITE_IMAGE`，再加入 `ENABLED_SITES`。脚本会拒绝启用尚未替换的占位镜像。
+默认只启用 PowerXDoc。PowerWechatDocs 已有经过 Actions 运行验证的 SHA 镜像，接入步骤见 [PowerWechat 静态站指南](../powerwechat/README.md)。ArtisanCloudHome 的镜像版本仍是占位值；必须先发布实际镜像、填写对应 `SITE_IMAGE`，再加入 `ENABLED_SITES`。脚本会拒绝启用尚未替换的占位镜像。
 
 ## 2. 推送配置与服务器下载
 
@@ -113,7 +113,7 @@ sudo sh scripts/hosting.sh renew-test powerxdoc
 
 ## 5. 接入其他站点
 
-目录已提供 `powerwechat` 和 `artisancloud-home` 的静态站模板，但没有替这些项目构建或发布镜像。
+目录已提供 `powerwechat` 和 `artisancloud-home` 的静态站模板。PowerWechatDocs 已发布验证镜像；ArtisanCloudHome 仍需先构建并发布镜像。
 
 1. 在对应源码仓库发布独立镜像，并用 `docker buildx imagetools inspect <镜像>` 确认标签存在。
 2. 编辑 `sites/powerwechat/.env` 或 `sites/artisancloud-home/.env`，填写真实域名与镜像版本。

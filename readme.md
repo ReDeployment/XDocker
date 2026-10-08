@@ -7,7 +7,7 @@ XDocker 是多网站容器部署仓库：共享入口 Nginx 和 Certbot，各网
 ```text
 公网 80/443 → 共享 Nginx 容器
                 ├── PowerXDoc 容器
-                ├── PowerWechatDocs 容器（待镜像发布后启用）
+                ├── PowerWechatDocs 容器（可按需启用）
                 └── ArtisanCloudHome 容器（待镜像发布后启用）
                      ↕
             Certbot 签发与自动续期
@@ -16,7 +16,7 @@ XDocker 是多网站容器部署仓库：共享入口 Nginx 和 Certbot，各网
 | 站点 key | Compose 服务 | 域名 | 初始状态 |
 | --- | --- | --- | --- |
 | `powerxdoc` | `powerx-doc` | `powerx-doc.artisan-cloud.com` | 默认启用，已有验证过的镜像 |
-| `powerwechat` | `powerwechat-docs` | `powerwechat.artisan-cloud.com` | 模板已提供，等待实际镜像 |
+| `powerwechat` | `powerwechat-docs` | `powerwechat.artisan-cloud.com` | 默认未启用，已有验证过的镜像 |
 | `artisancloud-home` | `artisan-cloud-home` | `artisan-cloud.com` | 模板已提供，等待实际镜像 |
 
 ## 目录
@@ -37,6 +37,7 @@ docs/guides/server-setup/      # 新机用户、SSH、Git、Docker 与首次验�
 docs/guides/certificates/      # 新机容器证书操作与可选旧机兼容
 docs/guides/hosting/           # 多站点部署与扩展指南
 docs/guides/powerxdoc/         # PowerXDoc 镜像推送与使用指南
+docs/guides/powerwechat/       # PowerWechatDocs 镜像发布与第二站点部署
 ```
 
 ## 开始使用
@@ -51,6 +52,7 @@ Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-
 2. [证书管理指南](docs/guides/certificates/README.md)：先验证 Certbot 容器，再验证域名挑战路径与签发。
 3. [多站点部署指南](docs/guides/hosting/README.md)：部署网站、HTTPS、更新与回滚。
 4. [PowerXDoc 镜像推送指南](docs/guides/powerxdoc/README.md)：需要发布新镜像时使用。
+5. [PowerWechat 静态站指南](docs/guides/powerwechat/README.md)：接入 PowerWechatDocs 时使用。
 
 已有服务器完成准备后，使用 ubuntu 账号初始化。下面的服务器 Docker 操作使用 sudo：
 
