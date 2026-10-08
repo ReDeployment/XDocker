@@ -359,6 +359,7 @@ sudo sh scripts/certificates.sh preflight
 - ArtisanCloud 官网：使用当前 `develop` 分支的 Vue 3/Vite 项目，旧 Nuxt 本地副本已备份并移除。官网容器健康，测试签发、正式签发、公网 HTTPS、SPA 直链及静态资源检查通过，证书有效期至 `2027-01-06T05:08:13+00:00`；续期 dry-run 首次遇到二次验证节点连接超时，复测成功。详细记录见 [官网指南](../artisancloud-home/README.md)。
 - 本机使用被 Git 忽略的 `certbot/certificates.local.json`，启用官网、PowerXDoc 和 PowerWechat；根 `.env` 配置真实证书联系邮箱。其他 5 组证书尚未迁移或签发。
 - `certbot-renew` 已启动，正常检查报告 `LOCAL_VALID`，新证书未到续期窗口时报告 `UNCHANGED`；PowerXDoc 续期 dry-run 成功。
+- FRP 后续验收：独立 FRPS 与本机 LaunchAgent 客户端已接入，五条业务链路的公网 HTTPS `/healthz` 返回 200；debug 完整三域名 SAN、Shopify 与 CourtMate 独立证书已签发，续期 dry-run 最终通过，企业微信验证响应已迁移。服务器私有清单现启用 6 组证书/8 个域名，详见 [FRP 第二阶段记录](../frp/README.md#7-2026-10-08-第二阶段业务域名-https)。
 - 真实到期续期后的自动 reload、服务器重启恢复和其他站点：尚待验收；本次没有强制续期或重启服务器。
 
 复用本指南到其他服务器时重新验证各项网络和运行状态，不把本次日志当作新机器的验收结果。

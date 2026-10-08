@@ -100,3 +100,27 @@ python3 tests/frp_smoke.py --frps /path/to/frps --frpc /path/to/frpc --nginx /pa
 - 外部指定新 IP 验证五个域名的 `/healthz`，经 Nginx → FRPS → 本地 FRPC → 本地业务，全部返回 200。三个静态站点的公网 HTTPS 继续返回 200。
 - 47 项自动化测试通过；临时真实 FRP/Nginx 测试验证了 token、服务端身份、明文连接拒绝、多 Host、路径/头、SSE 与 WebSocket。
 - 本阶段未切换这五个业务域名的 DNS，也未为其签发新网站证书。下一阶段完成 debug 三域名组、Shopify 和 CourtMate 的 DNS/HTTPS 迁移；企业微信验证文件也需核对迁移。传输证书到期轮换和 Mac 重启后实际自动恢复仍待验收。
+
+## 7. 2026-10-08 第二阶段：业务域名 HTTPS
+
+用户随后已将五个 FRP 域名解析到 `160.202.238.184`，均未查到 AAAA。DNS 只负责把请求送到服务器，XDocker 仍需要站点入口、FRP 映射、证书及运行中的本地业务。本次在已有 HTTP 路由和代理基础上完成以下配置：
+
+| 域名 | 本地端口 | 网站证书组 |
+| --- | --- | --- |
+| `debug-ecommerce.artisan-cloud.com` | 8091 | `debug-ecommerce.artisan-cloud.com` |
+| `debug-scrm.artisan-cloud.com` | 8092 | `debug-ecommerce.artisan-cloud.com` |
+| `debug.artisan-cloud.com` | 8078 | `debug-ecommerce.artisan-cloud.com` |
+| `shopify.artisan-cloud.com` | 8110 | `shopify.artisan-cloud.com` |
+| `court-mate-api-dev.artisan-cloud.com` | 8111 | `court-mate-api-dev.artisan-cloud.com` |
+
+服务器私有清单启用了 debug 组和 Shopify，并增加 CourtMate 的独立证书项，保留三个静态站证书。debug 三域名的完整 SAN 未缩减。新证书到期时间分别为：
+
+- debug 三域名组：`2027-01-06T07:06:53+00:00`。
+- Shopify：`2027-01-06T07:07:41+00:00`。
+- CourtMate：`2027-01-06T07:14:38+00:00`。
+
+测试签发、正式签发、公网证书信任和本地证书匹配验证完成；HTTP 301 跳转 HTTPS，五个 HTTPS `/healthz` 均返回 200。三组新证书续期 dry-run 最终全部通过；CourtMate 首次测试签发和 debug 首次续期测试出现二次验证节点连接超时，复测成功，供应商多地区 80 端口链路稳定性仍需观察。
+
+旧 Nginx 内联提供的企业微信验证响应已迁移为 `data/acme/verification/WW_verify_L7QyPRfjldgxXN5t.txt`，通过三个 debug 域名的 HTTPS 返回内容与旧入口 SHA256 一致。共享续期服务重新加载后管理 6 组证书、8 个域名。
+
+用户明确 `powerx`、`powerx-dev`、`openclaw`、`ai` 是后续远程业务服务，不在本批穿透迁移范围。它们的 DNS 指向新 IP 不代表后端已接入；本轮未为其创建代理或启动业务容器。三个静态站点 HTTPS 继续正常，旧 FRPC 通道保留用于回滚。
