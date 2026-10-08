@@ -231,6 +231,6 @@ sudo sh scripts/hosting.sh compose exec -T nginx nginx -t
 
 开发机可运行 `python3 -m unittest discover -s tests -v`；Python 不是服务器运行依赖。测试使用 Docker stub 检查多站点隔离、证书切换回滚，并使用真实 Compose CLI 检查默认与三站合并结果，不启动容器或签发证书。
 
-本次验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。HTTPS 测试使用临时自签名证书，没有申请真实证书或启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
+开发阶段验证：多站点测试通过，包含真实 Compose CLI 的默认单站和三站合并解析；宿主机临时 Nginx 配合临时测试后端通过三个域名的路由与 ACME 路径检查、两个域名的 HTTPS/SNI 检查，未知域名返回 404。这些测试使用临时自签名证书，没有启动实际 PowerWechatDocs、ArtisanCloudHome 镜像。
 
-本次验收仍需区分配置测试和运行测试：开发机 Docker daemon 未启动；新服务器已回传 Docker Engine 29.8.2 / Compose 5.6.0 和初始化成功，Certbot/网站容器、正式签发、续期 reload 及重启仍待验收，见准备指南的状态记录。每个实际接入站点还需验证页面、HTTPS、续期和独立回滚。
+2026-10-08 新服务器运行验收：PowerXDoc 容器健康，Nginx 和自动续期容器已启动；HTTP-01 测试签发、正式签发、HTTPS 公网信任及本地证书匹配、续期 dry-run 均通过。`https://powerx-doc.artisan-cloud.com/` 首页、产品概览和静态资源返回 200，HTTP 跳转 HTTPS，未知路径返回 404。证书到期时间为 `2027-01-06T03:19:39+00:00`。本机证书清单只启用 PowerXDoc，其他站点尚未部署。真实到期续期后的自动 reload、服务器重启恢复及独立回滚仍待验收，见准备指南的状态记录。

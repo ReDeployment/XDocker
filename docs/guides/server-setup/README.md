@@ -342,7 +342,7 @@ sudo sh scripts/certificates.sh preflight
 
 ## 10. 本次服务器的已确认状态与剩余验收
 
-以下是 2026-10-07 用户回传及随后通过 SSH 在新服务器 SYG962131 实际验证的结果，不代表后续服务自动通过：
+以下是 2026-10-07 用户回传及截至 2026-10-08 通过 SSH 和公网请求在新服务器 SYG962131 实际验证的结果，不代表其他站点自动通过：
 
 - 系统：Ubuntu 22.04 LTS / x86_64。
 - SSH：用户已确认账号和密钥登录成功；GitHub SSH 克隆成功。最终 sshd 有效配置未提供完整回传。
@@ -352,6 +352,11 @@ sudo sh scripts/certificates.sh preflight
 - 已从相同 AMD64 manifest 的官方上游在本机导出，经 SSH 上传、校验 SHA256 后导入 Certbot 和 Nginx；GHCR 包仍保持 Private。
 - 服务器实际输出 Certbot 5.8.0、Nginx 1.31.6，8 份证书/10 个域名的清单可读，容器内 ACME 生产 API 返回 REACHABLE。
 - 服务器 .env 已备份并设置 CERTBOT_PULL_POLICY=never、NGINX_PULL_POLICY=never，日常使用完整本地缓存；升级先显式拉取或导入。
-- 正式域名 DNS、HTTP-01、签发、HTTPS、续期 reload 和服务器重启：尚待验收。
+- PowerXDoc：已导入发布镜像的 AMD64 版本，网站容器健康；共享 Nginx 已启动并监听 80/443。
+- `powerx-doc.artisan-cloud.com` 已解析到 `160.202.238.184`。供应商处理公网访问后，首页和 HTTP-01 挑战路径均可从外部访问。测试签发首次遇到二次验证连接超时，重试通过后才正式签发。
+- 已为 PowerXDoc 正式签发 Let's Encrypt 证书，有效期至 `2027-01-06T03:19:39+00:00`；公网 HTTP 301 跳转 HTTPS，HTTPS 首页、产品概览和静态资源均返回 200，未知路径返回 404，TLS 信任、域名及本地证书匹配检查通过。
+- 本机使用被 Git 忽略的 `certbot/certificates.local.json`，只启用 PowerXDoc；根 `.env` 配置真实证书联系邮箱。其他 7 组证书尚未迁移或签发。
+- `certbot-renew` 已启动，正常检查报告 `LOCAL_VALID`，新证书未到续期窗口时报告 `UNCHANGED`；PowerXDoc 续期 dry-run 成功。
+- 真实到期续期后的自动 reload、服务器重启恢复和其他站点：尚待验收；本次没有强制续期或重启服务器。
 
 复用本指南到其他服务器时重新验证各项网络和运行状态，不把本次日志当作新机器的验收结果。

@@ -146,4 +146,4 @@ sh scripts/runtime-images.sh upstream
 
 Actions 发布、多平台索引检查及 CI 实际运行已完成。Private 包认证保持原配置，可见性未改。服务器直接 GHCR pull 曾在大层传输中 reset；现已通过本机导出相同 AMD64 manifest、SSH 上传和校验后导入，实际运行 Certbot 5.8.0、Nginx 1.31.6、清单读取及容器 ACME 生产 API 检查均通过。
 
-本地缓存恢复成功不代表 GHCR 下载线路已修复，也不代表真实证书已经签发。DNS、HTTP-01、正式 HTTPS、真实续期 reload 和重启仍待验收。服务器备份包位于 /root/.cache/xdocker-recovery/，未包含个人 Token 或证书；本地缓存策略已启用。
+本地缓存恢复成功不代表 GHCR 下载线路已修复。2026-10-08 已同样导出、上传、校验并导入 PowerXDoc 发布镜像的 AMD64 版本，使用 `sh scripts/hosting.sh http powerxdoc --no-pull` 启动网站；随后 HTTP-01、正式签发、公网 HTTPS 和续期 dry-run 均通过。真实到期续期后的自动 reload 和服务器重启仍待验收。服务器备份包位于 /root/.cache/xdocker-recovery/，未包含个人 Token 或证书；本地缓存策略已启用。
