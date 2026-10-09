@@ -4,7 +4,7 @@
 
 当前目标是全新 `powerx-dev` 实例，域名 `powerx-dev.artisan-cloud.com`。本流程不迁移旧服务器数据库，也不创建正式 `powerx` 环境。
 
-当前固定版本来自远程 **develop**，源码 SHA `2f28c9f830e0364d2383bfb0309df2ccbe98727a`，默认第一次启动保持未安装状态并进入 Setup。镜像通过[完整安装向导验收](https://github.com/ArtisanCloud/PowerX/actions/runs/37795862441)。独立用户可获取[镜像部署包](https://github.com/ArtisanCloud/PowerX/releases/tag/docker-dev-2f28c9f830e0)，无需克隆源码。
+当前固定版本来自远程 **develop**，源码 SHA `3d792fd7ea2426825970bceceb0d6e9db46211ef`，默认第一次启动保持未安装状态并进入 Setup。镜像通过[完整安装向导验收](https://github.com/ArtisanCloud/PowerX/actions/runs/37932655764)。独立用户可获取[镜像部署包](https://github.com/ArtisanCloud/PowerX/releases/tag/docker-dev-3d792fd7ea24)，无需克隆源码。
 
 ## 结构与隔离
 
@@ -148,7 +148,7 @@ sudo sh scripts/apps.sh setup-values powerx-dev
 
 本地存储路径 `/data/uploads`，公开地址为域名加 `/media`。部署环境 dev，内部端口保持后端 8080、Web 3000；HTTPS 由 XDocker 管理，不在 PowerX 再签发。
 
-按页面顺序测试连接、保存和初始化，管理员账号、邮箱、密码由你设置，最后完成安装。脚本不会自动创建管理员或跳过向导。数据库迁移和种子只在用户明确点击初始化时执行；Setup 完成后进入登录，并使用自己设置的账号。
+按页面顺序测试连接、保存和初始化，管理员账号、邮箱、密码由你设置，最后完成安装。脚本不会自动创建管理员或跳过向导。数据库配置步骤只执行表结构迁移；管理员信息确认后的“完成安装”执行完整种子初始化。Setup 完成后进入登录，并使用自己设置的账号。
 
 ```bash
 curl -fsS https://powerx-dev.artisan-cloud.com/api/v1/health
@@ -242,3 +242,12 @@ XDocker 的“实例备份”支持维护窗口下的 PostgreSQL 逻辑导出、
 访问根地址或原登录地址时，浏览器路由根据此状态进入 Setup；也可直接打开 `/setup`。前端为客户端渲染，HTTP 200 的页面壳本身不表示已安装或已登录。页面仍停留在旧登录画面时先刷新，使浏览器重新读取安装状态。本次已验证公网状态接口、页面与资源响应；浏览器自动化不可用，实际点击向导尚未代替用户执行。
 
 切换前备份 `6be868b9eba2997ce6ea99c6d827ad91` 已完成隔离恢复验证。旧配置、数据及实例环境配置原样保存在服务器私有目录 `data/preserved-instances/powerx-dev-20261009T015715Z/`（权限 700），没有删除或覆盖旧数据库。其他网站、FRP、入口和管理服务保持原容器 ID 与启动时间。
+
+
+## Setup 数据库步骤的管理员依赖错误
+
+旧镜像在数据库步骤执行完整 seed，但该步骤尚未收集管理员密码，可能出现 `seed_native_marketing_skills_root_user_missing`。修复版将数据库步骤限定为迁移表结构，完整种子延迟到管理员信息确认后的完成安装；迁移重试不会自动创建默认管理员。最新 develop 的能力目录还含超过 128 字符的 ID，相关存储字段已扩展，避免完成阶段再次报长度错误。
+
+修复镜像 SHA `3d792fd7ea2426825970bceceb0d6e9db46211ef` 的完整工作流验证了：首次空库进入 Setup、未填写管理员密码的数据库步骤及重试、管理员确认后的完整种子、长能力 ID 写入、后端重启与登录。更新前先备份当前部分初始化的数据；升级保留 config、Setup 草稿和数据库，不执行 refresh 或重置。
+
+数据库主机使用 `postgres`，Redis 主机使用 `redis`；两项密码分别从 XDocker 实例对应标签复制。Redis 容器启用了认证，向导中的“可选”占位文案不表示本实例可以留空。刷新向导并重试数据库步骤，通过后继续设置自己的管理员账号和密码。
