@@ -136,7 +136,7 @@ python3 tests/frp_smoke.py --frps /path/to/frps --frpc /path/to/frpc --nginx /pa
 
 `powerx-dev.artisan-cloud.com` 是服务器 Docker 实例，与这两个本地穿透入口独立。Core API 的根路径可能返回 404，不能据此判断穿透失败；本地进程停止或电脑离线时，新域名后端也会不可用。
 
-新增域名的 A 记录都指向 `160.202.238.184`。服务器同步本仓库后，在根 `.env` 中启用 `debug-powerx-local` 和 `debug-powerxplugin-local`，移除旧 `debug`。用 `hosting.sh init` 创建新站点私有 `.env`，原服务配置保留。客户端已有 `data/frp/frpc.ini` 不会随模板自动更新：备份后把 8078 的子域名改为 `debug-powerxplugin-local`，并添加模板中的 `powerx_core_api` 段指向 8077；验证配置后重启本仓库托管的客户端，不停止旧服务器的独立 FRPC。
+新增域名的 A 记录都指向 `160.202.238.184`。服务器同步本仓库后，在根 `.env` 中启用 `debug-powerx-local` 和 `debug-powerxplugin-local`，移除旧 `debug`。用 `hosting.sh init` 创建新站点私有 `.env`，原服务配置保留。初始化需要主机 Python 3；以 root 运行时，新建的站点/服务 `.env` 归属根 `.env` 的所有者，权限 600，使同一部署用户运行的控制台可读取，不修改已有配置的权限。客户端已有 `data/frp/frpc.ini` 不会随模板自动更新：备份后把 8078 的子域名改为 `debug-powerxplugin-local`，并添加模板中的 `powerx_core_api` 段指向 8077；验证配置后重启本仓库托管的客户端，不停止旧服务器的独立 FRPC。
 
 完成 HTTP 端到端验证后，启用 Core 的独立证书项；旧 debug 三域名组在私有清单中换为新 lineage `debug-powerxplugin-local.artisan-cloud.com`，SAN 为 `debug-ecommerce.artisan-cloud.com`、`debug-scrm.artisan-cloud.com`、`debug-powerxplugin-local.artisan-cloud.com`。先测试签发、正式签发，再把 ecommerce、scrm 的私有 `SITE_CERT_NAME` 改为新 lineage，重载三条 HTTPS 路由。旧证书文件保留，新清单不再为旧 debug 域名自动续期。
 

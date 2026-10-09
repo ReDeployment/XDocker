@@ -15,15 +15,29 @@ if [ "$action" = help ]; then
 fi
 if [ "$action" = init ]; then
     [ -f .env ] || cp .env.example .env
+    initialize_env() {
+        [ ! -f "$1" ] || return 0
+        cp "$2" "$1"
+        python3 - "$1" <<'PY'
+import os
+from pathlib import Path
+import sys
+owner = Path('.env').stat()
+target = Path(sys.argv[1])
+if os.geteuid() == 0:
+    os.chown(target, owner.st_uid, owner.st_gid)
+target.chmod(0o600)
+PY
+    }
     mkdir -p data/nginx data/acme data/letsencrypt data/events
     for directory in sites/*; do
         [ -d "$directory" ] || continue
         [ -f "$directory/site.conf" ] || continue
-        [ -f "$directory/.env" ] || cp "$directory/.env.example" "$directory/.env"
+        initialize_env "$directory/.env" "$directory/.env.example"
     done
     for directory in services/*; do
         [ -d "$directory" ] || continue
-        [ -f "$directory/.env" ] || cp "$directory/.env.example" "$directory/.env"
+        initialize_env "$directory/.env" "$directory/.env.example"
     done
     [ -f data/nginx/00-default.conf ] || cp nginx/default.conf data/nginx/00-default.conf
     echo 'Edit .env and sites/<site>/.env. Then run: sh scripts/hosting.sh http <site>'
