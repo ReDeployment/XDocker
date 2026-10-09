@@ -57,6 +57,8 @@ sudo sh scripts/admin.sh start
 
 2026-10-08，Admin 镜像 `sha-ec70aab2a18d758164490639d04d26f5b8366831` 在真实 `powerx-dev` 实例创建备份 `25fd8c0b0039dd54e2094a20edc3161a`，状态为 ready。组合包 667163 字节，SHA256 为 `44c51e3b5f83352c0e47f202bde65cd6d63d63bcb9e8e3c0ab35f3540262665d`。PostgreSQL 隔离恢复验证成功，认证下载的内容与 SHA256 一致，匿名下载返回 401；维护窗口结束后前后端恢复健康，原实例数据未替换。
 
-本地 75 项检查与 CI 的真实 PostgreSQL/Redis 备份、恢复演练通过。浏览器实际点击流程尚未单独验收；当前实例仍使用原已安装数据，切换到空白 Setup 实例前需明确选择保留方式。
+本地 75 项检查与 CI 的真实 PostgreSQL/Redis 备份、恢复演练通过。浏览器实际点击流程尚未单独验收。
+
+2026-10-09，在切换空白 Setup 实例前再次生成备份 `6be868b9eba2997ce6ea99c6d827ad91` 并完成隔离恢复验证，组合包 SHA256 为 `8558f567da4e80dfcb155f21683997da7bf30f41fbb144e3a341d37e4ca0f84e`。旧实例配置和数据另以原目录形式保留，详见[开发实例切换记录](README.md#开发实例已切换为首次安装)。
 
 参考：[PostgreSQL 一致性逻辑备份](https://www.postgresql.org/docs/16/backup-dump.html)、[pg_dump 自定义格式](https://www.postgresql.org/docs/16/app-pgdump.html)。

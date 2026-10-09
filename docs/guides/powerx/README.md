@@ -162,3 +162,11 @@ XDocker 68 项回归通过，PowerX 的独立部署包在 CI 验证空库初始�
 ## 备份管理
 
 XDocker 的“实例备份”支持维护窗口下的 PostgreSQL 逻辑导出、Redis RDB、配置/密钥和文件组合打包，私有下载、校验、隔离恢复演练和显式保留清理。它独立于 PowerX 应用内的数据库备份策略。详见 [实例备份与应用备份](backups.md)。
+
+## 开发实例已切换为首次安装
+
+2026-10-09，`powerx-dev` 已实际切换到前后端 SHA `2f28c9f830e0364d2383bfb0309df2ccbe98727a`，使用全新配置与数据目录。公网 `/api/v1/admin/setup/status` 返回 `install_status=uninstalled`、`configured=false`、`requires_login=false`，用户与租户均为 0；PostgreSQL 的 public 应用表数为 0。四个容器健康，未替用户提交 Setup 或创建管理员。
+
+访问根地址或原登录地址时，浏览器路由根据此状态进入 Setup；也可直接打开 `/setup`。前端为客户端渲染，HTTP 200 的页面壳本身不表示已安装或已登录。页面仍停留在旧登录画面时先刷新，使浏览器重新读取安装状态。本次已验证公网状态接口、页面与资源响应；浏览器自动化不可用，实际点击向导尚未代替用户执行。
+
+切换前备份 `6be868b9eba2997ce6ea99c6d827ad91` 已完成隔离恢复验证。旧配置、数据及实例环境配置原样保存在服务器私有目录 `data/preserved-instances/powerx-dev-20261009T015715Z/`（权限 700），没有删除或覆盖旧数据库。其他网站、FRP、入口和管理服务保持原容器 ID 与启动时间。
