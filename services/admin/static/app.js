@@ -1,7 +1,12 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const titles = {overview:'运行概览', services:'容器服务', sites:'网站入口', certificates:'HTTPS 证书', frp:'FRP 穿透', backups:'实例备份', audit:'操作记录'};
+const titles = {overview:'运行概览', instances:'PowerX 实例', services:'容器服务', sites:'网站入口', certificates:'HTTPS 证书', frp:'FRP 穿透', backups:'实例备份', audit:'操作记录'};
 let csrf='', current='overview', snapshot=null, retention={}, jobs=[], audit=[], backupData={instances:[],backups:[],application_centers:[]}, pending=null, trackedJob=null, loggedIn=false, refreshing=false;
+let instanceList=[], selectedInstance='', instanceDetail=null, instanceError='';
+const credentials=new Map();
+const initialRoute=location.hash.slice(1).split('/');
+if(titles[initialRoute[0]])current=initialRoute[0];
+if(current==='instances'&&/^[a-z0-9][a-z0-9-]*$/.test(initialRoute[1]||''))selectedInstance=initialRoute[1];
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date = value => value ? new Date(value).toLocaleString('zh-CN',{hour12:false}) : '尚无记录';
 const badge = (text, type='') => `<span class="badge ${type}">${esc(text)}</span>`;
@@ -15,14 +20,14 @@ const panel = (title, subtitle, body, action='') => `<section class="panel"><div
 function notice(text, bad=false){$('notice').textContent=text;$('notice').className='notice'+(bad?' bad':'');}
 async function api(path, payload){
   const options=payload===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(payload)};
-  const response=await fetch('/api/'+path,options); const data=await response.json();
+  let response;try{response=await fetch('/api/'+path,options);}catch{throw Error('无法连接管理服务，请确认 SSH 隧道仍运行，然后刷新页面。');}const data=await response.json();
   if(!response.ok){if(response.status===401 && path!=='login')showLogin();throw Error(data.error||`HTTP ${response.status}`);}return data;
 }
-function showLogin(){loggedIn=false;csrf='';$('shell').classList.add('hidden');$('login').classList.remove('hidden');$('confirm-dialog').close();$('detail-dialog').close();}
-async function showShell(){loggedIn=true;$('login').classList.add('hidden');$('shell').classList.remove('hidden');await refresh();}
+function showLogin(){clearCredentials();instanceDetail=null;loggedIn=false;csrf='';$('shell').classList.add('hidden');$('login').classList.remove('hidden');$('confirm-dialog').close();$('detail-dialog').close();}
+async function showShell(){loggedIn=true;$('login').classList.add('hidden');$('shell').classList.remove('hidden');await refresh();if(current==='instances'&&selectedInstance)await loadInstance(selectedInstance);}
 async function refresh(){
   if(!loggedIn||refreshing)return;refreshing=true;$('refresh').disabled=true;
-  try{const wasBusy=busy();const results=await Promise.all([api('snapshot'),api('jobs'),api('audit'),api('backups')]);snapshot=results[0];jobs=results[1].jobs;audit=results[2].events;backupData=results[3];$('last-update').textContent='更新于 '+date(snapshot.at);$('revision').textContent='Git '+snapshot.revision.slice(0,12)+' · Docker '+snapshot.engine.Version;render();const tracked=jobs.find(j=>j.id===trackedJob);if(tracked && tracked.state!=='running'){notice(tracked.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',tracked.state!=='success');trackedJob=null;}else if(busy())notice('有操作正在执行。结果会自动更新，可在操作记录中查看。');else if(wasBusy)notice(jobs[0]?.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',jobs[0]?.state!=='success');}
+  try{const wasBusy=busy();const results=await Promise.all([api('snapshot'),api('jobs'),api('audit'),api('backups'),api('instances')]);snapshot=results[0];jobs=results[1].jobs;audit=results[2].events;backupData=results[3];instanceList=results[4].instances;$('last-update').textContent='更新于 '+date(snapshot.at);$('revision').textContent='Git '+snapshot.revision.slice(0,12)+' · Docker '+snapshot.engine.Version;render();const tracked=jobs.find(j=>j.id===trackedJob);if(tracked && tracked.state!=='running'){notice(tracked.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',tracked.state!=='success');trackedJob=null;}else if(busy())notice('有操作正在执行。结果会自动更新，可在操作记录中查看。');else if(wasBusy)notice(jobs[0]?.state==='success'?'操作完成，请在操作记录中查看实际结果。':'操作未成功，请在操作记录中查看原因。',jobs[0]?.state!=='success');}
   catch(error){notice(error.message,true);}finally{refreshing=false;$('refresh').disabled=false;}
 }
 function serviceRows(services){return services.map(s=>`<tr><td><strong>${esc(s.service)}</strong><small>${esc(s.name)}</small></td><td>${stateBadge(s.state)}<small>${esc(s.status)}</small></td><td><small class="code-line">${esc(s.image)}</small></td><td>${s.ports.map(p=>`${esc(p.ip)}:${p.host} → ${p.container}`).join('<br>')||'内部网络'}</td><td><div class="actions">${btn('日志 / 资源',{detail:s.id},false)}${btn(s.state==='running'?'停止':'启动',{service:s.id,action:s.state==='running'?'stop':'start'},s.protected,s.state==='running'?'danger':'')}${btn('重启',{service:s.id,action:'restart'},s.protected||s.state!=='running')}</div></td></tr>`);}
@@ -41,6 +46,8 @@ function render(){
     html+='<div>'+panel('证书自动续期','自动调度与证书有效期分别检查',`<div class="panel-body"><div class="stack-row"><span>续期容器</span>${renew?stateBadge(renew.state):badge('未部署','warn')}</div><div class="stack-row"><span>最近续期检查</span><small>${date(lastRenew?.checked_at)}</small></div><div class="stack-row"><span>最近到期</span><strong>${activeCerts.filter(c=>c.days_remaining!==undefined).length?Math.min(...activeCerts.filter(c=>c.days_remaining!==undefined).map(c=>c.days_remaining))+' 天':'待检查'}</strong></div><div class="stack-row"><span>自动检查周期</span><span>约 12 小时</span></div></div>`,btn('管理证书',{tab:'certificates'}));
     html+=panel('服务器环境','当前管理范围：XDocker',`<div class="panel-body"><div class="stack-row"><span>Docker</span><strong>${esc(snapshot.engine.Version)}</strong></div><div class="stack-row"><span>系统 / 架构</span><span>${esc(snapshot.engine.Os)} / ${esc(snapshot.engine.Arch)}</span></div><div class="stack-row"><span>部署提交</span><span class="code-line">${esc(snapshot.revision.slice(0,12))}</span></div></div>`)+ '</div></div>';
     html+=panel('最近操作','请求、结果与时间均保留记录',jobTable(jobs.slice(0,4)),btn('查看全部',{tab:'audit'}));
+  }else if(current==='instances'){
+    html=renderInstances(services);
   }else if(current==='services'){
     html=`<div class="intro"><div><h2>容器服务</h2><p class="muted">查看日志与资源，按服务执行启停。停止入口服务会影响站点访问。</p></div></div>`+panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
   }else if(current==='sites'){
@@ -59,13 +66,18 @@ function render(){
     html=panel('操作任务','操作执行期间自动刷新；点击查看结果',jobTable(jobs))+panel('审计记录','记录管理登录、操作请求与最终结果',table(['时间','操作','目标','结果'],audit.map(e=>`<tr><td>${date(e.at)}</td><td>${esc(e.action)}</td><td>${esc(e.target)}</td><td>${stateBadge(e.result)}</td></tr>`)));
   }
   $('content').innerHTML=html;
+  if(current==='instances'){for(const [service,value] of credentials){const field=$('credential-'+service);if(field&&value.instance===selectedInstance&&value.expires>Date.now()){field.value=value.password;field.type='text';}}}
 }
 function jobTable(list){return table(['操作','目标','状态','开始时间','结果'],list.map(j=>`<tr class="job-row" data-job="${esc(j.id)}"><td>${esc({probe:'连接检查',check:'证书检查','renew-test':'续期测试',renew:'按需续期',start:'启动',stop:'停止',restart:'重启'}[j.action]||j.action)}</td><td>${esc(j.target)}</td><td>${stateBadge(j.state)}</td><td>${date(j.created)}</td><td>查看详情 ↗</td></tr>`));}
 function askOperation(path, body, target, title, impact){pending={path,body,target};$('confirm-title').textContent=title;$('confirm-impact').textContent=impact;$('confirm-target').textContent=target;$('confirmation').value='';$('confirm-error').textContent='';$('confirm-dialog').showModal();$('confirmation').focus();}
 async function submitOperation(path, body){const result=await api(path,body);trackedJob=result.id;notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();current='audit';render();return result;}
 async function detailService(id){const s=snapshot.services.find(s=>s.id===id);$('detail-title').textContent=s?.service||'服务详情';$('detail-content').innerHTML='<p class="muted">正在读取日志与资源…</p>';$('detail-dialog').showModal();const results=await Promise.allSettled([api('services/'+id+'/logs'),api('services/'+id+'/stats')]);const logs=results[0],stats=results[1];let html='';if(stats.status==='fulfilled'){const v=stats.value;html=`<div class="resource"><div><strong>${v.cpu_percent??'—'}%</strong><small>CPU 使用率（可超过单核 100%）</small></div><div><strong>${(v.memory_bytes/1048576).toFixed(1)} MB</strong><small>内存工作集</small></div><div><strong>${v.pids??'—'}</strong><small>进程数</small></div></div>`;}else html=`<p class="muted">${esc(stats.reason.message)}</p>`;html+=`<p class="muted">最近 200 行日志 · 已对常见凭据脱敏</p><pre>${esc(logs.status==='fulfilled'?logs.value.text:logs.reason.message)}</pre>`;$('detail-content').innerHTML=html;}
-document.addEventListener('click',async event=>{const button=event.target.closest('[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job],[data-backup]');if(!button||button.disabled||!snapshot)return;const d=button.dataset;try{
-  if(d.tab){current=d.tab;render();}
+document.addEventListener('click',async event=>{const button=event.target.closest('[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job],[data-backup],[data-open-instance],[data-credential],[data-copy-credential],[data-hide-credential]');if(!button||button.disabled||!snapshot)return;const d=button.dataset;try{
+  if(d.tab){clearCredentials();current=d.tab;location.hash=d.tab;render();}
+  else if(d.openInstance){await loadInstance(d.openInstance);}
+  else if(d.credential){const service=d.credential;askOperation('instances/'+selectedInstance+'/credentials',{service},selectedInstance,'显示 '+selectedInstance+' 的 '+(service==='postgres'?'数据库':'Redis')+' 密码','密码只显示 30 秒，可复制到此实例的 Setup。此操作只读取配置，不修改数据库或安装状态。');pending.kind='credential';}
+  else if(d.copyCredential){const value=credentials.get(d.copyCredential);if(!value||value.expires<=Date.now())throw Error('密码已隐藏，请重新确认显示。');try{await navigator.clipboard.writeText(value.password);notice('密码已复制，请粘贴到对应实例的 Setup 字段。');}catch{const field=$('credential-'+d.copyCredential);field.focus();field.select();notice('浏览器未允许自动复制，已选中密码，请按 Cmd+C 或 Ctrl+C。');}}
+  else if(d.hideCredential){hideCredential(d.hideCredential);}
   else if(d.backup){const body={instance:d.instance,action:d.backup,id:d.id};if(d.backup==='prune')body.keep=Number($('keep-'+d.instance).value);const target=['create','prune'].includes(d.backup)?d.instance:d.id;const title={create:'创建实例备份',verify:'校验备份',drill:'隔离恢复验证',prune:'清理旧备份'}[d.backup];const impact={create:'将暂停该实例的前后端，完成数据库、Redis、配置及文件备份后恢复原运行状态。其他实例不暂停。',verify:'校验备份组成文件与下载包的 SHA256；不会写入运行中数据库。',drill:'在无网络、无公网端口的临时 PostgreSQL 中恢复并验证数据库；不会替换运行中实例。',prune:'仅删除超过所选保留份数的旧成功备份。至少保留一份；失败或中断记录保留。'}[d.backup];askOperation('backups/action',body,target,title,impact);}
   else if(d.probe){await submitOperation('sites/probe',{site:d.probe});}
   else if(d.detail){await detailService(d.detail);}
@@ -73,10 +85,31 @@ document.addEventListener('click',async event=>{const button=event.target.closes
   else if(d.certificate){const action={check:'检查证书','renew-test':'测试续期',renew:'按需续期'}[d.action];askOperation('certificates/action',{name:d.certificate,action:d.action},d.certificate,action,d.action==='renew'?'使用当前续期配置检查到期情况；需要时签发并通知 Nginx 自动重载。共享 SAN 的域名一起处理。':d.action==='renew-test'?'访问测试 ACME 服务并验证所有 SAN 域名。测试不会替换正式证书。':'核验当前证书、私钥匹配、SAN 与有效期，不签发证书。');}
   else if(d.job){const j=jobs.find(j=>j.id===d.job);$('detail-title').textContent=j.action+' · '+j.target;$('detail-content').innerHTML=`<p>${stateBadge(j.state)} ${date(j.completed||j.created)}</p><pre>${esc(j.output||'任务正在执行…')}</pre>`;$('detail-dialog').showModal();}
 }catch(error){notice(error.message,true);}});
-$('confirm-form').addEventListener('submit',async event=>{event.preventDefault();if(!pending||$('confirmation').value!==pending.target){$('confirm-error').textContent='名称不匹配，请输入完整名称。';return;}$('confirm-submit').disabled=true;try{await submitOperation(pending.path,{...pending.body,confirmation:pending.target});$('confirm-dialog').close();pending=null;}catch(error){$('confirm-error').textContent=error.message;}finally{$('confirm-submit').disabled=false;}});
+$('confirm-form').addEventListener('submit',async event=>{event.preventDefault();if(!pending||$('confirmation').value!==pending.target){$('confirm-error').textContent='名称不匹配，请输入完整名称。';return;}$('confirm-submit').disabled=true;try{if(pending.kind==='credential'){const result=await api(pending.path,{...pending.body,confirmation:pending.target});clearCredentials();credentials.set(result.service,{instance:result.instance,password:result.password,expires:Date.now()+30000});const service=result.service;credentials.get(service).timer=setTimeout(()=>hideCredential(service),30000);notice('密码已显示，30 秒后自动隐藏。');render();}else{await submitOperation(pending.path,{...pending.body,confirmation:pending.target});}$('confirm-dialog').close();pending=null;}catch(error){$('confirm-error').textContent=error.message;}finally{$('confirm-submit').disabled=false;}});
 $('cancel-confirm').onclick=()=>$('confirm-dialog').close();$('close-detail').onclick=()=>$('detail-dialog').close();$('refresh').onclick=refresh;
 document.addEventListener('input',event=>{if(event.target.dataset.retention)retention[event.target.dataset.retention]=event.target.value;});
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;$('login-error').textContent='';try{const result=await api('login',{token:$('token').value.trim()});csrf=result.csrf;$('token').value='';await showShell();}catch(error){$('login-error').textContent=error.message;}finally{button.disabled=false;}});
 $('logout').onclick=async()=>{try{await api('logout',{});showLogin();}catch(error){notice(error.message,true);}};
 setInterval(()=>{if(loggedIn)refresh();},5000);
 (async()=>{try{csrf=(await api('session')).csrf;await showShell();}catch{showLogin();}})();
+
+function clearCredentials(){for(const value of credentials.values())clearTimeout(value.timer);credentials.clear();document.querySelectorAll('.credential-input').forEach(input=>{input.value='';input.type='password';});}
+function hideCredential(service){credentials.delete(service);const field=$('credential-'+service);if(field){field.value='';field.type='password';}if(current==='instances'&&loggedIn)render();}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearCredentials();else if(current==='instances'&&loggedIn)render();});
+window.addEventListener('hashchange',()=>{const parts=location.hash.slice(1).split('/');if(!titles[parts[0]])return;if(parts[0]===current&&parts[1]===selectedInstance)return;clearCredentials();current=parts[0];if(current==='instances'&&parts[1]&&parts[1]!==selectedInstance)loadInstance(parts[1]);else if(snapshot)render();});
+async function loadInstance(name){clearCredentials();selectedInstance=name;instanceDetail=null;instanceError='';current='instances';location.hash='instances/'+name;render();try{instanceDetail=await api('instances/'+name);}catch(error){instanceError=error.message;}render();}
+function connectionRows(items){return table(['Setup 字段','填写值'],items.map(([label,value])=>`<tr><td>${esc(label)}</td><td><span class="code-line">${esc(value)}</span></td></tr>`));}
+function credentialRow(service,available){const shown=credentials.has(service)&&credentials.get(service).expires>Date.now();return `<div class="credential-row"><label>${service==='postgres'?'数据库密码':'Redis 密码'}<input class="credential-input" id="credential-${service}" type="password" readonly autocomplete="off" placeholder="确认显示后可复制"></label><div class="actions">${btn('显示密码',{credential:service},!available)}${btn('复制密码',{'copy-credential':service},!shown)}${btn('隐藏',{'hide-credential':service},!shown)}</div><small>密码来自此实例当前私有配置；显示 30 秒，离开页面后隐藏。</small></div>`;}
+function renderInstances(services){
+  let html='<div class="intro"><div><h2>PowerX 实例管理</h2><p class="muted">按实例查看 Docker 服务和 Setup 连接信息，管理员账号与密码由你在 PowerX 安装向导中设置。</p></div></div>';
+  html+=panel('已登记实例','每个实例拥有独立的数据库、缓存与配置',table(['实例','网站入口','容器','操作'],instanceList.map(instance=>{const count=services.filter(s=>s.service.startsWith(instance.name+'/')).length;return `<tr><td><strong>${esc(instance.name)}</strong></td><td>${instance.url?`<a href="${esc(instance.url)}" target="_blank" rel="noreferrer">${esc(instance.url)} ↗</a>`:'未配置入口'}</td><td>${count} 个</td><td>${btn('查看 Setup 配置',{'open-instance':instance.name},false,'primary')}</td></tr>`;})));
+  if(!selectedInstance)return html;
+  const site=instanceList.find(i=>i.name===selectedInstance);if(!site)return html;
+  html+=panel(esc(selectedInstance),'连接测试由 PowerX 后端容器执行，请使用下方实际 Docker 主机名',`<div class="panel-body"><div class="actions">${site.url?`<a class="setup-link" href="${esc(site.url)}/setup" target="_blank" rel="noreferrer">打开 PowerX Setup ↗</a>`:''}${btn('重新读取配置',{'open-instance':selectedInstance})}${btn('实例备份',{tab:'backups'})}</div></div>`);
+  if(!instanceDetail)return html+panel('Setup 连接信息','',`<div class="panel-body">${instanceError?`<p class="error">${esc(instanceError)}</p>`:'正在读取私有配置中的连接字段…'}</div>`);
+  const v=instanceDetail,db=v.postgres,cache=v.redis;
+  html+=panel('实例状态','',connectionRows([['部署环境',v.environment],['安装状态',v.install_status==='uninstalled'?'待完成 Setup':v.install_status==='installed'?'已安装':v.install_status]]));
+  html+='<div class="columns">'+panel('PostgreSQL','将以下字段填入 Setup 的数据库设置',connectionRows([['数据库类型','postgresql'],['主机地址',db.host],['端口',db.port],['数据库名',db.database],['用户名',db.username],['SSL 模式',db.ssl_mode]])+credentialRow('postgres',db.password_available))+panel('Redis','数据库密码与 Redis 密码分别使用各自的值',connectionRows([['缓存类型','redis'],['Redis 主机',cache.host],['Redis 端口',cache.port],['数据库索引',cache.db]])+credentialRow('redis',cache.password_available))+'</div>';
+  html+=panel('文件与服务','本地存储字段用于 Setup；仅展示此实例的容器',connectionRows([['本地存储路径',v.storage.path],['文件公开地址',v.storage.public_url]])+table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services.filter(s=>s.service.startsWith(selectedInstance+'/')))));
+  return html;
+}

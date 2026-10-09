@@ -111,6 +111,8 @@ sudo sh scripts/certificates.sh check --report /var/lib/certbot-events/certifica
 
 ## 6. 登录和验收
 
+也可以直接在 XDocker 的“PowerX 实例”页面读取连接值并显示/复制密码，操作见[实例管理页面指南](instances.md)。
+
 打开 **https://powerx-dev.artisan-cloud.com/setup**。在自己的服务器终端读取数据库与 Redis 的 Docker 连接值：
 
 ```bash

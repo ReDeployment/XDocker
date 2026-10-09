@@ -19,6 +19,7 @@ from flask import Flask, g, jsonify, request, send_from_directory, send_file
 from werkzeug.exceptions import HTTPException
 from docker_api import Docker, DockerError, log_text
 from backups import InstanceBackups
+from instances import InstanceReader, setup_fields, password_for
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -102,6 +103,7 @@ def create_app(settings=None, docker=None):
     database = state / 'admin.sqlite3'
     operation_lock = threading.Lock()
     backup_manager = InstanceBackups(engine, app.config['BACKUPS'], app.config['HOST_ROOT'])
+    instance_reader = InstanceReader(engine, app.config['HOST_ROOT'])
 
     def db():
         connection = sqlite3.connect(database, timeout=10)
@@ -481,6 +483,47 @@ def create_app(settings=None, docker=None):
 
     def backup_instances():
         return [p for p in managed_projects() if p != PROJECT]
+
+    def instance_config(project):
+        backend = next((c for c in managed_containers()
+                        if c['Labels']['com.docker.compose.project'] == project
+                        and c['Labels']['com.docker.compose.service'] == 'backend'), None)
+        if backend is None:
+            raise ValueError('Start the instance once to generate its private Setup configuration.')
+        return instance_reader.read(backend, project)
+
+    @app.get('/api/instances')
+    def list_instances():
+        sites, _ = configuration(config)
+        return jsonify(instances=[{'name':project,
+            'url':next(('https://'+s['domain'] for s in sites if s['enabled'] and s['kind']=='app'
+                       and s['service']==project+'-web'), '')}
+            for project in managed_projects() if project != PROJECT])
+
+    @app.get('/api/instances/<project>')
+    def instance_details(project):
+        if project not in managed_projects() or project == PROJECT:
+            return jsonify(error='请选择已登记的 PowerX 实例。'), 404
+        try:
+            values = setup_fields(instance_config(project))
+        except (ValueError, OSError, TypeError):
+            return jsonify(error='无法读取该实例配置，请确认已启动过实例且配置挂载正确。'), 409
+        return jsonify(instance=project, **values)
+
+    @app.post('/api/instances/<project>/credentials')
+    def instance_credentials(project):
+        if project not in managed_projects() or project == PROJECT:
+            return jsonify(error='请选择已登记的 PowerX 实例。'), 404
+        body = command_payload()
+        service = body.get('service')
+        if service not in ('postgres','redis') or body.get('confirmation') != project:
+            return jsonify(error='请选择数据库或缓存，并输入完整实例名确认。'), 400
+        try:
+            password = password_for(instance_config(project), service)
+        except (ValueError, OSError, TypeError):
+            return jsonify(error='无法读取该服务密码，请检查实例私有配置。'), 409
+        audit('credential-view', project+'/'+service, 'success')
+        return jsonify(instance=project, service=service, password=password)
 
     @app.get('/api/backups')
     def list_backups():
