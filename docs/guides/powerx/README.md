@@ -177,7 +177,7 @@ sudo sh scripts/apps.sh compose powerx-dev exec postgres psql -X -U powerx -d po
 \q
 ```
 
-`\password` 会要求输入两次新密码，输入不回显；确认出现 `ALTER ROLE` 后退出。该命令避免明文密码进入 SQL 命令历史和服务器日志。[psql 文档](https://www.postgresql.org/docs/16/app-psql.html)。
+`\password` 会要求输入两次新密码，输入不回显；没有错误并返回 psql 提示符后退出，下一步会再用新密码验证真实连接。该命令避免明文密码进入 SQL 命令历史和服务器日志。[psql 文档](https://www.postgresql.org/docs/16/app-psql.html)。
 
 然后将**同一个新密码**同步到私有配置，命令不会把密码放入参数或打印出来：
 
