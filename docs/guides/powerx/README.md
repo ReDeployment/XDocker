@@ -10,8 +10,8 @@
 
 ```text
 apps/powerx/compose.yml          可复用应用模板，无 build 指令
-instances/powerx-dev/.env        该实例镜像、浏览器地址、环境与管理员邮箱
-instances/powerx-dev/config/     私有数据库密码、密钥、账号与初始化标记
+instances/powerx-dev/.env        该实例镜像、浏览器地址与环境
+instances/powerx-dev/config/     私有数据库密码、密钥与安装配置
 instances/powerx-dev/instance.json  管理控制台的实例登记
 data/instances/powerx-dev/
   postgres/                     独立 PostgreSQL，带 pgvector
@@ -117,7 +117,34 @@ sudo sh scripts/certificates.sh check --report /var/lib/certbot-events/certifica
 sudo sh scripts/apps.sh setup-values powerx-dev
 ```
 
-数据库选择 PostgreSQL，主机 `postgres`、端口 `5432`、数据库和用户均为 `powerx`，密码使用输出 database.password；Redis 主机 `redis`、端口 `6379`、密码使用 cache.password。本地存储路径 `/data/uploads`，公开地址为域名加 `/media`。部署环境 dev，内部端口保持后端 8080、Web 3000；HTTPS 由 XDocker 管理，不在 PowerX 再签发。
+### 初始数据库密码在哪里
+
+第一次 `apps.sh start` 会为每个实例随机生成 PostgreSQL 和 Redis 密码，没有通用默认密码。这些密码不在公开镜像或 `.env.example` 中，也不等于 Linux 的 root/ubuntu 密码、PowerX 管理员密码或 XDocker 管理令牌。
+
+- PostgreSQL 密码文件：`instances/powerx-dev/config/postgres-password`，同时写入私有 `config.yaml` 的 `database.password`。
+- Redis 密码文件：`instances/powerx-dev/config/redis-password`，同时写入 `config.yaml` 的 `cache.password`。
+- 文件权限 600。上面的 `setup-values` 输出 JSON，数据库密码取 `database.password`，Redis 密码取 `cache.password`；仅在自己的服务器终端查看，不发到聊天或提交 Git。
+
+在 Setup 的“数据库 & 基础配置”按以下值填写。连接测试由后端容器执行，主机地址使用 Docker 服务名：
+
+| 页面字段 | 值或来源 |
+| --- | --- |
+| 数据库类型 | `postgresql` |
+| 数据库版本 | `16`（可留空，不填示例中的 MySQL 8.0） |
+| 主机地址 | `postgres` |
+| 端口 | `5432` |
+| 数据库名 | `powerx` |
+| 用户名 | `powerx` |
+| 密码 | `setup-values` 输出的 `database.password` |
+| 字符集 | `utf8`；PostgreSQL 的连接逻辑不使用 MySQL 的 charset 参数 |
+| 缓存类型 | `redis` |
+| Redis 主机 / 端口 | `redis` / `6379` |
+| Redis 密码 | 输出的 `cache.password` |
+| Redis 数据库索引 | `0` |
+
+将页面默认的 `localhost` 和 `root` 改为上表值。填写后点击“测试数据库连接”，等待成功；Redis 测试成功后再继续保存和初始化。连接失败时检查主机、用户和密码，不重建数据库或改用服务器公网 IP。
+
+本地存储路径 `/data/uploads`，公开地址为域名加 `/media`。部署环境 dev，内部端口保持后端 8080、Web 3000；HTTPS 由 XDocker 管理，不在 PowerX 再签发。
 
 按页面顺序测试连接、保存和初始化，管理员账号、邮箱、密码由你设置，最后完成安装。脚本不会自动创建管理员或跳过向导。数据库迁移和种子只在用户明确点击初始化时执行；Setup 完成后进入登录，并使用自己设置的账号。
 
@@ -129,6 +156,49 @@ sudo sh scripts/apps.sh logs powerx-dev
 检查已安装状态、用户与租户信息、页面刷新、浏览器 API/WebSocket/SSE。AI 模型、知识检索和具体插件需另配真实服务、权限与对应 Linux 架构制品，并分别验收；HTTP 200 不代表这些业务功能已经可用。
 
 XDocker 专属控制台根据 `instance.json` 明确登记的项目显示四个应用容器，名称为 `powerx-dev/backend` 等；启停需输入完整名称。其他 Compose 项目不会因存在 Docker socket 就自动获得管理权限。新增实例后按管理面板指南同步并启动最新 Admin 镜像。
+
+### 如何修改 PostgreSQL 密码
+
+只在 Setup 中输入新密码不会修改数据库账号。`POSTGRES_PASSWORD_FILE` 只在空数据目录首次初始化时设置账号密码；已有数据库必须先修改 PostgreSQL 角色，再同步 PowerX 私有配置。[官方镜像说明](https://hub.docker.com/_/postgres)。
+
+以下步骤由服务器管理员执行，密码由你自己选择；不会重置数据库、管理员、密钥或安装状态。先在 XDocker“实例备份”创建并验证一份备份，再暂停该实例前后端，数据库与 Redis 保持运行：
+
+```bash
+cd ~/workspace/XDocker
+git pull --ff-only
+sudo sh scripts/apps.sh compose powerx-dev stop backend web-admin
+sudo sh scripts/apps.sh compose powerx-dev exec postgres psql -X -U powerx -d powerx
+```
+
+在 psql 提示符输入：
+
+```text
+\password powerx
+\q
+```
+
+`\password` 会要求输入两次新密码，输入不回显；确认出现 `ALTER ROLE` 后退出。该命令避免明文密码进入 SQL 命令历史和服务器日志。[psql 文档](https://www.postgresql.org/docs/16/app-psql.html)。
+
+然后将**同一个新密码**同步到私有配置，命令不会把密码放入参数或打印出来：
+
+```bash
+sudo sh scripts/apps.sh compose powerx-dev run --rm --no-deps \
+  -v "$PWD/scripts/powerx-db-config.py:/tools/powerx-db-config.py:ro" \
+  init python3 /tools/powerx-db-config.py
+```
+
+再次按提示输入两遍新密码。工具先用新密码执行真实 TCP `SELECT 1`；通过后更新 `config.yaml` 的 `database.password`、其中已有的 PostgreSQL URI DSN，以及 `postgres-password`。匹配该数据库的 Setup 草稿也会同步，原文件保存在私有 `config/password-change-backups/` 中。不同数据库的草稿不会被改写。自定义 DSN 与字段不一致时拒绝同步，须先检查配置；验证失败时文件保持原样。
+
+看到 `TCP authentication passed` 和 `synchronized` 后才恢复服务：
+
+```bash
+sudo sh scripts/apps.sh compose powerx-dev up -d --wait backend web-admin
+sudo sh scripts/apps.sh status powerx-dev
+```
+
+未完成 Setup 时，刷新向导并把数据库密码填为新值，再测试连接。已安装时验证应用健康及登录，并生成新的备份。旧备份仍携带旧密码，恢复时数据库角色与配置须对应。
+
+任一步失败，保持前后端暂停，不执行 reset、删除 postgres 目录或只改 `.env`。重新用 `\password powerx` 设置你确认的密码，再运行同步工具；若要回退，使用改密前密码重复上述两个步骤。此流程仅修改 PostgreSQL，不修改 Redis 密码。
 
 ## 7. 升级、备份和回滚
 

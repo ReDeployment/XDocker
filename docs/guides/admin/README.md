@@ -89,6 +89,7 @@ curl -fsS http://127.0.0.1:9080/healthz
 
 ```bash
 ssh -N -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
   -L 127.0.0.1:19080:127.0.0.1:9080 ubuntu@YOUR_SERVER_IP
 ```
 
@@ -102,6 +103,28 @@ sudo sh scripts/admin.sh token
 ```
 
 将输出粘贴到“管理访问令牌”，点击“连接 XDocker”。登录后令牌输入清空；浏览器只保存 HttpOnly、SameSite=Strict 的随机会话 cookie，八小时过期，不在 localStorage 保存令牌。请求验证 Origin、Host、CSRF，登录失败有次数限制。
+
+### 登录失败：先区分连接与令牌
+
+`Failed to fetch` 表示浏览器请求未完成，不能据此认定令牌错误。SSH 隧道退出后，浏览器可能仍显示已经加载的登录页，但按钮无法连接服务器。关闭终端、电脑休眠或断网后，重新建立隧道并刷新页面。
+
+在 Mac 本机终端测试：
+
+```bash
+curl --connect-timeout 3 --max-time 5 http://127.0.0.1:19080/healthz
+```
+
+正常返回 `{"status":"ok"}`。连接拒绝或超时时，重开下面的终端并保持运行（当前服务器别名）：
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:19080:127.0.0.1:9080 Tianliyun-shipu
+```
+
+若提示本机端口已占用，检查现有隧道或使用 VS Code 转发给出的地址，不启动第二个相同端口隧道。若隧道正常而服务无响应，在服务器执行 `sudo sh scripts/admin.sh status` 和 `curl http://127.0.0.1:9080/healthz`，按实际服务状态处理。
+
+只有服务器明确返回“访问令牌不正确”才重新用 `admin.sh token` 获取当前令牌。PowerX 重新部署或普通 Admin 重启不会替换 `data/admin/access-token`；八小时会话过期需再次登录，令牌本身没有八小时有效期。“请求来源不匹配”需用页面当前地址重新登录，“操作验证已失效”需刷新页面，不通过关闭 Origin/CSRF 校验解决。
 
 ## 实际操作
 
