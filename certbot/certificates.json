@@ -12,13 +12,18 @@
       "enabled": true
     },
     {
-      "name": "debug-ecommerce.artisan-cloud.com",
+      "name": "debug-powerxplugin-local.artisan-cloud.com",
       "domains": [
         "debug-ecommerce.artisan-cloud.com",
         "debug-scrm.artisan-cloud.com",
-        "debug.artisan-cloud.com"
+        "debug-powerxplugin-local.artisan-cloud.com"
       ],
       "enabled": true
+    },
+    {
+      "name": "debug-powerx-local.artisan-cloud.com",
+      "domains": ["debug-powerx-local.artisan-cloud.com"],
+      "enabled": false
     },
     {
       "name": "dev.rentoken.cc",

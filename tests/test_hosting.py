@@ -110,9 +110,27 @@ esac
         self.assertTrue((self.root / "data/nginx/01-frp-headers.conf").is_file())
 
     def test_frp_route_requires_enabled_infrastructure(self):
-        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug"')
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-powerxplugin-local"')
         result = self.run_action("compose", "config", success=False)
         self.assertIn("Enable frps", result.stderr)
+
+    def test_powerx_frp_health_alias_uses_actual_core_health_path(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-powerx-local"')
+        self.run_action("http", "debug-powerx-local", "--no-pull")
+        rendered = self.config_path("debug-powerx-local").read_text()
+        self.assertIn("location = /healthz", rendered)
+        self.assertIn("proxy_pass $site_backend/api/v1/health;", rendered)
+        self.assertNotIn("__HEALTH_PATH__", rendered)
+        self.run_action("https", "debug-powerx-local")
+        self.assertIn("proxy_pass $site_backend/api/v1/health;", self.config_path("debug-powerx-local").read_text())
+
+    def test_frp_health_path_rejects_url_or_nginx_directive(self):
+        self.edit(self.root / ".env", 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="frps"')
+        self.edit(self.root / ".env", '"powerxdoc"', '"powerxdoc debug-powerx-local"')
+        for value in ('http://external.example/', '/healthz;return 200;', '/../private'):
+            (self.root / "sites/debug-powerx-local/.env").write_text('SITE_DOMAIN=debug-powerx-local.artisan-cloud.com\nSITE_HEALTH_PATH="'+value+'"\n')
+            self.run_action("http", "debug-powerx-local", "--no-pull", success=False)
         self.assertEqual(self.calls(), "")
 
     def test_site_cannot_override_shared_frps_service(self):

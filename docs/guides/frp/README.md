@@ -10,8 +10,8 @@
 ## 1. 文件与私有配置
 
 - `services/frps/`：镜像构建、Compose 和环境模板；镜像无生产 token 或私钥。
-- `clients/frpc/main.ini.example`：5 个业务映射模板，默认对应本地 8091、8092、8078、8110、8111。
-- `sites/debug-ecommerce`、`debug-scrm`、`debug`、`shopify`、`court-mate-api-dev`：域名与证书组，类型为 `frp_http`，无需独立站点镜像。
+- `clients/frpc/main.ini.example`：6 个业务映射模板，默认对应本地 8091、8092、8077、8078、8110、8111。
+- `sites/debug-ecommerce`、`debug-scrm`、`debug-powerx-local`、`debug-powerxplugin-local`、`shopify`、`court-mate-api-dev`：域名与证书组，类型为 `frp_http`，无需独立站点镜像。
 - `data/frp/`：真实 token、传输证书、私钥、客户端配置和日志，整个目录被 Git 忽略。
 - `scripts/frp.sh`：初始化、检查、启动和本地客户端生命周期；不自动修改旧客户端配置。
 
@@ -65,12 +65,13 @@ macOS 的 `start-client` 使用当前用户的 LaunchAgent，在关闭终端后�
 ```bash
 sudo sh scripts/hosting.sh http debug-ecommerce --no-pull
 sudo sh scripts/hosting.sh http debug-scrm --no-pull
-sudo sh scripts/hosting.sh http debug --no-pull
+sudo sh scripts/hosting.sh http debug-powerx-local --no-pull
+sudo sh scripts/hosting.sh http debug-powerxplugin-local --no-pull
 ```
 
 外部使用 `curl --resolve debug-ecommerce.artisan-cloud.com:80:160.202.238.184 http://debug-ecommerce.artisan-cloud.com/实际健康路径` 检查新入口，再切换域名。Nginx 保留 Host、转发协议头、WebSocket Upgrade；关闭响应缓冲以支持 SSE。
 
-原 debug 证书组包含三个域名，必须一起满足 DNS/HTTP-01 验证，不能缩减 SAN。服务器私有证书清单启用该组后，执行 `issue-test debug-ecommerce`、`issue debug-ecommerce`，再逐个 `https` 激活三个站点。Shopify 使用自己的证书项。
+当前 debug 三域名证书组名为 `debug-powerxplugin-local.artisan-cloud.com`，SAN 包含 ecommerce、scrm 和新的插件域名。已有旧证书组不能直接修改 SAN 后继续续期；本次以新 lineage 签发，再切换各站点的 `SITE_CERT_NAME`，保留旧证书用于回退。独立的 `debug-powerx-local` 使用自己的证书项，Shopify 也使用独立项。
 
 `court-mate-api-dev.artisan-cloud.com` 不在旧 debug SAN 中，需在本机证书清单增加独立项：
 
@@ -124,3 +125,37 @@ python3 tests/frp_smoke.py --frps /path/to/frps --frpc /path/to/frpc --nginx /pa
 旧 Nginx 内联提供的企业微信验证响应已迁移为 `data/acme/verification/WW_verify_L7QyPRfjldgxXN5t.txt`，通过三个 debug 域名的 HTTPS 返回内容与旧入口 SHA256 一致。共享续期服务重新加载后管理 6 组证书、8 个域名。
 
 用户明确 `powerx`、`powerx-dev`、`openclaw`、`ai` 是后续远程业务服务，不在本批穿透迁移范围。它们的 DNS 指向新 IP 不代表后端已接入；本轮未为其创建代理或启动业务容器。三个静态站点 HTTPS 继续正常，旧 FRPC 通道保留用于回滚。
+
+
+## 8. 本地 PowerX Core 与插件入口
+
+| 域名 | 本地目标 | 健康检查 |
+| --- | --- | --- |
+| `debug-powerx-local.artisan-cloud.com` | `127.0.0.1:8077`，PowerX Core API | `/api/v1/health`；入口 `/healthz` 映射到同一接口 |
+| `debug-powerxplugin-local.artisan-cloud.com` | `127.0.0.1:8078`，PowerX Base Plugin | `/healthz` |
+
+`powerx-dev.artisan-cloud.com` 是服务器 Docker 实例，与这两个本地穿透入口独立。Core API 的根路径可能返回 404，不能据此判断穿透失败；本地进程停止或电脑离线时，新域名后端也会不可用。
+
+新增域名的 A 记录都指向 `160.202.238.184`。服务器同步本仓库后，在根 `.env` 中启用 `debug-powerx-local` 和 `debug-powerxplugin-local`，移除旧 `debug`。用 `hosting.sh init` 创建新站点私有 `.env`，原服务配置保留。客户端已有 `data/frp/frpc.ini` 不会随模板自动更新：备份后把 8078 的子域名改为 `debug-powerxplugin-local`，并添加模板中的 `powerx_core_api` 段指向 8077；验证配置后重启本仓库托管的客户端，不停止旧服务器的独立 FRPC。
+
+完成 HTTP 端到端验证后，启用 Core 的独立证书项；旧 debug 三域名组在私有清单中换为新 lineage `debug-powerxplugin-local.artisan-cloud.com`，SAN 为 `debug-ecommerce.artisan-cloud.com`、`debug-scrm.artisan-cloud.com`、`debug-powerxplugin-local.artisan-cloud.com`。先测试签发、正式签发，再把 ecommerce、scrm 的私有 `SITE_CERT_NAME` 改为新 lineage，重载三条 HTTPS 路由。旧证书文件保留，新清单不再为旧 debug 域名自动续期。
+
+```bash
+sudo sh scripts/hosting.sh http debug-powerx-local --no-pull
+sudo sh scripts/hosting.sh http debug-powerxplugin-local --no-pull
+sudo sh scripts/hosting.sh issue-test debug-powerx-local
+sudo sh scripts/hosting.sh issue debug-powerx-local
+sudo sh scripts/hosting.sh issue-test debug-powerxplugin-local
+sudo sh scripts/hosting.sh issue debug-powerxplugin-local
+sudo sh scripts/hosting.sh https debug-powerx-local
+sudo sh scripts/hosting.sh https debug-powerxplugin-local
+sudo sh scripts/hosting.sh https debug-ecommerce
+sudo sh scripts/hosting.sh https debug-scrm
+sudo sh scripts/hosting.sh renew-test debug-powerx-local
+sudo sh scripts/hosting.sh renew-test debug-powerxplugin-local
+sudo sh scripts/certificates.sh check --report /var/lib/certbot-events/certificates-check.json
+curl -fsS https://debug-powerx-local.artisan-cloud.com/api/v1/health
+curl -fsS https://debug-powerxplugin-local.artisan-cloud.com/healthz
+```
+
+旧 `data/nginx/debug.conf` 在新入口验收后移至私有备份目录，不留在 Nginx 加载目录；旧 DNS 可以删除。仅更新客户端模板不会改变正在运行的代理，必须验证新代理注册和上述公网请求。FRP 站点可设置 `SITE_HEALTH_PATH`（仅允许安全绝对路径），以让统一 `/healthz` 检查真正到达服务健康接口；默认仍为 `/healthz`。

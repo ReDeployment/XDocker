@@ -18,6 +18,7 @@ if [ "$action" = init ]; then
     mkdir -p data/nginx data/acme data/letsencrypt data/events
     for directory in sites/*; do
         [ -d "$directory" ] || continue
+        [ -f "$directory/site.conf" ] || continue
         [ -f "$directory/.env" ] || cp "$directory/.env.example" "$directory/.env"
     done
     for directory in services/*; do
@@ -38,7 +39,7 @@ load_site() {
     valid_key "$1"
     [ -f "sites/$1/site.conf" ] || die "Unknown site: $1"
     [ -f "sites/$1/.env" ] || die "Initialize sites/$1/.env first."
-    unset SITE_KIND SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME SITE_APP SITE_INSTANCE
+    unset SITE_KIND SITE_SERVICE SITE_IMAGE_VAR SITE_DOMAIN SITE_IMAGE SITE_CERT_NAME SITE_APP SITE_INSTANCE SITE_HEALTH_PATH
     . "./sites/$1/site.conf"
     . "./sites/$1/.env"
     case ${SITE_DOMAIN:-} in ''|*[!a-z0-9.-]*|.*|-*) die "Invalid SITE_DOMAIN for $1." ;; esac
@@ -54,6 +55,9 @@ load_site() {
     fi
     if [ "$SITE_KIND" = frp_http ]; then
         case " ${ENABLED_SERVICES:-} " in *" frps "*) ;; *) die 'Enable frps in ENABLED_SERVICES first.' ;; esac
+        SITE_HEALTH_PATH=${SITE_HEALTH_PATH:-/healthz}
+        case $SITE_HEALTH_PATH in /*) ;; *) die 'SITE_HEALTH_PATH must be an absolute path.' ;; esac
+        case $SITE_HEALTH_PATH in *[!a-zA-Z0-9/_.-]*|*..*|//*) die 'Invalid SITE_HEALTH_PATH.' ;; esac
         SITE_SERVICE=frps
         return
     fi
@@ -142,6 +146,7 @@ render() {
     fi
     sed -e "s/__DOMAIN__/$SITE_DOMAIN/g" -e "s/__SERVICE__/$SITE_SERVICE/g" -e "s/__CERT_NAME__/$SITE_CERT_NAME/g" \
         -e "s/__INSTANCE__/${SITE_INSTANCE:-unused}/g" \
+        -e "s|__HEALTH_PATH__|${SITE_HEALTH_PATH:-/healthz}|g" \
         "nginx/$template.conf.template" > "$config.tmp"
     mv "$config.tmp" "$config"
 }

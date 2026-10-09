@@ -54,7 +54,7 @@ esac
         calls = (self.root / "calls").read_text()
         config = (self.root / "data/nginx/10-certificates-acme.conf").read_text()
         self.assertIn("shopify.artisan-cloud.com", config)
-        self.assertIn("debug.artisan-cloud.com", config)
+        self.assertIn("debug-powerxplugin-local.artisan-cloud.com", config)
         self.assertNotIn("proxy_pass", config)
         self.assertIn("up -d nginx", calls)
         self.assertNotIn("up -d powerx", calls)

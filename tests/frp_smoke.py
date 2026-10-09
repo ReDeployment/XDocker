@@ -139,7 +139,7 @@ def smoke(frps, frpc, nginx=None):
                 response.read(); connection.close()
             print("FRP: TLS verified; wrong token, wrong server identity and plaintext rejected; multi-host routing passed")
             if nginx:
-                server = (ROOT / "nginx/frp-http.conf.template").read_text().replace("__DOMAIN__", "one.example.test two.example.test")
+                server = (ROOT / "nginx/frp-http.conf.template").read_text().replace("__DOMAIN__", "one.example.test two.example.test").replace("__HEALTH_PATH__", "/api/v1/health")
                 server = server.replace("listen 80;", f"listen 127.0.0.1:{gateway};").replace("http://frps:8080", f"http://127.0.0.1:{vhost}")
                 headers = (ROOT / "nginx/frp-headers.conf").read_text()
                 nginx_config = root / "nginx.conf"
@@ -152,6 +152,12 @@ def smoke(frps, frpc, nginx=None):
                 response = connection.getresponse()
                 data = json.loads(response.read())
                 assert data == {"host": "two.example.test", "path": "/probe?x=1", "proto": "http"}
+                connection.close()
+                connection = http.client.HTTPConnection("127.0.0.1", gateway, timeout=3)
+                connection.request("GET", "/healthz", headers={"Host": "one.example.test"})
+                response = connection.getresponse()
+                assert response.status == 200
+                assert json.loads(response.read())["path"] == "/api/v1/health"
                 connection.close()
                 connection = http.client.HTTPConnection("127.0.0.1", gateway, timeout=3)
                 started = time.monotonic()

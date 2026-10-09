@@ -77,9 +77,9 @@ class CertificateTests(unittest.TestCase):
 
     def test_inventory_preserves_eight_lineages_and_ten_domains(self):
         data = tool.load_inventory(ROOT / "certbot/certificates.json")
-        self.assertEqual(len(data["certificates"]), 8)
-        self.assertEqual(sum(len(item["domains"]) for item in data["certificates"]), 10)
-        debug = next(item for item in data["certificates"] if item["name"] == "debug-ecommerce.artisan-cloud.com")
+        self.assertEqual(len(data["certificates"]), 9)
+        self.assertEqual(sum(len(item["domains"]) for item in data["certificates"]), 11)
+        debug = next(item for item in data["certificates"] if item["name"] == "debug-powerxplugin-local.artisan-cloud.com")
         self.assertEqual(len(debug["domains"]), 3)
 
     def test_acme_only_config_excludes_active_sites_and_its_previous_output(self):

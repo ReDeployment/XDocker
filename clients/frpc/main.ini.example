@@ -19,11 +19,17 @@ local_ip = 127.0.0.1
 local_port = 8092
 subdomain = debug-scrm
 
-[powerx_debug]
+[powerx_plugin_local]
 type = http
 local_ip = 127.0.0.1
 local_port = 8078
-subdomain = debug
+subdomain = debug-powerxplugin-local
+
+[powerx_core_api]
+type = http
+local_ip = 127.0.0.1
+local_port = 8077
+subdomain = debug-powerx-local
 
 [shopify]
 type = http
