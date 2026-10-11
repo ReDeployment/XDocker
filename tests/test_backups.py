@@ -106,4 +106,21 @@ class BackupTests(unittest.TestCase):
         self.assertTrue(self.engine.values[backend]['State']['Running'])
         self.assertEqual(self.manager.read('powerx-dev',self.identifier)[1]['state'],'interrupted')
 
+    def test_scheduled_cleanup_refuses_to_delete_without_verified_survivor(self):
+        self.create()
+        older=self.identifier;self.identifier='b'*32;self.create()
+        newest=self.manager.folder('powerx-dev',self.identifier)
+        (newest/'database.dump').write_bytes(b'corrupt')
+        with self.assertRaises(ValueError):self.manager.prune('powerx-dev',1,require_valid_survivor=True)
+        self.assertTrue(self.manager.folder('powerx-dev',older).exists())
+        self.assertTrue(newest.exists())
+
+    def test_scheduled_cleanup_keeps_verified_latest_and_failed_records(self):
+        self.create();older=self.identifier;self.identifier='b'*32;self.create()
+        failed=self.manager.folder('powerx-dev','c'*32);failed.mkdir()
+        self.manager.save(failed,{'id':'c'*32,'instance':'powerx-dev','state':'failed','created':'2026-01-01'})
+        self.manager.prune('powerx-dev',1,require_valid_survivor=True)
+        self.assertFalse(self.manager.folder('powerx-dev',older).exists())
+        self.assertTrue(self.manager.folder('powerx-dev',self.identifier).exists());self.assertTrue(failed.exists())
+
 if __name__=='__main__':unittest.main()

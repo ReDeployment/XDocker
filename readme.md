@@ -55,6 +55,8 @@ docs/guides/artisancloud-home/ # 当前 Vue 官网镜像发布与第三站点部
 
 ## 开始使用
 
+后续管理能力的优先级、范围和验收标准见 [XDocker 任务清单](docs/tasks/README.md)。管理连接稳定性、部署前检查、默认禁用的实例备份计划和只读镜像版本管理已完成本地实现，发布契约接入及运行验收仍待完成；任务实施、提交及部署遵守 [代理规则](AGENT.md)。
+
 Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-images/README.md) 同步运行镜像并切换现有 `.env`，无需改变网站源码或证书。
 
 **GHCR 镜像可以保持 Private，不必公开。** 服务器使用 PAT classic + read:packages 认证，账号同时须有目标包 Read 权限；本仓库服务器命令使用 sudo，所以登录使用 `sudo docker login ghcr.io -u YOUR_GITHUB_USERNAME`。详细操作见 [私有镜像认证指南](docs/guides/ghcr-auth/README.md)。
@@ -70,6 +72,12 @@ Docker Hub 超时时可按 [自有 GHCR 镜像副本指南](docs/guides/runtime-
 7. [FRP 穿透指南](docs/guides/frp/README.md)：共享 FRPS、客户端私有配置和开发域名迁移。
 8. [Portainer 管理面板指南](docs/guides/portainer/README.md)：可选启用容器状态、日志、资源和启停管理；首次通过 SSH 隧道访问。
 9. [XDocker 专属控制台](docs/guides/admin/README.md)：统一查看网站、证书、FRP 和容器，并执行有审计记录的运行操作。
+
+控制台新增 [部署前检查](docs/guides/admin/preflight.md)：只读汇总环境、镜像、网络、DNS 与宿主机诊断报告，逐项显示时间和处理建议。
+
+[全实例备份计划](docs/guides/powerx/backup-plans.md)：默认禁用，按实例配置周期、维护开始范围和保留清理；启用前需确认运行影响。
+
+[镜像版本与升级预览](docs/guides/powerx/image-versions.md)：分开展示当前实际镜像、开发/正式候选、digest 与发布证据；只读预览，不自动更新实例。
 10. [PowerX Docker 部署指南](docs/guides/powerx/README.md)：独立镜像分发、开发实例与共享 HTTPS 入口。
 
 已有服务器完成准备后，使用 ubuntu 账号初始化。下面的服务器 Docker 操作使用 sudo：

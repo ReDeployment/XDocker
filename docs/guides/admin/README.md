@@ -6,6 +6,12 @@ PowerX 的整套部署备份位于“实例备份”：数据库逻辑备份、R
 
 “PowerX 实例”按登记实例显示容器及 Setup 连接字段，管理员可确认实例名后显示/复制 PostgreSQL、Redis 密码；见[实例页面指南](../powerx/instances.md)。该页面只读取私有配置，不修改安装状态或数据库密码。
 
+“部署前检查”汇总 Docker、配置权限、磁盘、入口端口、GHCR/ACME、DNS 与目标镜像检查。宿主机 Compose 等项目使用终端生成的诊断报告；缺少报告或无法确认私有镜像权限时明确显示未确认。操作步骤和验收范围见[部署前检查指南](preflight.md)。
+
+“备份计划”管理逐实例的全实例维护备份周期、时区和保留清理；运行开关和计划默认禁用，保存不立即备份。启用与自动清理需分别确认，步骤与运行影响见[计划指南](../powerx/backup-plans.md)。此功能的本地实现不代表服务器已经部署或启用。
+
+“镜像版本”分开显示配置引用、实际容器镜像、固定 digest、开发/正式候选与发布证据，并提供只读升级预览。候选目录默认为空，不自动生成或应用版本；见[版本管理指南](../powerx/image-versions.md)。
+
 ## 实现与管理边界
 
 ```text
@@ -37,17 +43,54 @@ python3 -m venv /tmp/xdocker-admin-venv
 /tmp/xdocker-admin-venv/bin/pip install -r services/admin/requirements.txt cryptography
 /tmp/xdocker-admin-venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 node --check services/admin/static/app.js
-sh -n scripts/admin.sh scripts/hosting.sh
+node tests/admin_connection_ui.cjs
+sh -n scripts/admin.sh scripts/admin-tunnel.sh scripts/hosting.sh
 git diff --check
 ```
 
-推送 main 后，`Build and Publish XDocker Admin` 工作流先运行回归，再发布 `linux/amd64,linux/arm64` 镜像：
+获得提交/推送授权后，使用独立任务分支和 PR，遵守 [AGENT.md](../../../AGENT.md)。`Validate and Publish XDocker Admin` 工作流分为三个阶段：
+
+1. `validate`：Python 回归、前端事件模拟和脚本语法检查。
+2. `smoke`：AMD64 使用 `ubuntu-latest`、ARM64 使用 `ubuntu-24.04-arm`，分别原生构建本地候选，**不推镜像**。检查实际 Docker 构建上下文、打包后的 Gunicorn HTTP/认证/静态资源、容器生命周期、完整备份、隔离恢复和一次性计划备份；只使用随机命名的临时容器和可丢弃样例数据。
+3. `publish`：两个架构全部验收成功后，接收已测试的 Docker tar 与回执。先校验归档 SHA256、完整源码 SHA、平台和镜像配置 ID，再加载并核对身份；不重新构建。此阶段才登录 GHCR、推送两个架构的镜像并组装索引，最后确认索引包含 AMD64 和 ARM64。
+
+PR 只有读取权限，不上传镜像包、不登录 GHCR、不发布。非 main 分支的手动运行也只做校验。仅原仓库 `ReDeployment/XDocker` 的 main push 或 main 手动运行能进入具有 `packages: write` 权限的发布阶段；同一分支的 push 与手动运行串行执行。部署使用成功工作流产出的完整 SHA 标签：
 
 ```text
 ghcr.io/redeployment/xdocker-admin:sha-<完整提交SHA>
 ```
 
-工作流随后针对一次性容器验证真实 Docker 状态、日志、资源、停止/启动/重启和退出登录。确认整个工作流成功后再部署对应 SHA 镜像。镜像可保持 Private，认证见 [GHCR 指南](../ghcr-auth/README.md)。
+另有 `sha-<完整提交SHA>-amd64`、`sha-<完整提交SHA>-arm64` 两个架构标签；常规部署使用上面的索引标签。导出回执只记录镜像身份、平台和校验值，不含运行配置或令牌；CI 中间制品保留一天。镜像可保持 Private，认证见 [GHCR 指南](../ghcr-auth/README.md)。
+
+在 Actions 中确认 `validate`、两个 `smoke` 和 `publish` 全部成功，再检查 GHCR 索引；只看到 tag 或某一个绿色 job 不代表完整发布成功。若校验/任一 smoke 失败，发布阶段不会执行；若发布阶段失败，可能已有单架构 tag，不能将其当作完整双架构版本部署。失败时查看对应 job 日志并重新验收，不绕过检查手工发布。索引操作参考 [Docker 官方说明](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/)。工作流代码实现不等于已经在 GitHub 执行或发布。
+
+本地有 Docker 时，可重复运行上述真实验收。以下示例计算当前公共运行文件的内容指纹，明确标记未提交的本地树，不把它冒充为已发布 Git SHA；本地镜像不会推送：
+
+```bash
+xdocker_local_revision="local-tree-$(python3 - <<'PY'
+from pathlib import Path
+import hashlib
+root = Path('services/admin')
+names = ['.dockerignore', 'Dockerfile', 'requirements.txt', 'app.py', 'docker_api.py',
+         'backups.py', 'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py',
+         'static/index.html', 'static/app.js', 'static/style.css']
+digest = hashlib.sha256()
+for name in sorted(names):
+    digest.update(name.encode() + b'\0' + (root / name).read_bytes() + b'\0')
+print(digest.hexdigest())
+PY
+)"
+export ADMIN_SMOKE_IMAGE="xdocker-admin-ci:sha-${xdocker_local_revision}-local"
+export ADMIN_SMOKE_REVISION="$xdocker_local_revision"
+python3 tests/admin_build_context_smoke.py
+docker build --build-arg "REVISION=$ADMIN_SMOKE_REVISION" \
+  -t "$ADMIN_SMOKE_IMAGE" services/admin
+/tmp/xdocker-admin-venv/bin/python tests/admin_http_smoke.py
+/tmp/xdocker-admin-venv/bin/python tests/admin_smoke.py
+/tmp/xdocker-admin-venv/bin/python tests/backup_smoke.py
+```
+
+脚本清理自己创建的容器和临时数据，保留本地候选镜像。备份验收需要获取 `pgvector/pgvector:pg16`、`redis:7-alpine` 测试依赖，耗时包含测试前后端的正常停机等待。计划验收注入测试时间并单次准入，不启用服务器定时计划；HTTP 检查也不替代浏览器人工验收。
 
 ## 服务器启用
 
@@ -97,6 +140,60 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 当前服务器可使用 `Tianliyun-shipu` 别名。浏览器打开 **http://127.0.0.1:19080**。VS Code Remote SSH 也可以转发服务器 9080，使用它显示的本机地址。
 
+### 本机托管隧道与自动重连
+
+以下命令在**本地电脑的 XDocker 仓库**执行，不是在服务器执行。脚本使用系统 Python 3 和 SSH，不读取管理令牌或私钥，不改 `~/.ssh/config`。先在普通终端确认同一个 SSH 别名能使用密钥登录，核对服务器主机身份并完成已有的 known_hosts 登记；脚本采用严格主机验证和非交互认证。需要私钥口令时，先在自己的终端配置 SSH agent，脚本不保存口令。
+
+先用前台方式检查，可同时支持 macOS 和带 Python 3/SSH 的 Linux：
+
+```bash
+sh scripts/admin-tunnel.sh run Tianliyun-shipu
+```
+
+保持这个终端运行。在另一个**本机终端**查看状态：
+
+```bash
+sh scripts/admin-tunnel.sh status
+curl --connect-timeout 3 --max-time 5 http://127.0.0.1:19080/healthz
+```
+
+成功信号：`supervisor_active: true`、`state: connected`、`current_http: connected`，健康接口返回 `{"status":"ok"}`。网页登录验证是另外一步。前台模式用原终端的 **Ctrl+C** 停止；不会按存储的 PID 杀进程。
+
+macOS 的后台托管使用独立的用户 LaunchAgent，不需要 sudo：
+
+```bash
+# 先停止上面的前台 run，然后安装/启动当前仓库的托管任务
+sh scripts/admin-tunnel.sh start Tianliyun-shipu
+sh scripts/admin-tunnel.sh status
+
+# 卸载并停止本工具的托管任务
+sh scripts/admin-tunnel.sh stop
+```
+
+`start` 会安装本机任务，登录 macOS 后自动运行；只有你执行或明确授权后才安装。它与 FRPC 的 LaunchAgent 分开。`stop` 验证任务属于当前仓库，只移除这一个任务，不停止其他 SSH 或 FRPC。Linux 当前提供前台 `run`，没有实现 Linux 后台服务安装。
+
+默认本机 `19080` 转发服务器 `9080`。需要独立端口时，启动、查询和停止都指定相同的本机端口：
+
+```bash
+sh scripts/admin-tunnel.sh start ubuntu@YOUR_SERVER_IP --local-port 19081 --server-port 9080
+sh scripts/admin-tunnel.sh status --local-port 19081
+sh scripts/admin-tunnel.sh stop --local-port 19081
+```
+
+此时打开 `http://127.0.0.1:19081`。不要同时执行前台和后台启动相同端口。
+
+| 状态 | 含义与处理 |
+| --- | --- |
+| `reconnecting` | SSH 退出后等待 5、10、20、40、最多 60 秒重试；持续连接 30 秒后重新从 5 秒开始。电脑唤醒、网络恢复后继续尝试。 |
+| `port-conflict` | 本机端口被其他进程占用。工具不会接管或关闭已有连接；检查原隧道，或选择其他端口。 |
+| `host-key-error` | 主机身份不可信或发生变化。停止任务，人工核对服务器身份和 known_hosts 后重新启动；不自动接受未知主机。 |
+| `authentication-error` | SSH 密钥认证失败。停止任务，在普通终端验证同一主机别名与 SSH agent 后重新启动。 |
+| `api-unreachable` | SSH 进程可能仍在，但管理 HTTP 服务不可达；核对转发端口及服务器 Admin 状态。 |
+| `service-error` / `unexpected-response` | HTTP 5xx 或非预期健康响应；端口有监听不代表管理接口正常。 |
+| `stopped` | 没有运行中的本工具托管进程；`current_http` 单独反映端口当前的 HTTP 响应，可能来自已有手动隧道。 |
+
+主机身份、认证、端口冲突会停止重试；`registered: true` 只说明 LaunchAgent 已登记，不代表连接成功。修正这些问题后，执行 `stop` 再 `start`。配置与预定义诊断位于本机 `data/admin-tunnel/<本机端口>/`，目录 700、文件 600；只保存主机别名、端口及状态，不保存令牌、SSH 原始错误输出或私钥。清除状态前先停止连接。
+
 在服务器终端执行（令牌不发到聊天中）：
 
 ```bash
@@ -109,6 +206,10 @@ sudo sh scripts/admin.sh token
 ### 登录失败：先区分连接与令牌
 
 `Failed to fetch` 表示浏览器请求未完成，不能据此认定令牌错误。SSH 隧道退出后，浏览器可能仍显示已经加载的登录页，但按钮无法连接服务器。关闭终端、电脑休眠或断网后，重新建立隧道并刷新页面。
+
+新控制台在登录页及工作区显示管理连接状态、最近成功读取时间和“重新检查连接”。浏览器离线、接口不可达/超时、HTTP 5xx、需要登录（401）与来源/操作验证失败（403）分别提示。连接异常时保留上次运行数据并标明时间，禁用运行操作并隐藏已显示的密码。
+
+页面可见时每 5 秒只读检查；网络恢复后恢复状态读取。**不会自动重发令牌或备份、启停、续期等 POST 操作。** 变更请求发出后失联或超时，结果可能已经在服务器执行：恢复连接后先查“操作记录”和实际服务状态，再决定是否重新执行。403 时点击“重新检查连接”读取当前会话/CSRF；来源地址不匹配时使用当前页面地址重新登录，不关闭安全校验。会话过期后需要手动登录。
 
 在 Mac 本机终端测试：
 

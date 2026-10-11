@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "versions": [
+    {
+      "id": "dev-replace-with-verified-version",
+      "channel": "dev",
+      "version": "REPLACE_WITH_VERSION_LABEL",
+      "source_revision": "REPLACE_WITH_FULL_SOURCE_SHA",
+      "images": {
+        "backend": "ghcr.io/artisancloud/powerx-backend@sha256:REPLACE_WITH_BACKEND_DIGEST",
+        "web-admin": "ghcr.io/artisancloud/powerx-web-admin@sha256:REPLACE_WITH_WEB_DIGEST"
+      },
+      "evidence": {
+        "run_id": 1,
+        "release_tag": null
+      },
+      "migration": {
+        "status": "unknown",
+        "from_revisions": [],
+        "notes": "Maintainer must supply version-specific migration and rollback guidance.",
+        "rollback": "unknown"
+      }
+    }
+  ]
+}

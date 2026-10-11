@@ -1,3 +1,16 @@
-.env
-__pycache__
-*.pyc
+# Send only public runtime code; exclude private .env and cache files.
+*
+!Dockerfile
+!requirements.txt
+!app.py
+!docker_api.py
+!backups.py
+!instances.py
+!preflight.py
+!backup_plans.py
+!image_versions.py
+!static/
+static/**
+!static/index.html
+!static/app.js
+!static/style.css

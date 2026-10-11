@@ -22,3 +22,5 @@ XDocker 左侧的“PowerX 实例”管理服务器上明确登记的 Docker 实
 实例必须先执行过 `apps.sh start`，生成私有配置及 backend 容器。backend 停止时仍可读取配置。无法读取时检查登记、backend 容器与固定配置挂载；CLI 备用方法仍为 `sudo sh scripts/apps.sh setup-values powerx-dev`。
 
 本页面当前提供连接信息读取、按需显示/复制密码、服务状态与备份入口。修改 PostgreSQL 密码仍按[改密流程](README.md#如何修改-postgresql-密码)执行，不在 Setup 中直接填写另一串密码来改变数据库账号。
+
+顶部“镜像版本”入口进入独立[版本管理页](image-versions.md)，核对当前配置、实际运行前后端、候选与升级预览；这个页面只读，不通过切换候选修改实例或重新进入 Setup。
