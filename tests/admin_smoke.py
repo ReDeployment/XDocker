@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory() as temp:
     (root/'state/access-token').write_text(token)
     (root/'config/root.env').write_text('ENABLED_SITES=""\nENABLED_SERVICES=""\n')
     (root/'config/certificates.json').write_text('{"certificates":[]}')
-    identifier=subprocess.check_output(['docker','run','-d','--label','com.docker.compose.project=xdocker-web-hosting',
+    identifier=subprocess.check_output(['docker','run','-d','--pull=never','--label','com.docker.compose.project=xdocker-web-hosting',
         '--label','com.docker.compose.service=nginx','--name','xdocker-admin-ci-'+secrets.token_hex(4),
         '--entrypoint','python',image,'-u','-c',"import time; print('admin-real-smoke'); time.sleep(600)"],text=True).strip()
     instance='powerx-ci-'+secrets.token_hex(4)
@@ -30,10 +30,11 @@ with tempfile.TemporaryDirectory() as temp:
     original=json.dumps(fixture);(private/'config.yaml').write_text(original);(private/'config.yaml').chmod(0o600)
     registration=root/'config/instances'/instance;registration.mkdir(parents=True)
     (registration/'instance.json').write_text(json.dumps({'app':'powerx','project':instance,'enabled':True}))
-    backend=subprocess.check_output(['docker','run','-d','--label','com.docker.compose.project='+instance,
-        '--label','com.docker.compose.service=backend','--mount','type=bind,source='+str(private)+',target=/etc/powerx,readonly',
-        '--entrypoint','python',image,'-c','import time; time.sleep(600)'],text=True).strip()
+    backend=None
     try:
+        backend=subprocess.check_output(['docker','run','-d','--pull=never','--label','com.docker.compose.project='+instance,
+            '--label','com.docker.compose.service=backend','--mount','type=bind,source='+str(private)+',target=/etc/powerx,readonly',
+            '--entrypoint','python',image,'-c','import time; time.sleep(600)'],text=True).strip()
         app=create_app({'TESTING':True,'STATE':str(root/'state'),'CONFIG':str(root/'config'),'REPORTS':str(root/'reports'),
             'HOST_ROOT':str(root),'BACKUPS':str(root/'backups')})
         client=app.test_client()
@@ -69,4 +70,4 @@ with tempfile.TemporaryDirectory() as temp:
         assert client.get('/api/snapshot').status_code==401
         print('Real Docker snapshot, logs, stats, stop/start/restart and logout passed.')
     finally:
-        subprocess.run(['docker','rm','-f',identifier,backend],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','rm','-f',identifier]+([backend] if backend else []),check=True,stdout=subprocess.DEVNULL)

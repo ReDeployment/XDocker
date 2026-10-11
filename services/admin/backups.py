@@ -220,10 +220,17 @@ psql -h 127.0.0.1 -U powerx -d restore_verify -v ON_ERROR_STOP=1 -Atc "SELECT co
         self.save(folder, record)
         return '数据库已在无网络、无公网端口、独立临时 PostgreSQL 中成功恢复。运行中实例没有被覆盖；配置与文件包已校验，业务级恢复仍需单独验收。'
 
-    def prune(self, instance, keep):
+    def prune(self, instance, keep, require_valid_survivor=False):
         if not isinstance(keep, int) or isinstance(keep, bool) or not 1 <= keep <= 100:
             raise ValueError('Retention count must be between 1 and 100')
         records = [r for r in self.records([instance]) if r.get('state') == 'ready']
+        if require_valid_survivor:
+            # Scheduled cleanup must leave a checksum-verified survivor, not just a ready label.
+            valid=False
+            for record in records[:keep]:
+                try:self.verify(instance,record['id']);valid=True;break
+                except (OSError,ValueError):continue
+            if not valid:raise ValueError('No retained backup passed verification; scheduled cleanup refused.')
         import shutil
         removed = 0
         for record in records[keep:]:

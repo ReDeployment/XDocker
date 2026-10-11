@@ -12,6 +12,7 @@ services:
     environment:
       ADMIN_DEPLOY_REVISION: ${ADMIN_DEPLOY_REVISION:-unknown}
       ADMIN_HOST_ROOT: ${ADMIN_HOST_ROOT:?Run admin.sh init}
+      ADMIN_BACKUP_SCHEDULER_ENABLED: ${ADMIN_BACKUP_SCHEDULER_ENABLED:-false}
     ports:
       - "127.0.0.1:${ADMIN_PORT:-9080}:8080"
     volumes:
@@ -23,6 +24,7 @@ services:
       - ./data/events:/reports:ro
       - ./clients/frpc/main.ini.example:/config/frpc-template.ini:ro
       - ./instances:/config/instances:ro
+      - ${POWERX_VERSION_CATALOG:-./apps/powerx/versions.json}:/config/powerx-versions.json:ro
       - ./data/instance-backups:/backups
     networks: [admin-control]
     healthcheck:

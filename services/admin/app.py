@@ -20,6 +20,9 @@ from werkzeug.exceptions import HTTPException
 from docker_api import Docker, DockerError, log_text
 from backups import InstanceBackups
 from instances import InstanceReader, setup_fields, password_for
+from preflight import Preflight, BusyCheck
+from backup_plans import BackupPlans, BackupScheduler, PlanConflict, OperationBusy, PlanCancelled
+from image_versions import ImageVersions, VersionCheckBusy
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -92,6 +95,8 @@ def create_app(settings=None, docker=None):
     app.config.update(STATE=os.getenv('ADMIN_STATE', '/state'), CONFIG=os.getenv('ADMIN_CONFIG', '/config'),
                       REPORTS=os.getenv('ADMIN_REPORTS', '/reports'), MAX_CONTENT_LENGTH=8192,
                       BACKUPS=os.getenv('ADMIN_BACKUPS', '/backups'), HOST_ROOT=os.getenv('ADMIN_HOST_ROOT', ''),
+                      BACKUP_SCHEDULER_ENABLED=os.getenv('ADMIN_BACKUP_SCHEDULER_ENABLED', 'false')=='true',
+                      VERSION_CATALOG=os.getenv('ADMIN_VERSION_CATALOG', '/config/powerx-versions.json'),
                       TRUSTED_HOSTS=['localhost', '127.0.0.1', '[::1]'])
     app.config.update(settings or {})
     state, config, reports = (Path(app.config[name]) for name in ('STATE', 'CONFIG', 'REPORTS'))
@@ -236,6 +241,26 @@ def create_app(settings=None, docker=None):
                 and c['Labels'].get('com.docker.compose.service') in projects[c['Labels']['com.docker.compose.project']]
                 and c['Labels'].get('com.docker.compose.oneoff', 'False').lower() != 'true']
 
+    preflight = Preflight(engine, config, state, reports, app.config['HOST_ROOT'],
+                          lambda: configuration(config)[0],
+                          lambda: [p for p in managed_projects() if p != PROJECT])
+
+    @app.get('/api/preflight')
+    def preflight_list():
+        if request.args:return jsonify(error='检查接口不接受自定义目标或参数。'), 400
+        try:return jsonify(preflight.listing())
+        except (OSError, ValueError, TypeError):
+            return jsonify(error='无法生成检查清单，请核对已启用的配置和宿主机报告。'), 409
+
+    @app.get('/api/preflight/<key>')
+    def preflight_check(key):
+        if request.args:return jsonify(error='检查接口不接受自定义目标或参数。'), 400
+        try:return jsonify(preflight.run(key))
+        except KeyError:return jsonify(error='请选择当前检查清单中的项目。'), 404
+        except BusyCheck:return jsonify(error='另一个只读检查正在进行，请稍后重试。'), 409
+        except (OSError, ValueError, TypeError):
+            return jsonify(error='检查清单不可用，请核对配置。'), 409
+
     def service_name(container):
         labels = container['Labels']
         service = labels['com.docker.compose.service']
@@ -338,16 +363,22 @@ def create_app(settings=None, docker=None):
         return jsonify(cpu_percent=round(max(0, delta)/total*current.get('online_cpus', 1)*100, 2) if total > 0 else None,
                        memory_bytes=usage, memory_limit=memory.get('limit'), pids=raw.get('pids_stats', {}).get('current'))
 
-    def job(kind, target, action, work):
+    def start_job(kind, target, action, work, prepare=None, finished=None):
         if not operation_lock.acquire(blocking=False):
-            return jsonify(error='已有操作正在执行，请等待结果。'), 409
+            raise OperationBusy('已有操作正在执行，请等待结果。')
         identifier = secrets.token_hex(16)
         try:
             with db() as connection:
                 connection.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?)', (identifier, kind, target, action, 'running', now(), None, ''))
             audit(action, target, 'requested')
+            if prepare is not None and not prepare(identifier):
+                audit(action,target,'cancelled')
+                raise PlanCancelled('计划已禁用、变更或超出允许开始时间，未启动备份。')
         except Exception:
-            operation_lock.release()
+            try:
+                with db() as connection:
+                    connection.execute("UPDATE jobs SET state='cancelled',completed=?,output='任务未进入执行，请核对计划与时间窗口。' WHERE id=?", (now(), identifier))
+            finally:operation_lock.release()
             raise
 
         def run():
@@ -358,12 +389,26 @@ def create_app(settings=None, docker=None):
                 output = str(error) if isinstance(error, (DockerError, ValueError, TimeoutError)) else '操作失败；请检查实际服务状态。'
                 status = 'failed'
             finally:
+                try:
+                    with db() as connection:
+                        connection.execute('UPDATE jobs SET state=?,completed=?,output=? WHERE id=?', (status, now(), redact(output, [token]), identifier))
+                    audit(action, target, status)
+                    if finished is not None:finished(identifier,status)
+                finally:operation_lock.release()
+        try:threading.Thread(target=run, daemon=True).start()
+        except Exception:
+            try:
                 with db() as connection:
-                    connection.execute('UPDATE jobs SET state=?,completed=?,output=? WHERE id=?', (status, now(), redact(output, [token]), identifier))
-                audit(action, target, status)
-                operation_lock.release()
-        threading.Thread(target=run, daemon=True).start()
-        return jsonify(id=identifier), 202
+                    connection.execute("UPDATE jobs SET state='failed',completed=?,output='执行线程未启动，未开始业务操作。' WHERE id=?", (now(),identifier))
+                audit(action,target,'failed')
+                if finished is not None:finished(identifier,'failed')
+            finally:operation_lock.release()
+            raise
+        return identifier
+
+    def job(kind, target, action, work):
+        try:return jsonify(id=start_job(kind,target,action,work)), 202
+        except OperationBusy:return jsonify(error='已有操作正在执行，请等待结果。'), 409
 
     def command_payload():
         body = request.get_json()
@@ -476,6 +521,14 @@ def create_app(settings=None, docker=None):
         with db() as connection:
             return jsonify(jobs=[dict(row) for row in connection.execute('SELECT * FROM jobs ORDER BY created DESC LIMIT 30')])
 
+    @app.get('/api/jobs/<identifier>')
+    def job_detail(identifier):
+        if not re.fullmatch(r'[a-f0-9]{32}',identifier):return jsonify(error='任务身份格式不正确。'),404
+        with db() as connection:
+            row=connection.execute('SELECT * FROM jobs WHERE id=?',(identifier,)).fetchone()
+        if row is None:return jsonify(error='任务记录不存在，请核对备份清单。'),404
+        return jsonify(job=dict(row))
+
     @app.get('/api/audit')
     def audits():
         with db() as connection:
@@ -483,6 +536,96 @@ def create_app(settings=None, docker=None):
 
     def backup_instances():
         return [p for p in managed_projects() if p != PROJECT]
+
+    versions=ImageVersions(engine,config,app.config['VERSION_CATALOG'],backup_instances,managed_containers,backup_manager.records)
+
+    @app.get('/api/image-versions')
+    def image_versions_list():
+        if request.args:return jsonify(error='版本接口不接受自定义 URL 或参数。'),400
+        try:return jsonify(versions.listing())
+        except (OSError,ValueError,TypeError):return jsonify(error='无法读取登记实例的镜像配置。'),409
+
+    @app.get('/api/image-versions/<instance>')
+    @app.get('/api/image-versions/<instance>/local/<identifier>')
+    @app.get('/api/image-versions/<instance>/preview/<identifier>')
+    def image_version_detail(instance,identifier=None):
+        if request.args:return jsonify(error='版本接口不接受自定义目标或参数。'),400
+        try:
+            if identifier is None:return jsonify(versions.current(instance))
+            if '/preview/' in request.path:return jsonify(versions.preview(instance,identifier))
+            return jsonify(versions.local(instance,identifier))
+        except KeyError:return jsonify(error='请选择已登记实例和目录中的候选版本。'),404
+        except (OSError,ValueError,TypeError):return jsonify(error='镜像目录或配置异常，未生成升级预览。'),409
+
+    @app.get('/api/image-versions/check/<identifier>/evidence')
+    @app.get('/api/image-versions/check/<identifier>/registry/<role>')
+    def image_version_check(identifier,role=None):
+        if request.args:return jsonify(error='版本检查不接受自定义 URL 或参数。'),400
+        try:return jsonify(versions.check(identifier,'registry' if role is not None else 'evidence',role))
+        except VersionCheckBusy:return jsonify(error='另一个版本证据检查正在进行，请稍后重试。'),409
+        except KeyError:return jsonify(error='请选择目录中的候选版本及前后端角色。'),404
+        except (OSError,ValueError,TypeError):return jsonify(error='候选目录格式异常，未接受此版本。'),409
+
+    plans = BackupPlans(state, backup_instances)
+
+    def scheduled_backup(plan, at):
+        instance=plan['instance']
+        def work(identifier):
+            if instance not in backup_instances():raise ValueError('实例已取消登记，未启动备份。')
+            containers={c['Labels']['com.docker.compose.service']:c for c in managed_containers()
+                        if c['Labels']['com.docker.compose.project']==instance}
+            output=backup_manager.create(instance,containers,identifier)
+            backup_manager.verify(instance,identifier)
+            plans.stage(instance,identifier,backup_state='ready')
+            if plan['auto_prune']:
+                try:
+                    cleanup=backup_manager.prune(instance,plan['keep'],require_valid_survivor=True)
+                    plans.stage(instance,identifier,cleanup_state='success')
+                    output+='\n'+cleanup
+                except Exception:
+                    plans.stage(instance,identifier,cleanup_state='failed')
+                    raise ValueError('本次备份已生成并通过校验，但自动清理未完成；请查看备份及操作记录，未自动重试。') from None
+            return output
+        return start_job('backup',instance,'backup-scheduled',work,
+            prepare=lambda identifier:plans.claim(instance,plan['revision'],plan['next_run_at'],identifier,scheduler.clock()),
+            finished=lambda identifier,status:plans.finish(instance,identifier,status))
+
+    scheduler=BackupScheduler(plans,scheduled_backup,bool(app.config['BACKUP_SCHEDULER_ENABLED']),audit,
+                              clock=app.config.get('BACKUP_SCHEDULER_CLOCK'))
+    app.extensions['backup_plans']=plans
+    app.extensions['backup_scheduler']=scheduler
+    try:plans.recover()
+    except (OSError,ValueError,TypeError):scheduler.error='计划文件读取失败；不会覆盖原文件或启动计划备份。'
+
+    @app.get('/api/backup-plans')
+    def list_backup_plans():
+        try:rows=plans.listing()
+        except (OSError,ValueError,TypeError):return jsonify(error='无法读取备份计划；请检查私有计划文件，原文件不会被覆盖。'),409
+        return jsonify(plans=rows,scheduler_enabled=scheduler.enabled,
+                       scheduler_running=bool(scheduler.worker and scheduler.worker.is_alive() and scheduler.lease),
+                       scheduler_error=scheduler.error,
+                       scope='全实例维护备份；开启后短暂停止所选实例前后端。允许迟到只限制开始时间，不限制备份完成时长。')
+
+    @app.post('/api/backup-plans/<instance>')
+    def update_backup_plan(instance):
+        body=command_payload()
+        if instance not in backup_instances():return jsonify(error='请选择明确登记的 PowerX 实例。'),404
+        if body.get('confirmation')!=instance:return jsonify(error='请输入完整实例名确认。'),400
+        try:
+            if body.get('action')=='save':
+                config=body.get('plan')
+                if isinstance(config,dict) and config.get('enabled') is True and body.get('maintenance_ack') is not True:
+                    return jsonify(error='启用前请明确确认暂停前后端的维护影响。'),400
+                if isinstance(config,dict) and config.get('auto_prune') is True and body.get('prune_ack') is not True:
+                    return jsonify(error='开启自动清理前请确认删除旧成功备份的影响。'),400
+                row=plans.update(instance,config,body.get('revision'))
+            elif body.get('action')=='disable':row=plans.disable(instance,body.get('revision'))
+            else:return jsonify(error='请选择保存或禁用计划。'),400
+        except PlanConflict as error:return jsonify(error=str(error)),409
+        except (ValueError,TypeError):return jsonify(error='计划字段无效或计划文件异常，请重新读取并核对时间、份数和版本。'),400
+        except OSError:return jsonify(error='无法保存计划，请核对私有目录权限。'),409
+        audit('backup-plan-'+body['action'],instance,'success')
+        return jsonify(plan=row,scheduler_enabled=scheduler.enabled)
 
     def instance_config(project):
         backend = next((c for c in managed_containers()
@@ -574,4 +717,6 @@ def create_app(settings=None, docker=None):
         response.headers['X-Backup-SHA256'] = record['bundle_sha256']
         return response
 
+    if scheduler.enabled and not app.config.get('TESTING'):
+        scheduler.start()
     return app

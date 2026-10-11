@@ -6,3 +6,4 @@ __pycache__/
 certbot/*.local.json
 instances/*/config/
 instances/*/instance.json
+apps/powerx/versions.local.json
