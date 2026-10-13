@@ -33,6 +33,12 @@ token.chmod(0o600)
 if os.geteuid() == 0:
     os.chown(state, owner.st_uid, owner.st_gid)
     os.chown(token, owner.st_uid, owner.st_gid)
+queue = Path('data/github-webhook/inbox')
+if any(p.is_symlink() for p in (queue,*queue.parents)):
+    raise SystemExit('Refusing symlink webhook queue.')
+queue.mkdir(mode=0o700,parents=True,exist_ok=True)
+queue.chmod(0o700)
+if os.geteuid() == 0: os.chown(queue, owner.st_uid, owner.st_gid)
 backups = Path('data/instance-backups')
 backups.mkdir(mode=0o700, parents=True, exist_ok=True)
 backups.chmod(0o700)

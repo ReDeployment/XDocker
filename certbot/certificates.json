@@ -66,6 +66,13 @@
         "shopify.artisan-cloud.com"
       ],
       "enabled": true
+    },
+    {
+      "name": "hooks.artisan-cloud.com",
+      "domains": [
+        "hooks.artisan-cloud.com"
+      ],
+      "enabled": true
     }
   ]
 }

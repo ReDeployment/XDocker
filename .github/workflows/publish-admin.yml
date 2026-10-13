@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - services/admin/**
+      - services/github-webhook/**
       - scripts/admin*.sh
       - scripts/admin*.py
       - scripts/preflight*
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - services/admin/**
+      - services/github-webhook/**
       - scripts/admin*.sh
       - scripts/admin*.py
       - scripts/preflight*

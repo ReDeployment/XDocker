@@ -99,7 +99,7 @@ sudo sh scripts/hosting.sh https powerxdoc
 
 服务器只需要 Docker、Compose 和 POSIX shell，不需要宿主机安装 Nginx、Certbot 或 Node。
 
-证书清单独立于网站配置，已登记 8 份证书/10 个域名；新服务器执行 `sudo sh scripts/certificates.sh list` 和 `sudo sh scripts/certificates.sh preflight`；旧机的 `--host` 只是可选兼容入口。详细步骤见 [证书管理指南](docs/guides/certificates/README.md)。
+证书清单独立于网站配置，当前登记 10 个证书条目/12 个域名，包含独立的 `hooks.artisan-cloud.com` Webhook 证书（登记不代表已签发）；新服务器执行 `sudo sh scripts/certificates.sh list` 和 `sudo sh scripts/certificates.sh preflight`；旧机的 `--host` 只是可选兼容入口。详细步骤见 [证书管理指南](docs/guides/certificates/README.md)。
 
 完整步骤见 [多站点部署指南](docs/guides/hosting/README.md) 和 [PowerXDoc 镜像推送指南](docs/guides/powerxdoc/README.md)。
 

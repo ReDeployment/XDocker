@@ -4,7 +4,7 @@
 
 ## 1. 清单与网站部署独立
 
-证书清单为 `certbot/certificates.json`，已按你提供的 `certbot certificates` 输出登记 **8 份证书、10 个域名**。不在配置中保存旧有效期、序列号、证书或私钥；运行时读取真实证书。
+证书清单为 `certbot/certificates.json`，原始服务器快照为 8 份证书/10 个域名；当前清单已扩展为 **10 个证书条目、12 个域名**，包含独立的 `hooks.artisan-cloud.com` Webhook 证书。清单登记不代表已完成签发。不在配置中保存旧有效期、序列号、证书或私钥；运行时读取真实证书。
 
 ```json
 {
@@ -28,7 +28,7 @@
 
 `name` 必须与 Certbot 的 **Certificate Name** 一致，不一定等于你正在访问的域名。一个 SAN 证书始终作为一组管理，不会把三个域名拆散或缩减为一个。新增域名或变更分组先核实实际证书，再修改清单；不匹配时工具会拒绝续期，不会静默修改 SAN。
 
-默认清单启用全部 8 份。每台服务器只保留实际承担的证书项为 `enabled: true`。可复制为 `certbot/certificates.local.json` 并修改，根目录 `.env` 设置 `CERTIFICATES_INVENTORY=./certbot/certificates.local.json`；该本地文件已被 Git 忽略。证书管理不依赖 `ENABLED_SITES`，也不要求网站镜像已经发布。
+默认清单中 `debug-powerx-local.artisan-cloud.com` 暂未启用，其余条目包含 Webhook 域名已启用。每台服务器只保留实际承担的证书项为 `enabled: true`。可复制为 `certbot/certificates.local.json` 并修改，根目录 `.env` 设置 `CERTIFICATES_INVENTORY=./certbot/certificates.local.json`；该本地文件已被 Git 忽略。证书管理不依赖 `ENABLED_SITES`，也不要求网站镜像已经发布。
 
 按 2026-10-06 提供的快照，优先级为：Shopify 已过期 → powerx-dev 约 5 天 → artisan-cloud、PowerWechat、PowerX 约 13 天。脚本输出会按运行时真实日期重新计算，快照不是当前状态的保证。
 
@@ -62,7 +62,7 @@ sudo sh scripts/certificates.sh verify powerx-doc.artisan-cloud.com --match-loca
 
 ### 2.1 新服务器只准备证书验证入口
 
-先配置公共 `.env` 的真实 `CERTBOT_EMAIL`、80/443 端口，以及本机负责的证书清单。DNS A/AAAA 需指向新服务器，公网 80 可达；所有 SAN 域名都需要能通过验证。
+先配置公共 `.env` 的真实 `CERTBOT_EMAIL`、80/443 端口，以及本机负责的证书清单。目标公网 IPv4/IPv6 统一在根 `.env` 的 `PREFLIGHT_EXPECTED_IPS` 配置，部署检查会核对 DNS 指向；该配置不自动修改 DNS。DNS A/AAAA 需指向这些地址，公网 80 可达；所有 SAN 域名都需要能通过验证。
 
 ```bash
 sudo sh scripts/certificates.sh acme-http

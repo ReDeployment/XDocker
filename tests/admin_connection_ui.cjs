@@ -11,6 +11,12 @@ function fixture(){
   const refs={backend:'ghcr.io/artisancloud/powerx-backend@sha256:'+'a'.repeat(64),'web-admin':'ghcr.io/artisancloud/powerx-web-admin@sha256:'+'b'.repeat(64)};
   state.versionCandidate={id:'dev-fixture',channel:'dev',version:'sha-'+'c'.repeat(40),source_revision:'c'.repeat(40),images:refs,evidence:{run_id:12345,release_tag:null},migration:{status:'none',from_revisions:['d'.repeat(40)],notes:'fixture migration',rollback:'compatible'}};
   state.versionCandidates=[];state.versionProofs=[];
+  state.githubProjects=['PowerX','PowerXPlugin','PowerXPluginSCRM','PowerXPluginECommerce','PowerXPluginMediaXStudio','PowerXPluginCRM'].map(project=>({project,
+    repository:(['PowerXPluginMediaXStudio','PowerXPluginCRM'].includes(project)?'Matrix-X/':'ArtisanCloud/')+project,
+    enabled:true,branches:[],required_checks:[],revision:'fixture-'+project,status:'not-collected',success_at:null,retry_at:0,snapshot:null}));
+  state.githubWebhooks={ready:false,pending:null,auto_import_enabled:false,error:'webhook-queue-unavailable'};
+  state.githubNotifications=[{id:1,project:'PowerX',at:new Date().toISOString(),read:false,payload:{title:'Review comment',kind:'comment',
+    body:'<script>do not execute</script>',sha:'a'.repeat(40),binding:'historical',url:'https://github.com/ArtisanCloud/PowerX/pull/1'}}];
   const configured=Object.fromEntries(Object.entries(refs).map(([r,reference])=>[r,{reference,pin:'digest',tag_revision:null}]));
   const runtime=Object.fromEntries(Object.entries(refs).map(([r,reference],n)=>[r,{state:'running',health:'healthy',configuration_match:'matches',source_revision:'d'.repeat(40),image_id:'sha256:'+String(n+1).repeat(64),repo_digests:[reference]}]));
   state.versionCurrent={instance:'powerx-a',at:new Date().toISOString(),configured,runtime,pair:{state:'matched',source_revision:'d'.repeat(40)}};
@@ -38,6 +44,19 @@ function fixture(){
         state.authenticated=true;
       }
       if(!state.authenticated)return {ok:false,status:401,json:async()=>({error:'请先登录'})};
+      if(path==='github/summary')return {ok:true,status:200,json:async()=>({unread:state.githubNotifications.filter(n=>!n.read).length})};
+      if(path==='github')return {ok:true,status:200,json:async()=>({projects:state.githubProjects,notifications:state.githubNotifications,unread:state.githubNotifications.filter(n=>!n.read).length,
+        auto_enabled:false,interval_seconds:300,running:false,next_before:null,error:null,webhooks:state.githubWebhooks,publish_authorized:false})};
+      if(path==='github/action'){
+        const body=JSON.parse(options.body);state.lastGithubBody=body;
+        if(body.action==='read')state.githubNotifications.filter(n=>body.ids.includes(n.id)).forEach(n=>n.read=true);
+        if(body.action==='configure'){
+          const row=state.githubProjects.find(p=>p.project===body.project);
+          assert.equal(body.revision,row.revision);Object.assign(row,{enabled:body.enabled,branches:body.branches,required_checks:body.required_checks});
+        }
+        if(body.action==='consume-webhooks'){state.githubWebhooks.pending=0;return {ok:true,status:200,json:async()=>({imported:1,acknowledged:1,github_writes:false})};}
+        assert(['sync','read','configure'].includes(body.action));return {ok:true,status:body.action==='sync'?202:200,json:async()=>({saved:true,github_writes:false})};
+      }
       if(path==='image-versions')return {ok:true,status:200,json:async()=>({instances:[{instance:'powerx-a',environment:'dev',configured}],candidates:state.versionCandidates,checks:state.versionProofs,catalog_error:null,catalog_notice:'fixture declared catalog'})};
       if(path.startsWith('image-versions/check/')){
         if(state.versionBusy)return {ok:false,status:409,json:async()=>({error:'另一个版本证据检查正在进行'})};
@@ -74,6 +93,7 @@ function fixture(){
     }
   });
   vm.runInContext(source,context);
+  vm.runInContext(fs.readFileSync(require('path').join(__dirname,'../services/admin/static/github.js'),'utf8'),context);
   return {state,context,element,handlers,requests,timers,run:code=>vm.runInContext(code,context)};
 }
 async function login(f){f.element('token').value='fixture-token';await f.handlers['login-form:submit']({preventDefault(){},submitter:f.element('login-submit')});}
@@ -175,6 +195,26 @@ async function login(f){f.element('token').value='fixture-token';await f.handler
   v.state.versionBusy=true;await versionClick({versionCheck:'dev-fixture'});assert.match(v.element('content').innerHTML,/另一个版本证据检查/);
   assert.equal(v.run('imageVersions.preview.applied'),false);
   v.element('version-channel').value='stable';v.handlers['document:change']({target:v.element('version-channel')});assert.match(v.element('content').innerHTML,/尚无有效候选记录/);
+  const z=fixture();await flush();z.state.mode='engineoffline';await login(z);
+  const githubClick=dataset=>z.handlers['document:click']({target:{closest(){return {dataset,disabled:false};}}});
+  await githubClick({tab:'github'});assert.match(z.element('content').innerHTML,/PowerXPluginCRM/);assert.match(z.element('content').innerHTML,/PowerXPluginMediaXStudio/);
+  assert.match(z.element('content').innerHTML,/自动采集关闭/);assert.match(z.element('content').innerHTML,/&lt;script&gt;/);
+  assert.equal(z.run('githubWritable()'),true);const githubPosts=z.state.posts;
+  z.handlers.poll();await flush();await flush();assert.equal(z.state.posts,githubPosts);
+  await githubClick({githubSync:'PowerXPluginCRM'});assert.equal(z.state.lastGithubBody.project,'PowerXPluginCRM');
+  await githubClick({githubRead:'visible'});assert.equal(z.run('githubData.unread'),0);
+  await githubClick({githubConfigure:'PowerX'});z.element('github-enabled').checked=false;z.element('github-branches').value='develop';z.element('github-required').value='lint\nunit-tests';
+  await githubClick({githubSave:'yes'});assert.equal(z.state.lastGithubBody.enabled,false);assert.equal(z.state.githubProjects[0].enabled,false);
+  z.state.githubWebhooks={ready:true,pending:1,auto_import_enabled:false,last_received_at:'2026-10-12T00:00:00Z',error:''};await githubClick({githubRefresh:'yes'});
+  assert.match(z.element('content').innerHTML,/Webhook 接收队列/);assert.match(z.element('content').innerHTML,/自动导入关闭/);
+  const hookBefore=z.state.posts;await githubClick({githubImport:'yes'});assert.equal(z.state.posts,hookBefore+1);assert.equal(z.state.lastGithubBody.action,'consume-webhooks');assert.match(z.element('notice').textContent,/已导入 1 条/);assert.equal(z.run('githubData.webhooks.pending'),0);
+  z.handlers.poll();await flush();await flush();assert.equal(z.state.posts,hookBefore+1);
+  z.run("githubData.notifications=[{id:93,project:'PowerX',at:'2026-10-12T00:00:00Z',read:false,payload:{source:'signed-webhook',event:'workflow_run',title:'<script>hook</script>',delivery:'<svg>',sha:'b'.repeat(40),attempt:2,binding:'event-sha-needs-refresh'}}]");z.run('render()');
+  assert.match(z.element('content').innerHTML,/已验签 Webhook/);assert.match(z.element('content').innerHTML,/&lt;svg&gt;/);assert.match(z.element('content').innerHTML,/尝试 2/);
+  const gitControlPosts=z.state.posts;z.context.navigator.onLine=false;z.handlers['window:offline']();assert.equal(z.run('githubWritable()'),false);
+  await assert.rejects(z.run("api('github/action',{action:'sync',project:'all'})"));await assert.rejects(z.run("api('github/action',{action:'consume-webhooks'})"));assert.equal(z.state.posts,gitControlPosts);
+  assert(!z.run("githubLink('javascript:alert(1)','unsafe')").includes('href='));
+  console.log('GitHub observer UI passed: six projects, Docker-independent metadata controls, text-only comments, local configuration, read receipts, GET-only polling and offline refusal.');
   console.log('Admin UI connection checks passed: offline/timeout/unreachable/5xx/401/403, stale data, GET-only recovery, no POST or token replay.');
   console.log('Preflight UI checks passed: missing snapshot, explicit GET-only checks, unknown host report, partial results, busy response, cancellation, no polling retries.');
   console.log('Backup plan UI checks passed: disabled defaults, explicit maintenance/prune acknowledgments, target confirmation, global gate warning, optimistic conflict, disable, GET-only polling.');
