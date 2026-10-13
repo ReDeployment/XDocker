@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-REAL_DOCKER = shutil.which("docker")
+REAL_DOCKER = None if os.getenv("XDOCKER_TEST_NO_DOCKER") == "1" else shutil.which("docker")
 
 
 class HostingTests(unittest.TestCase):
@@ -62,6 +62,30 @@ esac
 
     def config_path(self, key):
         return self.root / f"data/nginx/{key}.conf"
+
+    def test_webhook_uses_isolated_service_and_https_only_intake(self):
+        self.edit(self.root / '.env', 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="github-webhook"')
+        self.edit(self.root / '.env', '"powerxdoc"', '"powerxdoc github-webhook"')
+        self.edit(self.root / 'services/github-webhook/.env', 'REPLACE_WITH_PUBLISHED_TAG', 'sha-fixture')
+        self.run_action('http', 'github-webhook', '--no-pull')
+        config = self.config_path('github-webhook').read_text()
+        self.assertIn('return 503', config)
+        self.assertNotIn('proxy_pass', config)
+        self.assertNotIn('sites/github-webhook/compose.yml', self.calls())
+        self.assertEqual(self.calls().splitlines()[0].split(' | ')[0].count('services/github-webhook/compose.yml'), 1)
+        self.run_action('https', 'github-webhook')
+        config = self.config_path('github-webhook').read_text()
+        self.assertIn('http://github-webhook:8080', config)
+        self.assertIn('client_max_body_size 2m', config)
+        self.assertIn('limit_except POST', config)
+        self.assertIn('location / { return 404; }', config)
+        self.assertNotIn('/api/', config)
+
+    def test_webhook_ingress_requires_explicit_service_enable(self):
+        self.edit(self.root / '.env', '"powerxdoc"', '"powerxdoc github-webhook"')
+        result=self.run_action('compose','config',success=False)
+        self.assertIn('Enable github-webhook', result.stderr)
+        self.assertEqual(self.calls(),'')
 
     def test_init_preserves_global_and_site_settings(self):
         self.edit(self.root / "sites/powerxdoc/.env", "powerx-doc.artisan-cloud.com", "docs.example.com")

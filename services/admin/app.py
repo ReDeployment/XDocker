@@ -23,6 +23,8 @@ from instances import InstanceReader, setup_fields, password_for
 from preflight import Preflight, BusyCheck
 from backup_plans import BackupPlans, BackupScheduler, PlanConflict, OperationBusy, PlanCancelled
 from image_versions import ImageVersions, VersionCheckBusy
+from github_watch import GitHubWatch, WatchError
+from github_webhooks import WebhookInbox
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -90,6 +92,22 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def webhook_probe(opener, domain):
+    """Validate TLS and the receiver rejection path without a signature or queued event."""
+    request = urllib.request.Request('https://'+domain+'/github/webhook/PowerX', data=b'{}',
+                                     headers={'Content-Type':'application/json'}, method='POST')
+    try:
+        with opener.open(request, timeout=10) as response:
+            raise ValueError('Webhook accepted an unsigned probe: HTTP '+str(response.status))
+    except urllib.error.HTTPError as error:
+        try:
+            body = error.read(4097)
+            rejected = error.code == 401 and len(body) <= 4096 and json.loads(body).get('error') == 'invalid-signature'
+            if not rejected: raise ValueError('Webhook rejection did not match: HTTP '+str(error.code))
+        finally: error.close()
+    return 'reachable', 'HTTPS 401 · 验签入口可达，无签名请求已拒绝；未创建事件'
+
+
 def create_app(settings=None, docker=None):
     app = Flask(__name__, static_folder='static', static_url_path='/assets')
     app.config.update(STATE=os.getenv('ADMIN_STATE', '/state'), CONFIG=os.getenv('ADMIN_CONFIG', '/config'),
@@ -97,6 +115,10 @@ def create_app(settings=None, docker=None):
                       BACKUPS=os.getenv('ADMIN_BACKUPS', '/backups'), HOST_ROOT=os.getenv('ADMIN_HOST_ROOT', ''),
                       BACKUP_SCHEDULER_ENABLED=os.getenv('ADMIN_BACKUP_SCHEDULER_ENABLED', 'false')=='true',
                       VERSION_CATALOG=os.getenv('ADMIN_VERSION_CATALOG', '/config/powerx-versions.json'),
+                      GITHUB_WATCH_ENABLED=os.getenv('ADMIN_GITHUB_WATCH_ENABLED','false')=='true',
+                      GITHUB_WATCH_INTERVAL=os.getenv('ADMIN_GITHUB_WATCH_INTERVAL','300'),
+                      GITHUB_WEBHOOK_QUEUE=os.getenv('ADMIN_GITHUB_WEBHOOK_QUEUE','/github-inbox'),
+                      GITHUB_WEBHOOK_ENABLED=os.getenv('ADMIN_GITHUB_WEBHOOK_ENABLED','false')=='true',
                       TRUSTED_HOSTS=['localhost', '127.0.0.1', '[::1]'])
     app.config.update(settings or {})
     state, config, reports = (Path(app.config[name]) for name in ('STATE', 'CONFIG', 'REPORTS'))
@@ -109,6 +131,14 @@ def create_app(settings=None, docker=None):
     operation_lock = threading.Lock()
     backup_manager = InstanceBackups(engine, app.config['BACKUPS'], app.config['HOST_ROOT'])
     instance_reader = InstanceReader(engine, app.config['HOST_ROOT'])
+
+    try:watch_interval=int(app.config['GITHUB_WATCH_INTERVAL'])
+    except (TypeError,ValueError):watch_interval=300
+    watch_interval=max(60,min(3600,watch_interval))
+    watch=GitHubWatch(state,bool(app.config['GITHUB_WATCH_ENABLED']),watch_interval)
+    app.extensions['github_watch']=watch
+    hooks=WebhookInbox(watch.store,app.config['GITHUB_WEBHOOK_QUEUE'],bool(app.config['GITHUB_WEBHOOK_ENABLED']))
+    app.extensions['github_webhooks']=hooks
 
     def db():
         connection = sqlite3.connect(database, timeout=10)
@@ -502,9 +532,12 @@ def create_app(settings=None, docker=None):
             for site in sites:
                 url = 'https://'+site['domain']+('/healthz' if site['kind'] == 'frp_http' else '/')
                 try:
-                    with opener.open(url, timeout=10) as response:
-                        code = response.status
-                    status, detail = ('reachable', f'HTTPS {code}') if code == 200 else ('failed', f'HTTPS {code}')
+                    if site['kind'] == 'github_webhook':
+                        status, detail = webhook_probe(opener, site['domain'])
+                    else:
+                        with opener.open(url, timeout=10) as response:
+                            code = response.status
+                        status, detail = ('reachable', f'HTTPS {code}') if code == 200 else ('failed', f'HTTPS {code}')
                 except Exception as error:
                     status, detail = 'failed', type(error).__name__ + ': ' + redact(str(error), [token])[:300]
                 failures += int(status == 'failed')
@@ -533,6 +566,47 @@ def create_app(settings=None, docker=None):
     def audits():
         with db() as connection:
             return jsonify(events=[dict(row) for row in connection.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 100')])
+
+    @app.get('/api/github')
+    def github_observations():
+        if set(request.args)-{'before'}:return jsonify(error='不接受自定义 GitHub 查询或目标。'),400
+        cursor=request.args.get('before')
+        if cursor is not None and (not re.fullmatch(r'[0-9]{1,19}',cursor) or not 0<int(cursor)<2**63):
+            return jsonify(error='通知游标不合法。'),400
+        try:
+            data=watch.listing(int(cursor) if cursor else None);data['webhooks']=hooks.status()
+            return jsonify(data)
+        except (WatchError,OSError,sqlite3.DatabaseError,ValueError):return jsonify(error='GitHub 观察记录不可读；原文件保留，未启动采集。'),409
+
+    @app.get('/api/github/summary')
+    def github_observation_summary():
+        if request.args:return jsonify(error='不接受自定义查询。'),400
+        try:
+            if not watch.store or watch.error:raise WatchError('watch-store-unavailable')
+            return jsonify(watch.store.summary())
+        except (WatchError,OSError,sqlite3.DatabaseError,ValueError):return jsonify(error='GitHub 通知状态未确认。'),409
+
+    @app.post('/api/github/action')
+    def github_observation_action():
+        body=command_payload();action=body.get('action')
+        fields={'sync':{'action','project'},'read':{'action','ids'},'consume-webhooks':{'action'},
+                'configure':{'action','project','revision','enabled','branches','required_checks'}}
+        if request.args or action not in fields or set(body)!=fields[action]:return jsonify(error='仅支持采集、导入 Webhook、标记已读和本地观察配置。'),400
+        try:
+            if not watch.store or watch.error:raise WatchError('watch-store-unavailable')
+            if action=='consume-webhooks':
+                result=hooks.consume();audit('github-webhook-import','inbox','success')
+                return jsonify(result)
+            if action=='sync':
+                selected=watch.sync(body['project']);audit('github-sync',body['project'],'requested')
+                return jsonify(projects=selected,running=True,github_writes=False),202
+            if action=='read':watch.store.mark_read(body['ids'])
+            else:watch.store.configure(body['project'],body['revision'],body['enabled'],body['branches'],body['required_checks'])
+            audit('github-'+action,body.get('project','inbox'),'success')
+            return jsonify(saved=True,github_writes=False)
+        except (WatchError,OSError,sqlite3.DatabaseError,ValueError,TypeError) as error:
+            code=str(error) if isinstance(error,WatchError) else 'watch-operation-unconfirmed'
+            return jsonify(error='GitHub 观察操作未完成：'+code),409
 
     def backup_instances():
         return [p for p in managed_projects() if p != PROJECT]
@@ -719,4 +793,6 @@ def create_app(settings=None, docker=None):
 
     if scheduler.enabled and not app.config.get('TESTING'):
         scheduler.start()
+    if watch.enabled and not app.config.get('TESTING'):watch.start()
+    if hooks.enabled and not app.config.get('TESTING'):hooks.start()
     return app

@@ -67,6 +67,12 @@ load_site() {
         SITE_SERVICE="$SITE_INSTANCE-web"
         return
     fi
+    if [ "$SITE_KIND" = github_webhook ]; then
+        [ "$1" = github-webhook ] || die 'Use the single github-webhook site key.'
+        case " ${ENABLED_SERVICES:-} " in *" github-webhook "*) ;; *) die 'Enable github-webhook in ENABLED_SERVICES first.' ;; esac
+        SITE_SERVICE=github-webhook
+        return
+    fi
     if [ "$SITE_KIND" = frp_http ]; then
         case " ${ENABLED_SERVICES:-} " in *" frps "*) ;; *) die 'Enable frps in ENABLED_SERVICES first.' ;; esac
         SITE_HEALTH_PATH=${SITE_HEALTH_PATH:-/healthz}
@@ -93,6 +99,7 @@ for infrastructure in ${ENABLED_SERVICES:-}; do
         frps) infrastructure_image_var=FRPS_IMAGE ;;
         portainer) infrastructure_image_var=PORTAINER_IMAGE ;;
         admin) infrastructure_image_var=ADMIN_IMAGE ;;
+        github-webhook) infrastructure_image_var=GITHUB_WEBHOOK_IMAGE ;;
         *) die "Unknown infrastructure service: $infrastructure" ;;
     esac
     case " $infrastructure_names " in *" $infrastructure "*) die "Duplicate infrastructure: $infrastructure" ;; esac
@@ -116,7 +123,7 @@ for enabled in ${ENABLED_SITES:-}; do
         COMPOSE_FILE="$COMPOSE_FILE:sites/$enabled/compose.yml"
         continue
     fi
-    if [ "$SITE_KIND" = frp_http ]; then continue; fi
+    if [ "$SITE_KIND" = frp_http ] || [ "$SITE_KIND" = github_webhook ]; then continue; fi
     case " $services " in *" $SITE_SERVICE "*) die "Duplicate service: $SITE_SERVICE" ;; esac
     case " $image_vars " in *" $SITE_IMAGE_VAR "*) die "Duplicate image variable: $SITE_IMAGE_VAR" ;; esac
     services="$services $SITE_SERVICE"
@@ -150,6 +157,7 @@ backup="data/$site.conf.backup"
 
 render() {
     template=$1
+    if [ "$SITE_KIND" = github_webhook ]; then template="webhook-$1"; fi
     if [ "$SITE_KIND" = frp_http ]; then
         template="frp-$1"
         [ -f data/nginx/01-frp-headers.conf ] || cp nginx/frp-headers.conf data/nginx/01-frp-headers.conf

@@ -14,3 +14,7 @@ static/**
 !static/index.html
 !static/app.js
 !static/style.css
+
+!github_watch.py
+!github_webhooks.py
+!static/github.js

@@ -72,8 +72,8 @@ from pathlib import Path
 import hashlib
 root = Path('services/admin')
 names = ['.dockerignore', 'Dockerfile', 'requirements.txt', 'app.py', 'docker_api.py',
-         'backups.py', 'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py',
-         'static/index.html', 'static/app.js', 'static/style.css']
+         'backups.py', 'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py',
+         'static/index.html', 'static/app.js', 'static/github.js', 'static/style.css']
 digest = hashlib.sha256()
 for name in sorted(names):
     digest.update(name.encode() + b'\0' + (root / name).read_bytes() + b'\0')
@@ -254,3 +254,5 @@ sudo sh scripts/admin.sh start
 升级先停止管理服务并备份，发布新镜像、同步仓库、执行 `init` 更新部署 SHA，设置固定镜像 SHA 后启动。回滚恢复相应数据备份和原镜像。令牌泄露时停止管理服务，在服务器私下重新生成访问令牌并清空 SQLite sessions，再启动；不通过网页接受任意文件或命令。
 
 参考：[Docker Engine API](https://docs.docker.com/reference/api/engine/version/v1.44/)、[Flask 安全配置](https://flask.palletsprojects.com/en/stable/web-security/)、[Gunicorn 部署](https://flask.palletsprojects.com/en/stable/deploying/gunicorn/)。
+
+“研发事件”覆盖六项目的 PR、CI 与评论，自动采集和 Webhook 导入默认关闭。见 [GitHub 观察](github-watch.md) 与 [Webhook 接收配置](github-webhook.md)。

@@ -42,10 +42,10 @@
 
 ## 配置 DNS 预期地址
 
-字段来自根 `.env` 的 `PREFLIGHT_EXPECTED_IPS`，空格分隔计划使用的 IPv4/IPv6，例如：
+目标公网地址统一配置在根 `.env` 的 `PREFLIGHT_EXPECTED_IPS`，空格分隔计划使用的 IPv4/IPv6。公开 `.env.example` 默认留空，真实地址只填写在不提交 Git 的私有 `.env` 中；换服务器时修改私有配置并同步 DNS，初始化保留已有值。以下为文档示例地址：
 
 ```dotenv
-PREFLIGHT_EXPECTED_IPS="160.202.238.184"
+PREFLIGHT_EXPECTED_IPS="192.0.2.10" # 仅为文档示例，替换为实际服务器地址
 ```
 
 如正式使用 IPv6，再加入实际服务器 IPv6 地址。没有配置这个字段时，DNS 行展示解析结果和“未核对目标服务器 IP”；它不会根据浏览器本机地址或容器内网 IP 猜测公网地址。DNS 仍返回其他 A/AAAA 地址时检查失败。

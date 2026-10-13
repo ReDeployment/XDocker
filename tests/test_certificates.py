@@ -75,12 +75,15 @@ class CertificateTests(unittest.TestCase):
             code = tool.main(args)
         return code, json.loads(stdout.getvalue()) if stdout.getvalue() else {"error": stderr.getvalue()}
 
-    def test_inventory_preserves_eight_lineages_and_ten_domains(self):
+    def test_inventory_preserves_existing_lineages_and_adds_webhook(self):
         data = tool.load_inventory(ROOT / "certbot/certificates.json")
-        self.assertEqual(len(data["certificates"]), 9)
-        self.assertEqual(sum(len(item["domains"]) for item in data["certificates"]), 11)
+        self.assertEqual(len(data["certificates"]), 10)
+        self.assertEqual(sum(len(item["domains"]) for item in data["certificates"]), 12)
         debug = next(item for item in data["certificates"] if item["name"] == "debug-powerxplugin-local.artisan-cloud.com")
         self.assertEqual(len(debug["domains"]), 3)
+        hooks = next(item for item in data["certificates"] if item["name"] == "hooks.artisan-cloud.com")
+        self.assertEqual(hooks["domains"], ["hooks.artisan-cloud.com"])
+        self.assertTrue(hooks["enabled"])
 
     def test_acme_only_config_excludes_active_sites_and_its_previous_output(self):
         data = tool.load_inventory(ROOT / "certbot/certificates.json")

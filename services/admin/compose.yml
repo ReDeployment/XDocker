@@ -13,11 +13,15 @@ services:
       ADMIN_DEPLOY_REVISION: ${ADMIN_DEPLOY_REVISION:-unknown}
       ADMIN_HOST_ROOT: ${ADMIN_HOST_ROOT:?Run admin.sh init}
       ADMIN_BACKUP_SCHEDULER_ENABLED: ${ADMIN_BACKUP_SCHEDULER_ENABLED:-false}
+      ADMIN_GITHUB_WATCH_ENABLED: ${ADMIN_GITHUB_WATCH_ENABLED:-false}
+      ADMIN_GITHUB_WATCH_INTERVAL: ${ADMIN_GITHUB_WATCH_INTERVAL:-300}
+      ADMIN_GITHUB_WEBHOOK_ENABLED: ${ADMIN_GITHUB_WEBHOOK_ENABLED:-false}
     ports:
       - "127.0.0.1:${ADMIN_PORT:-9080}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/admin:/state
+      - ./data/github-webhook/inbox:/github-inbox
       - ./.env:/config/root.env:ro
       - ./sites:/config/sites:ro
       - ${CERTIFICATES_INVENTORY:-./certbot/certificates.json}:/config/certificates.json:ro

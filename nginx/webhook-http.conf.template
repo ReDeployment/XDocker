@@ -1,0 +1,11 @@
+# HTTP bootstraps ACME only; webhook payloads must arrive over HTTPS.
+server {
+    listen 80;
+    server_name __DOMAIN__;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 503; }
+}

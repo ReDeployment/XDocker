@@ -67,11 +67,11 @@ def main():
                 except OSError:pass
                 if time.monotonic()>deadline:raise RuntimeError('Temporary packaged HTTP service did not become healthy')
                 time.sleep(.2)
-            for path in ('/api/preflight','/api/backup-plans','/api/image-versions'):assert request(path)[0]==401
+            for path in ('/api/preflight','/api/backup-plans','/api/image-versions','/api/github','/api/github/summary'):assert request(path)[0]==401
             assert request('/api/login',{'token':token},origin=False)[0]==403
             status,body,headers=request('/api/login',{'token':token});assert status==200
             csrf=json.loads(body)['csrf']
-            for path in ('/api/preflight','/api/backup-plans','/api/image-versions','/api/snapshot'):
+            for path in ('/api/preflight','/api/backup-plans','/api/image-versions','/api/github','/api/snapshot'):
                 status,body,headers=request(path);assert status==200,(path,status)
                 assert token.encode() not in body;assert headers.get('Cache-Control')=='no-store'
             if revision:assert json.loads(request('/api/snapshot')[1])['image_revision']==revision
@@ -80,7 +80,9 @@ def main():
             assert json.loads(request('/api/preflight/docker-engine')[1])['result']['status']=='pass'
             assert json.loads(request('/api/preflight/host-compose')[1])['result']['status']=='unknown'
             assert request('/api/image-versions/unregistered')[0]==404
-            for name in ('index.html','app.js','style.css'):
+            assert json.loads(request('/api/github')[1])['auto_enabled'] is False
+            assert len(json.loads(request('/api/github')[1])['projects'])==6
+            for name in ('index.html','app.js','github.js','style.css'):
                 path='/' if name=='index.html' else '/assets/'+name
                 expected=(ROOT/'services/admin/static'/name).read_bytes()
                 assert hashlib.sha256(request(path)[1]).digest()==hashlib.sha256(expected).digest(),name
