@@ -56,14 +56,21 @@ def main():
                 stored=db.execute('SELECT payload FROM events').fetchone()[0]
                 assert secret not in stored and json.loads(stored)['attempt']==2
             subprocess.run(['docker','restart',container],check=True,stdout=subprocess.DEVNULL)
+            restarted_port=subprocess.check_output(['docker','port',container,'8080/tcp'],text=True).strip().split(':')[-1]
+            print('Restarted receiver port mapping:',port,'->',restarted_port)
+            base='http://127.0.0.1:'+restarted_port
+            last_status=None
             for _ in range(80):
                 try:
-                    status,data=send()
+                    status,data=send();last_status=status
                     if status==200:
                         assert data['duplicate'] is True;break
                 except OSError:pass
                 time.sleep(.25)
-            else:raise AssertionError('Delivery dedup did not survive restart')
+            else:
+                subprocess.run(['docker','inspect','--format','{{.State.Status}} exit={{.State.ExitCode}} ports={{json .NetworkSettings.Ports}}',container],check=False)
+                subprocess.run(['docker','logs','--tail','30',container],check=False)
+                raise AssertionError('Delivery dedup did not survive restart; last HTTP status='+str(last_status))
             # Test the actual published receiver bytes, not merely the build source.
             source=subprocess.check_output(['docker','exec',container,'cat','/app/receiver.py'])
             assert source==(ROOT/'services/github-webhook/receiver.py').read_bytes()
