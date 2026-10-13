@@ -4,6 +4,8 @@ import copy
 import hashlib
 import hmac
 import importlib.util
+import io
+from urllib.error import HTTPError
 import json
 from pathlib import Path
 import shutil
@@ -24,6 +26,7 @@ spec = importlib.util.spec_from_file_location('hook_receiver',ROOT/'services/git
 receiver = importlib.util.module_from_spec(spec);spec.loader.exec_module(receiver)
 from github_watch import PROJECTS, WatchStore, WatchError, collect_project
 from github_webhooks import WebhookInbox
+from app import webhook_probe
 from test_github_watch import Reader
 import test_admin
 
@@ -227,9 +230,30 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual((workspace/'.env').read_text(),'ENABLED_SERVICES=""\n');self.assertNotEqual(run('start').returncode,0)
 
 
+class WebhookProbeTests(unittest.TestCase):
+    def test_unsigned_probe_checks_exact_rejection_without_following_urls(self):
+        failure=HTTPError('https://hooks.example.com/github/webhook/PowerX',401,'Unauthorized',{},io.BytesIO(b'{"error":"invalid-signature"}'))
+        opener=unittest.mock.Mock();opener.open.side_effect=failure
+        state,detail=webhook_probe(opener,'hooks.example.com')
+        self.assertEqual(state,'reachable');self.assertIn('未创建事件',detail)
+        request=opener.open.call_args.args[0]
+        self.assertEqual(request.full_url,'https://hooks.example.com/github/webhook/PowerX')
+        self.assertEqual(request.get_method(),'POST');self.assertEqual(request.data,b'{}')
+        self.assertFalse(request.has_header('Authorization'));self.assertFalse(request.has_header('X-hub-signature-256'))
+        self.assertTrue(failure.closed)
+
+    def test_other_401_and_redirect_are_not_accepted(self):
+        for code,body in ((401,b'{"error":"login-required"}'),(302,b'{}'),(503,b'{"error":"secret-unavailable"}')):
+            failure=HTTPError('https://hooks.example.com',code,'fixture',{},io.BytesIO(body))
+            opener=unittest.mock.Mock();opener.open.side_effect=failure
+            with self.assertRaises(ValueError):webhook_probe(opener,'hooks.example.com')
+            self.assertTrue(failure.closed)
+
+
 class HookAdminTests(unittest.TestCase):
     post = test_admin.AdminTests.post
     login = test_admin.AdminTests.login
+    wait_job = test_admin.AdminTests.wait_job
     def setUp(self):
         test_admin.AdminTests.setUp(self)
         self.root=self.root.resolve()
@@ -237,6 +261,23 @@ class HookAdminTests(unittest.TestCase):
         self.hooks.file=self.queue_root/'queue.sqlite3';self.queue=receiver.Queue(self.queue_root)
         data={'repository':{'full_name':PROJECTS['PowerX']},'workflow_run':{'id':1,'head_sha':SHA,'name':'CI','conclusion':'failure'}}
         self.queue.accept(str(uuid.uuid4()),'a'*64,'PowerX','workflow_run',receiver.normalize('PowerX','workflow_run',data,SECRET))
+
+    def test_registered_hook_site_uses_rejection_probe_and_records_success(self):
+        site=self.root/'config/sites/github-webhook';site.mkdir()
+        (site/'site.conf').write_text('SITE_KIND=github_webhook\nSITE_SERVICE=github-webhook\n')
+        (site/'.env').write_text('SITE_DOMAIN=hooks.example.com\n')
+        env=self.root/'config/root.env';env.write_text(env.read_text().replace('ENABLED_SITES="powerxdoc"','ENABLED_SITES="powerxdoc github-webhook"'))
+        self.login()
+        failure=HTTPError('https://hooks.example.com',401,'fixture',{},io.BytesIO(b'{"error":"invalid-signature"}'))
+        with patch('app.urllib.request.build_opener') as factory:
+            factory.return_value.open.side_effect=failure
+            response=self.post('/api/sites/probe',{'site':'github-webhook'})
+            self.assertEqual(response.status_code,202)
+            self.assertEqual(self.wait_job(response.json['id'])['state'],'success')
+            self.assertEqual(factory.return_value.open.call_args.args[0].get_method(),'POST')
+        sites=self.client.get('/api/snapshot').json['sites']
+        saved=next(row for row in sites if row['key']=='github-webhook')
+        self.assertEqual(saved['kind'],'github_webhook');self.assertEqual(saved['probe']['status'],'reachable')
 
     def test_hook_import_requires_session_csrf_and_origin_but_no_docker(self):
         before=list(self.docker.calls)

@@ -38,3 +38,5 @@ python3 scripts/prepare-github-release.py
 - 尚未执行 GitHub CI、实际容器/Nginx 验收、镜像发布、服务器同步、证书签发或六项目 webhook 配置；本机 Docker 未使用。
 
 最终待审查补丁与哈希位于 Git 忽略的 `data/release-previews/github-watch-20261013-final/`。生成器会同步保留这份审查文档，部署指南见 [Webhook](../guides/admin/github-webhook.md)。
+
+发布阶段已授权：2026-10-13，用户“需要”确认提交/推送、PR 合并、镜像发布及服务器部署。独立分支已推送，PR #2（https://github.com/ReDeployment/XDocker/pull/2）验证中。首轮 receiver smoke 重启后访问旧随机端口失败；重新读取映射后两平台验证通过。额外修正 Webhook 站点标签及无签名拒绝探测，避免预期首页 404 被误报为故障。尚未合并/部署或创建六项目回调。

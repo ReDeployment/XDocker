@@ -92,6 +92,22 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def webhook_probe(opener, domain):
+    """Validate TLS and the receiver rejection path without a signature or queued event."""
+    request = urllib.request.Request('https://'+domain+'/github/webhook/PowerX', data=b'{}',
+                                     headers={'Content-Type':'application/json'}, method='POST')
+    try:
+        with opener.open(request, timeout=10) as response:
+            raise ValueError('Webhook accepted an unsigned probe: HTTP '+str(response.status))
+    except urllib.error.HTTPError as error:
+        try:
+            body = error.read(4097)
+            rejected = error.code == 401 and len(body) <= 4096 and json.loads(body).get('error') == 'invalid-signature'
+            if not rejected: raise ValueError('Webhook rejection did not match: HTTP '+str(error.code))
+        finally: error.close()
+    return 'reachable', 'HTTPS 401 · 验签入口可达，无签名请求已拒绝；未创建事件'
+
+
 def create_app(settings=None, docker=None):
     app = Flask(__name__, static_folder='static', static_url_path='/assets')
     app.config.update(STATE=os.getenv('ADMIN_STATE', '/state'), CONFIG=os.getenv('ADMIN_CONFIG', '/config'),
@@ -516,9 +532,12 @@ def create_app(settings=None, docker=None):
             for site in sites:
                 url = 'https://'+site['domain']+('/healthz' if site['kind'] == 'frp_http' else '/')
                 try:
-                    with opener.open(url, timeout=10) as response:
-                        code = response.status
-                    status, detail = ('reachable', f'HTTPS {code}') if code == 200 else ('failed', f'HTTPS {code}')
+                    if site['kind'] == 'github_webhook':
+                        status, detail = webhook_probe(opener, site['domain'])
+                    else:
+                        with opener.open(url, timeout=10) as response:
+                            code = response.status
+                        status, detail = ('reachable', f'HTTPS {code}') if code == 200 else ('failed', f'HTTPS {code}')
                 except Exception as error:
                     status, detail = 'failed', type(error).__name__ + ': ' + redact(str(error), [token])[:300]
                 failures += int(status == 'failed')

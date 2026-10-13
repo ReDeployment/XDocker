@@ -70,6 +70,8 @@ def main():
             if path.is_absolute() or '..' in path.parts: raise ValueError('Unsafe archive path')
             files[path.as_posix()] = bundle.extractfile(member).read()
     original = dict(files)
+    if b'from github_watch import' in files['services/admin/app.py']:
+        raise ValueError('Baseline already contains this GitHub feature; use a new release plan')
     for folder in ('services/github-webhook',):
         COPY_PATHS = [p.relative_to(ROOT).as_posix() for p in (ROOT/folder).iterdir() if p.is_file() and p.name != '.env']
         # No caches, .env, data, credentials, generated state or private outputs.
@@ -95,6 +97,10 @@ def main():
     routes = section(src, "    @app.get('/api/github')", '    def backup_instances():')
     dst = replace_once(dst, '    def backup_instances():', routes + '    def backup_instances():')
     dst = replace_once(dst, '    return app\n', "    if watch.enabled and not app.config.get('TESTING'):watch.start()\n    if hooks.enabled and not app.config.get('TESTING'):hooks.start()\n    return app\n")
+    helper=section(src,'def webhook_probe(', 'def create_app(')
+    dst=replace_once(dst,'def create_app(',helper+'def create_app(')
+    probe=section(src,"    @app.post('/api/sites/probe')", "    @app.get('/api/jobs')")
+    dst=replace_once(dst,section(dst,"    @app.post('/api/sites/probe')", "    @app.get('/api/jobs')"),probe)
     ast.parse(dst); write(name, dst)
 
     name = 'services/admin/static/app.js'; src = current(name); dst = read(name)
@@ -120,6 +126,7 @@ def main():
         replacement = replacement.replace("if(current==='upgrades')loadUpgradeTasks();", "").replace("if(current==='upgrades'){render();if(loggedIn)loadUpgradeTasks();return;}", "")
         dst = replace_once(dst, line(dst, prefix), replacement)
     if re.search(r'upgradeData|loadUpgradeTasks|data-upgrade-|/api/upgrades', dst): raise ValueError('Upgrade UI leaked into candidate')
+    dst=dst.replace("s.kind==='frp_http'?'FRP 穿透':s.kind==='app'?'动态应用':'静态站点'", "s.kind==='github_webhook'?'Webhook 接收':s.kind==='frp_http'?'FRP 穿透':s.kind==='app'?'动态应用':'静态站点'")
     write(name, dst)
     write('services/admin/static/index.html', re.sub(r'<button data-tab="upgrades">.*?</button>', '', read('services/admin/static/index.html')))
     write('tests/admin_http_smoke.py', '\n'.join(s for s in read('tests/admin_http_smoke.py').replace(",'/api/upgrades'", '').splitlines() if not s.strip().startswith(('upgrade=json.', "assert request('/api/upgrades/"))) + '\n')

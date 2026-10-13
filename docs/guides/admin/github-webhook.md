@@ -135,3 +135,5 @@ GitHub Recent deliveries 中应看到首次 202、相同 delivery 重投 200。�
 需要在停止接收器与 Admin 导入后，同批次备份/恢复两个 SQLite 数据库及私有 webhook secrets；分别在线执行 SQLite backup 不保证跨库一致。备份包含私有评论，必须限制访问。未知 schema/损坏/符号链接不自动重建；先留存原文件、确认原因。无自动 GitHub redelivery、完整原始事件审计或邮件/Slack 通知。
 
 官方依据：[签名验证](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)、[及时确认与队列/去重](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)、[事件与 payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads)、[失败投递手工重投](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)。
+
+管理控制台“网站入口”将此入口标为 Webhook；“检查连接”验证 HTTPS，并向固定 PowerX 回调路径发送无签名空 JSON，要求返回明确的 401 invalid-signature。该探测不创建事件，不把故意返回 404 的首页当成故障。
