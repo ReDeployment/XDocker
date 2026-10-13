@@ -12,10 +12,22 @@ let editingPlan=null;
 const imageVersions={instances:[],candidates:[],checks:[],selected:'',channel:'all',current:null,local:{},preview:null,loading:false,action:null,error:'',catalogError:null,catalogNotice:''};
 const githubData={projects:[],notifications:[],unread:0,nextBefore:null,loading:false,reachable:false,error:'',autoEnabled:false,running:false,interval:300,editing:null,webhooks:null};
 let githubEpoch=0,githubSummaryLoading=false;
+const moduleViews={preflight:'overview',github:'projects'};
+const preflightGroups={'环境':['docker','Docker 与权限'],'宿主机报告':['host','宿主机报告'],'网络':['network','网络连接'],'DNS':['dns','域名解析'],'镜像':['images','镜像检查']};
+const viewModuleKeys={preflight:['overview',...Object.values(preflightGroups).map(g=>g[0])],github:['projects','hooks','inbox']};
+function verticalTabs(view,label,tabs,active,content){
+  return `<div class="vertical-tabview"><div class="vertical-tab-list" role="tablist" aria-label="${esc(label)}" aria-orientation="vertical">${tabs.map(t=>`<button type="button" role="tab" id="view-${view}-${t.key}" aria-selected="${t.key===active}" aria-controls="view-${view}-panel" tabindex="${t.key===active?0:-1}" data-view-tab="${t.key}" data-view="${view}" class="${t.key===active?'active':''}"><span>${esc(t.label)}</span>${t.count!==undefined?`<small>${esc(t.count)}</small>`:''}</button>`).join('')}</div><section class="vertical-tab-panel" role="tabpanel" id="view-${view}-panel" aria-labelledby="view-${view}-${active}" tabindex="0">${content}</section></div>`;
+}
+function selectViewModule(view,key){
+  if(!viewModuleKeys[view]?.includes(key))return;
+  clearCredentials();moduleViews[view]=key;location.hash=view+'/'+key;render();
+  $('view-'+view+'-'+key)?.focus();
+}
 const instanceModules={overview:'概览',postgres:'PostgreSQL',redis:'Redis',storage:'文件存储',services:'容器服务',backups:'备份'};
 let instanceModule='overview';
 const initialRoute=location.hash.slice(1).split('/');
 if(titles[initialRoute[0]])current=initialRoute[0];
+if(viewModuleKeys[current]?.includes(initialRoute[1]))moduleViews[current]=initialRoute[1];
 if(current==='instances'&&/^[a-z0-9][a-z0-9-]*$/.test(initialRoute[1]||''))selectedInstance=initialRoute[1];
 if(instanceModules[initialRoute[2]])instanceModule=initialRoute[2];
 const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -99,7 +111,9 @@ async function refresh(){
 function serviceRows(services){return services.map(s=>`<tr><td><strong>${esc(s.service)}</strong><small>${esc(s.name)}</small></td><td>${stateBadge(s.state)}<small>${esc(s.status)}</small></td><td><small class="code-line">${esc(s.image)}</small></td><td>${s.ports.map(p=>`${esc(p.ip)}:${p.host} → ${p.container}`).join('<br>')||'内部网络'}</td><td><div class="actions">${btn('日志 / 资源',{detail:s.id},false)}${btn(s.state==='running'?'停止':'启动',{service:s.id,action:s.state==='running'?'stop':'start'},s.protected,s.state==='running'?'danger':'')}${btn('重启',{service:s.id,action:'restart'},s.protected||s.state!=='running')}</div></td></tr>`);}
 function siteRows(sites){return sites.map(s=>`<tr><td><strong><a href="https://${esc(s.domain)}" target="_blank" rel="noreferrer">${esc(s.domain)} ↗</a></strong><small>${esc(s.key)}</small></td><td>${badge(s.kind==='github_webhook'?'Webhook 接收':s.kind==='frp_http'?'FRP 穿透':s.kind==='app'?'动态应用':'静态站点','blue')}<small>${esc(s.service)}</small>${s.client_template?`<small>客户端模板：${esc(s.client_template.address)}:${esc(s.client_template.port)}</small>`:''}</td><td>${s.enabled?badge('已启用','good'):badge('未启用')}</td><td>${s.probe?stateBadge(s.probe.status):badge('待探测')}<small>${esc(s.probe?.output||'尚未执行公网检查')}</small><small>${s.probe?date(s.probe.at):''}</small></td><td>${btn('检查连接',{probe:s.key},!s.enabled)}</td></tr>`);}
 function render(){
-  document.querySelectorAll('nav [data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===current));$('page-title').textContent=titles[current];
+  document.querySelectorAll('.sidebar [data-tab]').forEach(b=>{const active=b.dataset.tab===current;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
+  document.querySelectorAll('.nav-group').forEach(group=>{const active=!!group.querySelector(`[data-tab="${current}"]`);group.classList.toggle('active-group',active);if(active)group.open=true;});
+  $('page-title').textContent=titles[current];
   if(current==='github'){$('content').innerHTML=renderGithub();return;}
   if(current==='preflight'){$('content').innerHTML=renderPreflight();return;}
   if(current==='backup-plans'){$('content').innerHTML=renderBackupPlans();return;}
@@ -143,8 +157,9 @@ function jobTable(list){return table(['操作','目标','状态','开始时间',
 function askOperation(path, body, target, title, impact){pending={path,body,target};$('confirm-title').textContent=title;$('confirm-impact').textContent=impact;$('confirm-target').textContent=target;$('confirmation').value='';$('confirm-error').textContent='';$('confirm-dialog').showModal();$('confirmation').focus();}
 async function submitOperation(path, body){const result=await api(path,body);trackedJob=result.id;notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();clearCredentials();current='audit';render();return result;}
 async function detailService(id){const s=snapshot.services.find(s=>s.id===id);$('detail-title').textContent=s?.service||'服务详情';$('detail-content').innerHTML='<p class="muted">正在读取日志与资源…</p>';$('detail-dialog').showModal();const results=await Promise.allSettled([api('services/'+id+'/logs'),api('services/'+id+'/stats')]);const logs=results[0],stats=results[1];let html='';if(stats.status==='fulfilled'){const v=stats.value;html=`<div class="resource"><div><strong>${v.cpu_percent??'—'}%</strong><small>CPU 使用率（可超过单核 100%）</small></div><div><strong>${(v.memory_bytes/1048576).toFixed(1)} MB</strong><small>内存工作集</small></div><div><strong>${v.pids??'—'}</strong><small>进程数</small></div></div>`;}else html=`<p class="muted">${esc(stats.reason.message)}</p>`;html+=`<p class="muted">最近 200 行日志 · 已对常见凭据脱敏</p><pre>${esc(logs.status==='fulfilled'?logs.value.text:logs.reason.message)}</pre>`;$('detail-content').innerHTML=html;}
-document.addEventListener('click',async event=>{const button=event.target.closest('[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job],[data-backup],[data-open-instance],[data-instance-module],[data-credential],[data-copy-credential],[data-hide-credential],[data-preflight],[data-preflight-catalog],[data-preflight-cancel],[data-plan-edit],[data-plan-disable],[data-plan-refresh],[data-version-refresh],[data-version-current],[data-version-check],[data-version-local],[data-version-preview],[data-github-sync],[data-github-read],[data-github-configure],[data-github-save],[data-github-refresh],[data-github-more],[data-github-detail],[data-github-import]');if(!button||button.disabled||!loggedIn)return;const d=button.dataset;if(!snapshot&&!d.tab&&!d.preflight&&!d.preflightCatalog&&!d.preflightCancel&&!d.planRefresh&&!d.planEdit&&!d.planDisable&&!d.versionRefresh&&!d.versionCurrent&&!d.versionCheck&&!d.versionLocal&&!d.versionPreview&&!d.githubSync&&!d.githubRead&&!d.githubConfigure&&!d.githubSave&&!d.githubRefresh&&!d.githubMore&&!d.githubDetail&&!d.githubImport)return;try{
-  if(d.tab){clearCredentials();current=d.tab;location.hash=d.tab==='instances'&&selectedInstance?'instances/'+selectedInstance+'/'+instanceModule:d.tab;render();if(current==='preflight')await loadPreflight();if(current==='backup-plans')await loadBackupPlans();if(current==='image-versions')await loadImageVersions();if(current==='github')await loadGithub();}
+document.addEventListener('click',async event=>{const button=event.target.closest('[data-view-tab],[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job],[data-backup],[data-open-instance],[data-instance-module],[data-credential],[data-copy-credential],[data-hide-credential],[data-preflight],[data-preflight-catalog],[data-preflight-cancel],[data-plan-edit],[data-plan-disable],[data-plan-refresh],[data-version-refresh],[data-version-current],[data-version-check],[data-version-local],[data-version-preview],[data-github-sync],[data-github-read],[data-github-configure],[data-github-save],[data-github-refresh],[data-github-more],[data-github-detail],[data-github-import]');if(!button||button.disabled||!loggedIn)return;const d=button.dataset;if(!snapshot&&!d.viewTab&&!d.tab&&!d.preflight&&!d.preflightCatalog&&!d.preflightCancel&&!d.planRefresh&&!d.planEdit&&!d.planDisable&&!d.versionRefresh&&!d.versionCurrent&&!d.versionCheck&&!d.versionLocal&&!d.versionPreview&&!d.githubSync&&!d.githubRead&&!d.githubConfigure&&!d.githubSave&&!d.githubRefresh&&!d.githubMore&&!d.githubDetail&&!d.githubImport)return;try{
+  if(d.viewTab){selectViewModule(d.view,d.viewTab);}
+  else if(d.tab){clearCredentials();current=d.tab;location.hash=d.tab==='instances'&&selectedInstance?'instances/'+selectedInstance+'/'+instanceModule:d.tab;render();if(current==='preflight')await loadPreflight();if(current==='backup-plans')await loadBackupPlans();if(current==='image-versions')await loadImageVersions();if(current==='github')await loadGithub();}
   else if(d.githubRefresh){await loadGithub();}
   else if(d.githubImport){const result=await api('github/action',{action:'consume-webhooks'});notice('已导入 '+result.imported+' 条事件；未请求 GitHub 或启动构建。');await loadGithub();await loadGithubSummary();}
   else if(d.githubMore){await loadGithub(true);}
@@ -190,11 +205,11 @@ showLogin();connectionState('checking','正在检查管理连接…');checkConne
 function clearCredentials(){for(const value of credentials.values())clearTimeout(value.timer);credentials.clear();document.querySelectorAll('.credential-input').forEach(input=>{input.value='';input.type='password';});}
 function hideCredential(service){const value=credentials.get(service);if(value)clearTimeout(value.timer);credentials.delete(service);const field=$('credential-'+service);if(field){field.value='';field.type='password';}if(current==='instances'&&loggedIn)render();}
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearCredentials();else if(current==='instances'&&loggedIn)render();});
-window.addEventListener('hashchange',()=>{const parts=location.hash.slice(1).split('/');if(!titles[parts[0]])return;const module=instanceModules[parts[2]]?parts[2]:'overview';if(parts[0]===current&&parts[1]===selectedInstance&&module===instanceModule)return;clearCredentials();current=parts[0];if(current==='preflight'){render();if(loggedIn)loadPreflight();return;}if(current==='backup-plans'){render();if(loggedIn)loadBackupPlans();return;}if(current==='image-versions'){render();if(loggedIn)loadImageVersions();return;}if(current==='github'){render();if(loggedIn)loadGithub();return;}if(current==='instances'&&parts[1]){if(parts[1]!==selectedInstance)loadInstance(parts[1],module);else{instanceModule=module;if(snapshot)render();}}else{if(current==='instances'){selectedInstance='';instanceDetail=null;}if(snapshot)render();}});
+window.addEventListener('hashchange',()=>{const parts=location.hash.slice(1).split('/');if(!titles[parts[0]])return;const samePage=parts[0]===current;if(viewModuleKeys[parts[0]]){moduleViews[parts[0]]=viewModuleKeys[parts[0]].includes(parts[1])?parts[1]:viewModuleKeys[parts[0]][0];if(samePage){render();return;}}const module=instanceModules[parts[2]]?parts[2]:'overview';if(parts[0]===current&&parts[1]===selectedInstance&&module===instanceModule)return;clearCredentials();current=parts[0];if(current==='preflight'){render();if(loggedIn)loadPreflight();return;}if(current==='backup-plans'){render();if(loggedIn)loadBackupPlans();return;}if(current==='image-versions'){render();if(loggedIn)loadImageVersions();return;}if(current==='github'){render();if(loggedIn)loadGithub();return;}if(current==='instances'&&parts[1]){if(parts[1]!==selectedInstance)loadInstance(parts[1],module);else{instanceModule=module;if(snapshot)render();}}else{if(current==='instances'){selectedInstance='';instanceDetail=null;}if(snapshot)render();}});
 async function loadInstance(name,module='overview'){clearCredentials();selectedInstance=name;instanceModule=instanceModules[module]?module:'overview';instanceDetail=null;instanceError='';current='instances';location.hash='instances/'+name+'/'+instanceModule;render();try{const detail=await api('instances/'+name);if(selectedInstance===name)instanceDetail=detail;}catch(error){if(selectedInstance===name)instanceError=error.message;}render();}
 function selectInstanceModule(module){if(!instanceModules[module]||!selectedInstance)return;clearCredentials();instanceModule=module;location.hash='instances/'+selectedInstance+'/'+module;render();}
 document.addEventListener('change',event=>{if(event.target.id==='instance-selector')loadInstance(event.target.value);});
-document.addEventListener('keydown',event=>{const tab=event.target.closest('[data-instance-module]');if(!tab)return;const keys=Object.keys(instanceModules);let index=keys.indexOf(tab.dataset.instanceModule);if(event.key==='ArrowRight')index=(index+1)%keys.length;else if(event.key==='ArrowLeft')index=(index+keys.length-1)%keys.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=keys.length-1;else return;event.preventDefault();selectInstanceModule(keys[index]);$('instance-tab-'+keys[index]).focus();});
+document.addEventListener('keydown',event=>{const tab=event.target.closest('[data-instance-module]');if(!tab)return;const keys=Object.keys(instanceModules);let index=keys.indexOf(tab.dataset.instanceModule);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%keys.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+keys.length-1)%keys.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=keys.length-1;else return;event.preventDefault();selectInstanceModule(keys[index]);$('instance-tab-'+keys[index]).focus();});
 function connectionRows(items,headers=['字段','值']){return table(headers,items.map(([label,value])=>`<tr><td>${esc(label)}</td><td><span class="code-line">${esc(value)}</span></td></tr>`));}
 function credentialRow(service,available){const shown=credentials.has(service)&&credentials.get(service).instance===selectedInstance&&credentials.get(service).expires>Date.now();return `<div class="credential-row"><label>${service==='postgres'?'数据库密码':'Redis 密码'}<input class="credential-input" id="credential-${service}" type="password" readonly autocomplete="off" placeholder="确认显示后可复制"></label><div class="actions">${btn('显示密码',{credential:service},!available)}${btn('复制密码',{'copy-credential':service},!shown)}${btn('隐藏',{'hide-credential':service},!shown)}</div><small>密码来自此实例当前私有配置；显示 30 秒，离开页面后隐藏。</small></div>`;}
 function backupRows(records){return records.map(b=>`<tr><td><strong>${esc(b.instance)}</strong><small>${esc(b.id)}</small><small>${date(b.created)}</small></td><td>${stateBadge(b.state)}</td><td>${b.bundle_size?(b.bundle_size/1048576).toFixed(2)+' MB':'—'}<small class="code-line">${esc(b.bundle_sha256||'等待完成')}</small></td><td>${b.last_restore_drill?stateBadge(b.last_restore_drill.state):badge('未演练')}<small>${b.last_restore_drill?date(b.last_restore_drill.at):''}</small></td><td><div class="actions">${btn('校验',{backup:'verify',instance:b.instance,id:b.id},b.state!=='ready')}${btn('隔离恢复验证',{backup:'drill',instance:b.instance,id:b.id},b.state!=='ready')}${b.state==='ready'?`<a href="/api/backups/${esc(b.instance)}/${esc(b.id)}/download">下载私有备份包 ↓</a>`:''}</div></td></tr>`);}
@@ -228,24 +243,32 @@ function renderPreflight(){
   const stale=r=>r?.stale||!Number.isFinite(Date.parse(r?.source_at||r?.at))||Date.now()-Date.parse(r?.source_at||r?.at)>900000;
   const pending=preflight.loading||!!preflight.running;
   const button=(label,attribute,value,blocked=pending)=>`<button type="button" data-${attribute}="${esc(value)}" ${blocked?'disabled':''}>${label}</button>`;
-  let html=`<div class="intro"><div><h2>部署前检查</h2><p class="muted">按项读取实际结果；检查不会部署业务、拉取镜像或签发证书。</p></div><div class="actions">${button('重新读取清单','preflight-catalog','yes')}${button('检查全部','preflight','all',pending||!preflight.items.length)}${preflight.running?button('停止后续检查','preflight-cancel','yes',preflight.cancelled):''}</div></div>`;
-  html+=panel('宿主机报告','在服务器的 XDocker 仓库终端执行，再点击重新读取清单',`<div class="panel-body"><code>sh scripts/preflight.sh --save</code><p class="muted">报告有效期 15 分钟。缺失、过期或提交不匹配时显示未确认；root 检查不代表 ubuntu 权限。</p></div>`);
+  let html=`<div class="intro"><p class="muted">选择左侧模块查看检查项。只读检查不会部署业务、拉取镜像或签发证书。</p><div class="actions">${button('读取清单','preflight-catalog','yes')}${button('检查全部','preflight','all',pending||!preflight.items.length)}${preflight.running?button('停止后续检查','preflight-cancel','yes',preflight.cancelled):''}</div></div>`;
   if(preflight.loading)html+='<p class="muted">正在读取清单…</p>';
   if(preflight.progress)html+=`<p class="preflight-progress" role="status">${esc(preflight.progress)}</p>`;
   if(preflight.error)html+=`<p class="error" role="alert">${esc(preflight.error)}</p>`;
   const counts={pass:0,warn:0,fail:0,unknown:0};
   for(const item of preflight.items){const r=item.result;counts[r&&!stale(r)?r.status:'unknown']++;}
-  html+=`<div class="kpis">${Object.entries({pass:'通过',warn:'需核对',fail:'失败',unknown:'未检查 / 过期'}).map(([key,label])=>`<article class="kpi"><div class="kpi-label">${label}</div><strong>${counts[key]}</strong></article>`).join('')}</div>`;
-  for(const group of [...new Set(preflight.items.map(i=>i.group))]){
+  const groups=[...new Set([...Object.keys(preflightGroups),...preflight.items.map(i=>i.group)])];
+  const tabs=[{key:'overview',label:'检查概览',count:preflight.items.length},...groups.map((g,index)=>({key:preflightGroups[g]?.[0]||'extra-'+index,label:preflightGroups[g]?.[1]||g,count:preflight.items.filter(i=>i.group===g).length}))];
+  viewModuleKeys.preflight=tabs.map(t=>t.key);
+  if(!tabs.some(t=>t.key===moduleViews.preflight))moduleViews.preflight='overview';
+  let body='';
+  if(moduleViews.preflight==='overview'){
+    body=`<div class="kpis compact-kpis">${Object.entries({pass:'通过',warn:'需核对',fail:'失败',unknown:'未检查 / 过期'}).map(([key,label])=>`<article class="kpi"><div class="kpi-label">${label}</div><strong>${counts[key]}</strong></article>`).join('')}</div>`;
+    body+=panel('检查模块','选择模块查看具体项目，切换模块不会自动执行检查',`<div class="module-summary-grid">${tabs.slice(1).map(t=>`<button class="module-summary" data-view-tab="${esc(t.key)}" data-view="preflight"><strong>${esc(t.label)}</strong><span>${t.count} 个检查项</span><span class="module-arrow">查看 →</span></button>`).join('')||'<p class="muted">尚未读取检查清单。</p>'}</div>`);
+  }else{
+    const group=groups.find((g,index)=>(preflightGroups[g]?.[0]||'extra-'+index)===moduleViews.preflight);
+    if(group==='宿主机报告')body+=panel('生成宿主机报告','在服务器的 XDocker 仓库终端执行',`<div class="panel-body"><code>sh scripts/preflight.sh --save</code><p class="muted">报告有效期 15 分钟，缺失或过期时显示未确认；root 检查不代表 ubuntu 权限。</p></div>`);
     const rows=preflight.items.filter(i=>i.group===group).map(item=>{
-      const r=item.result;const expired=r&&stale(r);const status=expired?'unknown':r?.status||'unknown';
-      const label=expired?'结果需重查':{pass:'通过',warn:'需核对',fail:'失败',unknown:'未确认'}[status];
+      const r=item.result,status=r&&!stale(r)?r.status:'unknown',label=r&&stale(r)?'结果需重查':({pass:'通过',warn:'需核对',fail:'失败',unknown:'未检查 / 过期'}[status]||status);
       const extra=r?.addresses?`<small>实际解析：${esc(r.addresses.join(', ')||'无')}</small>${r.expected?`<small>预期地址：${esc(r.expected.join(', '))}</small>`:''}`:'';
-      return `<tr><td><strong class="preflight-target">${esc(item.title)}</strong>${item.target?`<small>${esc(item.target)}</small>`:''}</td><td>${badge(label,status==='pass'?'good':status==='fail'?'bad':'warn')}</td><td>${esc(r?.detail||'尚未执行此项检查。')}${extra}${r?.advice?`<small>${esc(r.advice)}</small>`:''}</td><td>${r?date(r.at):'未检查'}${r?.source_at?`<small>宿主机报告：${date(r.source_at)}</small>`:''}</td><td>${button('重新检查','preflight',item.key)}</td></tr>`;
+      return `<tr><td><strong class="preflight-target">${esc(item.title)}</strong>${item.target?`<small>${esc(item.target)}</small>`:''}</td><td>${badge(label,status==='pass'?'good':status==='fail'?'bad':'warn')}</td><td>${esc(r?.detail||'尚未执行此项检查。')}${extra}${r?.advice?`<small>${esc(r.advice)}</small>`:''}</td><td>${r?date(r.at):'未检查'}${r?.source_at?`<small>宿主机报告：${date(r.source_at)}</small>`:''}</td><td>${button('检查','preflight',item.key)}</td></tr>`;
     });
-    html+=panel(group,'检查时间与作用范围分别记录',table(['项目 / 目标','结果','证据 / 处理建议','时间','检查'],rows));
+    body+=panel(tabs.find(t=>t.key===moduleViews.preflight).label,'只显示当前模块；结果和检查时间分别记录',table(['项目 / 目标','结果','证据 / 建议','时间','操作'],rows));
   }
-  return html+'<p class="muted">结果保留在当前 Admin 进程内，重启后需重新检查。Registry 401 仅证明接口可达；匿名镜像清单可读不代表完整下载。DNS 和本机端口检查不代替公网入站与 HTTP-01 验收。</p>';
+  body+='<p class="view-footnote">结果在当前 Admin 进程内保存。DNS 和端口检查不代替公网入站与证书验收；接口可达不等于镜像已下载。</p>';
+  return html+verticalTabs('preflight','部署检查模块',tabs,moduleViews.preflight,body);
 }
 async function loadBackupPlans(){
   if(backupPlans.loading||!loggedIn)return;backupPlans.loading=true;
@@ -372,7 +395,7 @@ function renderInstances(services){
   const site=instanceList.find(i=>i.name===selectedInstance);
   if(!site)return html+panel('已登记实例','每个实例拥有独立的数据库、缓存与配置',table(['实例','网站入口','容器','操作'],instanceList.map(instance=>{const count=services.filter(s=>s.service.startsWith(instance.name+'/')).length;return `<tr><td><strong>${esc(instance.name)}</strong></td><td>${instance.url?`<a href="${esc(instance.url)}" target="_blank" rel="noreferrer">${esc(instance.url)} ↗</a>`:'未配置入口'}</td><td>${count} 个</td><td>${btn('管理实例',{'open-instance':instance.name},false,'primary')}</td></tr>`;})));
   html+=panel(esc(selectedInstance),'',`<div class="instance-toolbar"><label for="instance-selector">当前实例 <select id="instance-selector">${instanceList.map(i=>`<option value="${esc(i.name)}" ${i.name===selectedInstance?'selected':''}>${esc(i.name)}</option>`).join('')}</select></label><div class="actions">${site.url?`<a class="setup-link" href="${esc(site.url)}/setup" target="_blank" rel="noreferrer">打开 PowerX Setup ↗</a>`:''}${btn('重新读取配置',{'open-instance':selectedInstance,'instance-view':instanceModule})}<button data-tab="image-versions">镜像版本 →</button></div></div>`);
-  html+=`<div class="instance-tabs" role="tablist" aria-label="PowerX 实例服务模块">${Object.entries(instanceModules).map(([key,label])=>`<button type="button" role="tab" id="instance-tab-${key}" aria-selected="${key===instanceModule}" aria-controls="instance-module-panel" tabindex="${key===instanceModule?0:-1}" data-instance-module="${key}" class="${key===instanceModule?'active':''}">${label}</button>`).join('')}</div>`;
+  const tabs=`<div class="instance-tabs vertical-tab-list" role="tablist" aria-orientation="vertical" aria-label="PowerX 实例服务模块">${Object.entries(instanceModules).map(([key,label])=>`<button type="button" role="tab" id="instance-tab-${key}" aria-selected="${key===instanceModule}" aria-controls="instance-module-panel" tabindex="${key===instanceModule?0:-1}" data-instance-module="${key}" class="${key===instanceModule?'active':''}">${label}</button>`).join('')}</div>`;
   const instanceServices=services.filter(s=>s.service.startsWith(selectedInstance+'/')),v=instanceDetail;
   let body='';
   if(instanceModule==='overview'){
@@ -395,5 +418,14 @@ function renderInstances(services){
   }else if(instanceModule==='storage'){
     body=panel('文件存储','将此实例的存储路径和公开地址填入 Setup',connectionRows([['本地存储路径',v.storage.path],['文件公开地址',v.storage.public_url]],['Setup 字段','填写值']));
   }
-  return html+`<section role="tabpanel" id="instance-module-panel" aria-labelledby="instance-tab-${instanceModule}">${body}</section>`;
+  return html+`<div class="vertical-tabview">${tabs}<section class="vertical-tab-panel" role="tabpanel" id="instance-module-panel" aria-labelledby="instance-tab-${instanceModule}">${body}</section></div>`;
 }
+
+document.addEventListener('keydown',event=>{
+  if(!loggedIn)return;const tab=event.target.closest('[data-view-tab]');if(!tab)return;
+  const list=tab.closest('[role="tablist"]');if(!list)return;
+  const siblings=[...list.querySelectorAll('[role="tab"]')];let index=siblings.indexOf(tab);
+  if(event.key==='ArrowDown')index=(index+1)%siblings.length;else if(event.key==='ArrowUp')index=(index+siblings.length-1)%siblings.length;
+  else if(event.key==='Home')index=0;else if(event.key==='End')index=siblings.length-1;else return;
+  event.preventDefault();selectViewModule(tab.dataset.view,siblings[index].dataset.viewTab);
+});
