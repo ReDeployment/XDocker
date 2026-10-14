@@ -258,3 +258,5 @@ sudo sh scripts/admin.sh start
 “研发事件”覆盖六项目的 PR、CI 与评论，自动采集和 Webhook 导入默认关闭。见 [GitHub 观察](github-watch.md) 与 [Webhook 接收配置](github-webhook.md)。
 
 界面布局调整（2026-10-13）：总导航按系统管理、PowerX、网站与 HTTPS、研发协作分组；部署检查、研发事件及实例服务使用右侧纵向 Tab。切换只选择当前模块，不自动执行检查、采集或写操作；可用上下方向键、Home/End 操作。原页面地址仍有效，模块地址可用于刷新和浏览器前进/后退。
+
+“网站与 HTTPS → SSH 隧道”管理本机到服务器的 SSH 端口转发，支持本机页面的连接、断开和重连。需要独立的本机管理服务，安装与认证步骤见 [SSH 隧道网页管理](ssh-tunnel.md)。
