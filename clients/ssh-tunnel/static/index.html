@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XDocker · 本机 SSH 隧道</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><main>
+<header><div><small>XDOCKER / 本机连接</small><h1>SSH 隧道</h1><p>从这台电脑连接服务器，转发远程 XDocker 管理入口。</p></div><span class="tag">本机服务</span></header>
+<section id="login" class="card"><h2>连接本机管理器</h2><p>在本机 XDocker 终端读取独立管理令牌：</p><code>sh scripts/tunnel-manager.sh token</code><form id="login-form"><label>本机管理令牌<input id="token" type="password" autocomplete="off" required></label><button type="submit" class="primary">进入连接管理</button></form><p class="muted">令牌仅保存在本页内存；SSH 私钥由系统 SSH 和 SSH agent 使用。</p></section>
+<p id="notice" role="status"></p>
+<div id="workspace" hidden>
+<div class="toolbar"><p id="last-read"></p><div><button id="refresh">读取状态</button><button id="logout">退出本机管理</button></div></div>
+<section class="card"><div class="card-head"><div><h2>服务器连接</h2><p>SSH 状态和管理 HTTP 状态分别显示；任务登记成功后仍需确认实际连接。</p></div></div><div class="scroll"><table><thead><tr><th>SSH 目标 / 转发</th><th>SSH 托管状态</th><th>管理 HTTP</th><th>操作</th></tr></thead><tbody id="profiles"></tbody></table></div></section>
+<section class="card"><h2>新增连接</h2><form id="new-connection" class="fields"><label>SSH 主机别名<input id="destination" placeholder="例如：my-server" required autocomplete="off"></label><label>本机端口<input id="local-port" type="number" min="1" max="65535" value="19081" required></label><label>服务器端口<input id="server-port" type="number" min="1" max="65535" value="9080" required></label><button type="submit" class="primary">连接服务器</button></form><p class="muted">沿用本机 SSH 配置和认证。先在终端确认目标主机身份与密钥登录；已占用端口不会被接管。</p></section>
+<section class="card"><h2>本机操作记录</h2><div class="scroll"><table><thead><tr><th>时间 / 目标</th><th>操作</th><th>实际结果</th></tr></thead><tbody id="jobs"></tbody></table></div></section>
+</div>
+<dialog id="confirm-dialog"><form id="confirm-form"><h2 id="confirm-title"></h2><p id="confirm-impact"></p><p id="confirm-target" class="code"></p><label>输入完整 SSH 目标确认<input id="confirmation" autocomplete="off" required></label><p id="confirm-error" class="error"></p><div class="dialog-actions"><button id="cancel" type="button">取消</button><button id="submit" type="submit" class="primary">确认执行</button></div></form></dialog>
+<footer>本机页面独立运行，SSH 隧道断开后仍可使用。停止本机管理器不会停止已有 SSH 隧道。</footer>
+</main></body></html>

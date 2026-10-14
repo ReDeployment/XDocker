@@ -30,6 +30,7 @@ function fixture(){
     navigator:{onLine:true},setInterval(fn){handlers.poll=fn;},setTimeout(fn){const id=++timerId;timers.set(id,fn);return id;},clearTimeout(id){timers.delete(id);},
     async fetch(url,options={}){
       requests.push({url,method:options.method||'GET',body:options.body,csrf:options.headers?.['X-CSRF-Token']});
+      if(url==='http://127.0.0.1:19079/healthz'){assert.equal(options.credentials,'omit');assert.equal(options.headers,undefined);return {ok:true,status:200,json:async()=>({status:'ok',service:'xdocker-ssh-tunnel-manager'})};}
       if(options.method==='POST')state.posts++;
       if(state.mode==='timeout')return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>{const error=Error('aborted');error.name='AbortError';reject(error);}));
       if(state.mode==='bodytimeout')return {ok:true,status:200,json:()=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>{const error=Error('aborted body');error.name='AbortError';reject(error);}))};
@@ -224,6 +225,17 @@ async function login(f){f.element('token').value='fixture-token';await f.handler
   assert(prevented);assert.equal(z.run('moduleViews.github'),'hooks');assert.equal(z.state.posts,viewPosts);
   z.context.location.hash='#github/inbox';z.handlers['window:hashchange']();assert.equal(z.run('current'),'github');assert.equal(z.run('moduleViews.github'),'inbox');
   assert.match(z.element('content').innerHTML,/aria-labelledby="view-github-inbox"/);
+  const ssh=fixture();await flush();await login(ssh);const sshPosts=ssh.state.posts;
+  await ssh.handlers['document:click']({target:{closest(){return {dataset:{tab:'ssh-tunnel'},disabled:false};}}});
+  assert.match(ssh.element('content').innerHTML,/本机连接管理/);
+  assert.match(ssh.element('content').innerHTML,/iframe.*127\.0\.0\.1:19079/);
+  assert.equal(ssh.state.posts,sshPosts,'Opening SSH page must not initiate SSH operations');
+  const localProbes=ssh.requests.filter(r=>r.url.startsWith('http://127.0.0.1:19079'));
+  assert(localProbes.length);assert(localProbes.every(r=>r.method==='GET'&&r.body===undefined&&r.csrf===undefined));
+  ssh.run("snapshot=null;connection.ready=false;moduleViews['ssh-tunnel']='help';render()");
+  assert.match(ssh.element('content').innerHTML,/tunnel-manager.sh init/);
+  assert(!ssh.element('content').innerHTML.includes('iframe'));
+  console.log('SSH entry passed: independent menu/page, fixed loopback health-only probe, no remote token or tunnel mutation, setup available without Docker snapshot.');
   console.log('Vertical module tabs passed: independent panels, read-only switching and content isolation.');
   console.log('GitHub observer UI passed: six projects, Docker-independent metadata controls, text-only comments, local configuration, read receipts, GET-only polling and offline refusal.');
   console.log('Admin UI connection checks passed: offline/timeout/unreachable/5xx/401/403, stale data, GET-only recovery, no POST or token replay.');
