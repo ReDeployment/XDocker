@@ -6,6 +6,8 @@ on:
       - services/admin/**
       - clients/ssh-tunnel/**
       - scripts/tunnel-manager.sh
+      - scripts/github-watch.py
+      - scripts/github-app.py
       - services/github-webhook/**
       - scripts/admin*.sh
       - scripts/admin*.py
@@ -19,6 +21,8 @@ on:
       - services/admin/**
       - clients/ssh-tunnel/**
       - scripts/tunnel-manager.sh
+      - scripts/github-watch.py
+      - scripts/github-app.py
       - services/github-webhook/**
       - scripts/admin*.sh
       - scripts/admin*.py

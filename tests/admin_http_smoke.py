@@ -82,6 +82,18 @@ def main():
             assert request('/api/image-versions/unregistered')[0]==404
             assert json.loads(request('/api/github')[1])['auto_enabled'] is False
             assert len(json.loads(request('/api/github')[1])['projects'])==6
+            # Prove the actual image includes App crypto, with a disposable in-memory key and no network.
+            crypto_check="""from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from github_auth import jwt
+import base64
+key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+pem=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.TraditionalOpenSSL,serialization.NoEncryption())
+value=jwt({'app_id':12345,'pem':pem})
+head,body,signature=value.split('.')
+key.public_key().verify(base64.urlsafe_b64decode(signature+'='*(-len(signature)%4)),(head+'.'+body).encode(),padding.PKCS1v15(),hashes.SHA256())
+print('app-crypto-packaged')"""
+            assert cli('exec',identifier,'python','-c',crypto_check)=='app-crypto-packaged'
             for name in ('index.html','app.js','github.js','style.css'):
                 path='/' if name=='index.html' else '/assets/'+name
                 expected=(ROOT/'services/admin/static'/name).read_bytes()

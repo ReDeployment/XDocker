@@ -1,6 +1,6 @@
 # GitHub Webhook 接收与控制台通知
 
-状态：本地实现，尚未发布镜像或部署。覆盖六个固定项目；沿用 [GitHub 观察指南](github-watch.md) 的仓库映射。下列部署步骤在批准提交、发布和服务器部署后执行；本机无需 Docker。用户已新增 DNS；本轮尚未创建 GitHub Webhook、签发此域名证书或生成真实密钥。
+状态：六个固定项目的基础 Webhook、HTTPS 接收入口与自动导入已部署。本轮新增 Release 接收仍为本地实现，需更新接收器、Admin 和六个既有回调事件。部署步骤继续遵守 [AGENT.md](../../../AGENT.md) 的授权与源码流程，本机无需 Docker。
 
 ## 服务如何协作
 
@@ -115,7 +115,7 @@ data/admin/github/            watch.sqlite3，观察快照、通知、已读及�
 
 完整例子：`https://hooks.artisan-cloud.com/github/webhook/PowerX`。只配置 repository hooks；组织 hook 的 ping 不作为六项目仓库验收。
 
-选择 “Let me select individual events”：Pushes、Pull requests、Pull request reviews、Issue comments、Pull request review comments、Commit comments、Workflow runs、Workflow jobs、Check runs、Check suites、Commit statuses。接收事件为 `push/pull_request/pull_request_review/issue_comment/pull_request_review_comment/commit_comment/workflow_run/workflow_job/check_run/check_suite/status`；`ping` 也支持。
+选择 “Let me select individual events”：Pushes、Pull requests、Pull request reviews、Issue comments、Pull request review comments、Commit comments、Workflow runs、Workflow jobs、Check runs、Check suites、Commit statuses、Releases。接收事件为 `push/pull_request/pull_request_review/issue_comment/pull_request_review_comment/commit_comment/workflow_run/workflow_job/check_run/check_suite/status/release`；`ping` 也支持。
 
 未知项目 404；错误 Content type/JSON/repository/delivery 400；缺失或错误 SHA256 签名 401；未知事件 422；同 delivery 内容冲突 409。正文上限 **2 MiB**（低于 GitHub 的最大 payload）；超限 413，不能当作接收成功。队列满、被锁、不可写或密钥不可读返回 503；Nginx 超速 429。只有提交到持久队列后才返回 202；已确认相同 delivery 的重投返回 200。
 
@@ -126,7 +126,7 @@ data/admin/github/            watch.sqlite3，观察快照、通知、已读及�
 1. “Webhook 接收队列”查看队列可读状态、待导入数量、最近接收/导入时间、导入开关与错误。GET 读取缓存不导入、不向 GitHub 发请求。
 2. 默认手动模式点击“导入已接收事件（最多 50 条）”，直到待导入数归零。已启用自动导入时等待一个周期。
 3. 收件箱标注“已验签 Webhook”、event/action、delivery、SHA、attempt 和评论/失败步骤。文本转义显示；已读只是本地回执，不解决 CI/审查问题。
-4. 新事件把对应项目标记为需要重新采集，保留旧快照；导入时更新观察版本，阻止较早采集任务覆盖为当前通过。乱序、旧 SHA、取消、重跑成功、删除评论均只作为事件证据，不直接覆盖当前 CI 快照。点击项目“采集”重新读取 GitHub 的当前提交/检查；私有仓库需对应 owner 的只读 API token。逐项目“观察启用”只控制 API 采集，签名事件仍保留在收件箱。
+4. 新事件把对应项目标记为需要重新采集，保留旧快照；导入时更新观察版本，阻止较早采集任务覆盖为当前通过。乱序、旧 SHA、取消、重跑成功、删除评论均只作为事件证据，不直接覆盖当前 CI 快照。新版在启用自动检查并配置 owner 只读凭据后，会合并事件并自动核对当前提交/检查；手动重试收在项目的高级操作中。配置步骤见 [只读连接指南](github-connection.md)。逐项目“观察启用”只控制 API 采集，签名事件仍保留在收件箱。
 
 GitHub Recent deliveries 中应看到首次 202、相同 delivery 重投 200。接收器不会自动调用 GitHub 写 API；GitHub 失败投递也**不会自动重投**。修复域名/证书/密钥/队列问题后，维护者在 GitHub 的 delivery 详情点击 Redeliver。后台导入失败的事件仍在本地队列；恢复读写后网页再次导入或等待自动导入，不需要 GitHub 重新发送。
 
@@ -137,3 +137,5 @@ GitHub Recent deliveries 中应看到首次 202、相同 delivery 重投 200。�
 官方依据：[签名验证](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)、[及时确认与队列/去重](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)、[事件与 payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads)、[失败投递手工重投](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/redelivering-webhooks)。
 
 管理控制台“网站入口”将此入口标为 Webhook；“检查连接”验证 HTTPS，并向固定 PowerX 回调路径发送无签名空 JSON，要求返回明确的 401 invalid-signature。该探测不创建事件，不把故意返回 404 的首页当成故障。
+
+Release、补历史、问题处理及证据诊断的操作与部署要求见 [通知与处理指南](github-triage.md)。既有回调事件列表需要显式追加 `release`，仅改模板不会修改 GitHub 上的回调。

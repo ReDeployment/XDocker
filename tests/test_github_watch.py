@@ -26,6 +26,7 @@ class Reader:
         self.data={
             '':{'full_name':repo,'default_branch':'develop','private':False},
             '/branches/develop':{'commit':{'sha':HEAD}},
+            '/releases?per_page=10':[],
             '/pulls?state=all&sort=updated&direction=desc&per_page=10':[{'number':1,'title':'fixture PR','state':'open','draft':False,'head':{'sha':HEAD}}],
             '/pulls/1/reviews?per_page=100':[{'id':1,'state':'APPROVED','commit_id':HEAD,'user':{'login':'reviewer'},'body':'review body'}],
             '/commits/'+HEAD+'/check-runs?filter=latest&per_page=100':{'total_count':1,'check_runs':[{'id':1,'name':'lint','head_sha':HEAD,'status':'completed','conclusion':'success'}]},

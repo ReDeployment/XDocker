@@ -18,3 +18,7 @@ static/**
 !github_watch.py
 !github_webhooks.py
 !static/github.js
+
+!github_triage.py
+
+!github_auth.py

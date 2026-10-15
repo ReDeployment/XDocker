@@ -15,6 +15,7 @@ import time
 from urllib.parse import quote, urlencode
 import urllib.request
 import urllib.error
+from github_auth import AuthError, LOCAL_ERRORS, describe as credential_status, token as app_token, invalidate as invalidate_token, legacy_token
 
 PROJECTS={
     'PowerX':'ArtisanCloud/PowerX',
@@ -40,7 +41,7 @@ def safe_text(value,token='',limit=2000):
     if token:text=text.replace(token,'[REDACTED]')
     text=re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----','[PRIVATE KEY REDACTED]',text,flags=re.S)
     text=re.sub(r'(?i)((?:bearer|basic)\s+)[\w.+/=-]+',r'\1[REDACTED]',text)
-    text=re.sub(r'\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+','[REDACTED]',text)
+    text=re.sub(r'\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_.-]+','[REDACTED]',text)
     text=re.sub(r'''(?i)((?:token|password|secret|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)''',r'\1[REDACTED]',text)
     text=re.sub(r'://[^\s/@]+:[^\s/@]+@','://[REDACTED]@',text)
     return ''.join(c for c in text if c in '\n\t' or ord(c)>=32)[:limit]
@@ -51,12 +52,8 @@ class WatchError(ValueError):
 
 
 def owner_token(root,repo):
-    owner=repo.split('/')[0].lower();file=Path(root)/'credentials'/(owner+'.token');token=''
-    if file.exists() or file.is_symlink():
-        if file.is_symlink() or file.parent.is_symlink() or file.stat().st_mode&0o077 or file.stat().st_size>1024:raise WatchError('github-credential-unsafe')
-        token=file.read_text().strip()
-        if not re.fullmatch(r'[A-Za-z0-9_\-.]{20,1024}',token):raise WatchError('github-credential-invalid')
-    return token
+    try:return app_token(root,repo)
+    except AuthError as error:raise WatchError(str(error),error.retry_at) from None
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -130,7 +127,7 @@ def condition(checks,complete,required):
     return 'observed-pass'
 
 
-def collect_project(settings,reader):
+def collect_project(settings,reader,history=False):
     repo=settings['repository'];base='https://github.com/'+repo;observations={}
     metadata,_=reader.get()
     if not isinstance(metadata,dict) or str(metadata.get('full_name','')).lower()!=repo.lower():raise WatchError('repository-identity-unconfirmed')
@@ -152,8 +149,9 @@ def collect_project(settings,reader):
         row={'number':number,'title':safe_text(raw.get('title'),reader.token,300),'sha':head,'state':raw.get('state') if raw.get('state') in ('open','closed') else 'unknown',
              'draft':raw.get('draft') is True,'url':base+'/pull/'+str(number),'review':'not-collected','historical_reviews':0}
         observations['pr:'+str(number)]={'kind':'pull-request','sha':head,'title':'PR #'+str(number)+' '+row['title'],'url':row['url'],'state':row['state'],'draft':row['draft']}
-        if row['state']=='open' and open_count<3:
-            open_count+=1;tracked.add(head)
+        review_this=row['state']=='open' and open_count<3
+        if review_this:open_count+=1;tracked.add(head)
+        if review_this or history:
             reviews,complete=sequence(reader,'/pulls/'+str(number)+'/reviews?per_page=100');review_complete &= complete
             latest={}
             for review in sorted(reviews,key=lambda r:r.get('id',0)):
@@ -233,10 +231,23 @@ def collect_project(settings,reader):
                 'url':base+'/pull/'+str(number)+('#issuecomment-' if kind=='comment' else '#discussion_r')+str(identifier),
                 'updated_at':safe_text(raw.get('updated_at'),reader.token,100)}
             comments.append(row);observations[kind+':'+str(identifier)]={**row,'title':'PR #'+str(number)+' 评论待人工核对'}
+    releases, releases_complete = sequence(reader, '/releases?per_page=10')
+    release_rows = []
+    for raw in releases[:10]:
+        identifier = raw.get('id'); tag = raw.get('tag_name')
+        if not integer(identifier) or not isinstance(tag, str) or not tag or len(tag)>240 or any(ord(c)<32 for c in tag):
+            raise WatchError('release-identity-unconfirmed')
+        row = {'kind':'release','id':identifier,'sha':sha(raw.get('target_commitish')),
+               'title':safe_text(tag,reader.token,240),'body':safe_text(raw.get('body'),reader.token,8000),
+               'url':base+'/releases/tag/'+quote(tag,safe=''),'actor':safe_text(raw.get('author',{}).get('login'),reader.token,100),
+               'status':'draft' if raw.get('draft') else 'prerelease' if raw.get('prerelease') else 'release',
+               'published_at':safe_text(raw.get('published_at'),reader.token,100),
+               'binding':'release-target-sha' if sha(raw.get('target_commitish')) else 'unbound'}
+        release_rows.append(row);observations['release:'+str(identifier)] = row
     state='blocked' if any(r['state']=='blocked' for r in ci) or any(p['review']=='changes-requested' for p in prs) else 'waiting' if any(r['state']=='waiting' for r in ci) else 'attention' if any(p['state']=='open' and p['review']!='approved-observed' for p in prs) else 'unknown' if any(r['state']=='unknown' for r in ci) else 'observed-pass'
     return {'repository':repo,'checked_at':stamp(),'private':metadata.get('private') is True,'state':state,'heads':heads,'pulls':prs,'ci':ci,
-            'failed_jobs':failed_jobs[:30],'comments':comments,'review_complete':review_complete,'observations':observations,
-            'publish_authorized':False,'scope':'最近10个PR/30条每类评论、最多3个开放PR及配置分支的提交；不是完整Webhook事件流或发布授权'}
+            'failed_jobs':failed_jobs[:30],'comments':comments,'releases':release_rows,'releases_complete':releases_complete,'review_complete':review_complete,'observations':observations,
+            'publish_authorized':False,'scope':'最近10个PR/30条每类评论/10个Release、最多3个开放PR及配置分支的提交；不是完整历史事件流或发布授权'}
 
 
 class WatchStore:
@@ -250,10 +261,18 @@ class WatchStore:
             db.executescript('''CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, branches TEXT NOT NULL, required_checks TEXT NOT NULL,
                 revision TEXT NOT NULL, status TEXT, attempted TEXT, success TEXT, retry_at REAL NOT NULL DEFAULT 0, snapshot TEXT);
                 CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, kind TEXT NOT NULL, at TEXT NOT NULL,
-                payload TEXT NOT NULL, read_at TEXT); PRAGMA user_version=1;''')
+                payload TEXT NOT NULL, read_at TEXT);
+                CREATE TABLE IF NOT EXISTS observation_receipts(project TEXT NOT NULL, object_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    PRIMARY KEY(project,object_key));
+                CREATE TABLE IF NOT EXISTS auto_requests(project TEXT PRIMARY KEY, generation TEXT NOT NULL,
+                    due_at REAL NOT NULL, reason TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS auto_state(project TEXT PRIMARY KEY, initial_complete INTEGER NOT NULL DEFAULT 0,
+                    next_due REAL NOT NULL DEFAULT 0,last_started REAL NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0);
+                PRAGMA user_version=1;''')
             for project in PROJECTS:
                 db.execute('INSERT OR IGNORE INTO projects(id,enabled,branches,required_checks,revision,status) VALUES(?,1,?,?,?,?)',
                            (project,'[]','[]',os.urandom(16).hex(),'not-collected'))
+                db.execute('INSERT OR IGNORE INTO auto_state(project) VALUES(?)',(project,))
         self.file.chmod(0o600)
 
     @contextmanager
@@ -284,11 +303,26 @@ class WatchStore:
             count=db.execute("UPDATE projects SET enabled=?,branches=?,required_checks=?,revision=?,status='settings-changed' WHERE id=? AND revision=?",
                 (int(enabled),json.dumps(list(dict.fromkeys(branches))),json.dumps(list(dict.fromkeys(required))),os.urandom(16).hex(),project,revision)).rowcount
             if count!=1:raise WatchError('watch-settings-changed')
+            if enabled:self.queue_refresh(project,'settings',delay=0,db=db)
+            else:db.execute('DELETE FROM auto_requests WHERE project=?',(project,))
+
+    def queue_refresh(self,project,reason='webhook',delay=15,db=None):
+        if project not in PROJECTS or reason not in {'webhook','startup','periodic','access-ready','settings'}:raise WatchError('invalid-refresh-target')
+        def insert(connection):
+            if not connection.execute('SELECT enabled FROM projects WHERE id=?',(project,)).fetchone()[0]:return
+            connection.execute('''INSERT INTO auto_requests VALUES(?,?,?,?) ON CONFLICT(project) DO UPDATE SET
+                generation=excluded.generation,due_at=min(auto_requests.due_at,excluded.due_at),reason=excluded.reason''',
+                (project,os.urandom(16).hex(),time.time()+delay,reason))
+        if db is not None:insert(db)
+        else:
+            with self.db() as connection:insert(connection)
 
     def begin(self,project):
-        with self.db() as db:db.execute("UPDATE projects SET status='collecting',attempted=? WHERE id=?",(stamp(),project))
+        with self.db() as db:
+            db.execute("UPDATE projects SET status='collecting',attempted=? WHERE id=?",(stamp(),project))
+            db.execute('UPDATE auto_state SET last_started=? WHERE project=?',(time.time(),project))
 
-    def finish(self,settings,snapshot=None,error=None,retry_at=0):
+    def finish(self,settings,snapshot=None,error=None,retry_at=0,backfill=False):
         project=settings['project']
         with self.db() as db:
             current=db.execute('SELECT * FROM projects WHERE id=?',(project,)).fetchone()
@@ -299,16 +333,35 @@ class WatchStore:
                 if settings['status']!=error and total<10000:
                     db.execute('INSERT INTO notifications(project,kind,at,payload) VALUES(?,?,?,?)',
                         (project,'collection-error',stamp(),json.dumps({'kind':'collection-error','title':'采集未确认：'+error,'url':'https://github.com/'+PROJECTS[project]})))
+                failures=db.execute('SELECT failures FROM auto_state WHERE project=?',(project,)).fetchone()[0]+1
+                delay=min(3600,60*(2**min(failures-1,6)))
+                retry_at=max(retry_at,time.time()+delay)
+                db.execute('UPDATE auto_state SET failures=? WHERE project=?',(failures,project))
                 db.execute('UPDATE projects SET status=?,retry_at=? WHERE id=?',(error,retry_at,project));return
             previous=json.loads(current['snapshot']) if current['snapshot'] else None
             old=previous.get('observations',{}) if previous else {}
-            if previous is None:
-                changes=[{'kind':'baseline','title':'首次采集：'+snapshot['state'],'state':snapshot['state'],'url':'https://github.com/'+PROJECTS[project]}]
-            else:changes=[row for key,row in snapshot['observations'].items() if key not in old or digest(row)!=digest(old[key])]
+            if backfill:
+                changes = list(snapshot['observations'].items())
+            elif previous is None:
+                changes = [('baseline',{'kind':'baseline','title':'首次采集：'+snapshot['state'],'state':snapshot['state'],'url':'https://github.com/'+PROJECTS[project]})]
+            else:
+                changes = [(key,row) for key,row in snapshot['observations'].items() if key not in old or digest(row)!=digest(old[key])]
+            known = {r['object_key']:r['fingerprint'] for r in db.execute('SELECT object_key,fingerprint FROM observation_receipts WHERE project=?',(project,))}
+            changes = [(key,row) for key,row in changes if known.get(key)!=digest(row)]
+            available = len(changes)
             db.execute('DELETE FROM notifications WHERE read_at IS NOT NULL AND id NOT IN (SELECT id FROM notifications ORDER BY id DESC LIMIT 2000)')
-            if db.execute('SELECT count(*) FROM notifications').fetchone()[0]+min(100,len(changes))>10000:raise WatchError('inbox-full')
-            for row in changes[:100]:
-                db.execute('INSERT INTO notifications(project,kind,at,payload) VALUES(?,?,?,?)',(project,row['kind'],stamp(),json.dumps(row)))
+            if db.execute('SELECT count(*) FROM notifications').fetchone()[0]+min(100,available)>10000:raise WatchError('inbox-full')
+            fresh_keys=sum(key not in known for key,row in changes[:100])
+            if db.execute('SELECT count(*) FROM observation_receipts').fetchone()[0]+fresh_keys>100000:raise WatchError('observation-history-full')
+            for key,row in changes[:100]:
+                notification = dict(row,source='api-backfill' if backfill else 'api-observation',observation_key=key)
+                db.execute('INSERT INTO notifications(project,kind,at,payload) VALUES(?,?,?,?)',(project,row['kind'],stamp(),json.dumps(notification)))
+                db.execute('INSERT OR REPLACE INTO observation_receipts VALUES(?,?,?)',(project,key,digest(row)))
+            if backfill:
+                snapshot['backfill']={'imported':min(100,available),'remaining_in_snapshot':max(0,available-100),
+                    'bounded':True,'scope':'最近10个PR、每类30条评论、10个Release；最多100条每次。非完整历史审计。'}
+            db.execute('UPDATE auto_state SET failures=0 WHERE project=?',(project,))
+            if backfill and available<=100:db.execute('UPDATE auto_state SET initial_complete=1 WHERE project=?',(project,))
             db.execute('UPDATE projects SET status=?,success=?,retry_at=0,snapshot=? WHERE id=?',('collected',stamp(),json.dumps(snapshot),project))
 
     def listing(self,before=None):
@@ -319,6 +372,9 @@ class WatchStore:
         projects=[self.settings(p) for p in PROJECTS]
         for row in projects:
             if row['snapshot']:row['snapshot'].pop('observations',None)
+            with self.db() as db:
+                row['event_count']=db.execute('SELECT count(*) FROM notifications WHERE project=?',(row['project'],)).fetchone()[0]
+                row['recent_events']=[{'at':r['at'],'payload':json.loads(r['payload'])} for r in db.execute('SELECT at,payload FROM notifications WHERE project=? ORDER BY id DESC LIMIT 10',(row['project'],))]
         return {'projects':projects,'notifications':[{'id':r['id'],'project':r['project'],'at':r['at'],
             'read':r['read_at'] is not None,'payload':json.loads(r['payload'])} for r in notifications],'unread':unread,
             'next_before':notifications[-1]['id'] if len(notifications)==50 else None,'publish_authorized':False}
@@ -353,9 +409,14 @@ class GitHubWatch:
         if self.reader_factory:return self.reader_factory(settings)
         return GitHubReader(settings['repository'],owner_token(self.store.root,settings['repository']))
 
-    def collect(self,settings):
-        if self.reader_factory:return collect_project(settings,self.reader(settings))
+    def collect(self,settings,history=False):
+        if self.reader_factory:return collect_project(settings,self.reader(settings),history=history)
         inputs={k:settings[k] for k in ('project','repository','branches','required_checks')}
+        inputs['history']=history
+        # Parent keeps App tokens in memory; subprocess receives one via stdin, never argv or disk.
+        try:access=credential_status(self.store.root,settings['repository'])
+        except AuthError as error:raise WatchError(str(error),error.retry_at) from None
+        if access['mode']=='github-app':inputs['token']=owner_token(self.store.root,settings['repository'])
         try:
             call=subprocess.run([sys.executable,str(Path(__file__).resolve()),'--collect',str(self.store.root)],
                 input=json.dumps(inputs).encode(),capture_output=True,timeout=50,check=False)
@@ -363,6 +424,7 @@ class GitHubWatch:
             data=json.loads(call.stdout)
             if call.returncode==2:
                 code=data.get('error','collection-unconfirmed')
+                if code=='github-http-401':invalidate_token(self.store.root,settings['repository'])
                 if not isinstance(code,str) or not re.fullmatch(r'[a-z0-9-]{1,80}',code):raise WatchError('collector-output-unconfirmed')
                 retry=data.get('retry_at',0)
                 if type(retry) not in (int,float) or not 0<=retry<=time.time()+86401:retry=time.time()+60
@@ -383,7 +445,7 @@ class GitHubWatch:
         except BlockingIOError:stream.close();raise WatchError('watch-busy') from None
         return stream
 
-    def sync(self,project='all',background=True):
+    def sync(self,project='all',background=True,backfill=False,history=False):
         if not self.store or self.error:raise WatchError('watch-store-unavailable')
         if project!='all' and project not in PROJECTS:raise WatchError('unknown-project')
         lease=self.lease('collect')
@@ -398,7 +460,8 @@ class GitHubWatch:
                     if self.stop_event.is_set():break
                     self.store.begin(settings['project'])
                     try:
-                        snapshot=self.collect(settings);self.store.finish(settings,snapshot=snapshot)
+                        snapshot=self.collect(settings,history=backfill or history);self.store.finish(settings,snapshot=snapshot,backfill=backfill)
+                        with self.store.db() as db:db.execute('UPDATE auto_state SET next_due=? WHERE project=?',(time.time()+self.interval,settings['project']))
                     except WatchError as error:self.store.finish(settings,error=str(error),retry_at=error.retry_at or time.time()+60)
                     except Exception:self.store.finish(settings,error='collection-unconfirmed',retry_at=time.time()+60)
             finally:self.running=False;lease.close()
@@ -412,18 +475,84 @@ class GitHubWatch:
         if not self.store or self.error:raise WatchError('watch-store-unavailable')
         data=self.store.listing(before);data.update(auto_enabled=self.enabled,interval_seconds=self.interval,running=self.running,
             poller_running=bool(self.leader),error=self.error,mode='polling and isolated signed webhook inbox')
+        for row in data['projects']:row['access']=self.access(row)
+        with self.store.db() as db:
+            queued=[dict(r) for r in db.execute('SELECT project,due_at,reason FROM auto_requests')]
+        data['automation']={'enabled':self.enabled,'running':bool(self.leader),'pending':queued,
+            'interval_seconds':self.interval,'event_debounce_seconds':15,'minimum_project_spacing_seconds':30,
+            'initial_history':'automatic after owner credentials are configured','github_writes':False,'credential_issuance_uses_post':True}
         return data
 
+    def access(self,settings):
+        owner=settings['repository'].split('/')[0].lower()
+        result={'owner':owner,'configured':False,'state':'credentials-required',
+                'file':'data/admin/github/credentials/'+owner+'.token'}
+        if self.reader_factory:return dict(result,configured=True,state='local-reader')
+        try:
+            app_file=self.store.root/'credentials'/'app.json'
+            if app_file.exists() or app_file.is_symlink():result.update(mode='github-app',file='data/admin/github/credentials/app.json')
+            return credential_status(self.store.root,settings['repository'])
+        except (WatchError,AuthError) as error:return dict(result,state=str(error))
+        except (OSError,ValueError):return dict(result,state='github-credential-unreadable')
+
+    def prepare_auto(self,startup=False):
+        if not self.enabled or not self.store or self.error:return
+        now=time.time()
+        for project in PROJECTS:
+            settings=self.store.settings(project)
+            if not settings['enabled']:continue
+            access=self.access(settings)
+            if not access['configured']:
+                if settings['status']!=access['state']:
+                    with self.store.db() as db:db.execute('UPDATE projects SET status=?,retry_at=? WHERE id=?',(access['state'],now+300,project))
+                continue
+            if settings['status'] in LOCAL_ERRORS:
+                with self.store.db() as db:db.execute("UPDATE projects SET status='refresh-queued',retry_at=0 WHERE id=?",(project,))
+                self.store.queue_refresh(project,'access-ready',delay=0)
+            with self.store.db() as db:
+                state=db.execute('SELECT * FROM auto_state WHERE project=?',(project,)).fetchone()
+                pending=db.execute('SELECT 1 FROM auto_requests WHERE project=?',(project,)).fetchone()
+            if not pending and (startup or not state['initial_complete'] or state['next_due']<=now):
+                self.store.queue_refresh(project,'startup' if startup else 'periodic',delay=0)
+
+    def auto_step(self):
+        if not self.enabled or not self.store or self.error:return False
+        self.prepare_auto()
+        with self.store.db() as db:
+            rows=db.execute('''SELECT q.*,s.initial_complete,s.last_started FROM auto_requests q
+                JOIN auto_state s USING(project) JOIN projects p ON p.id=q.project
+                WHERE p.enabled=1 AND q.due_at<=? AND p.retry_at<=? AND s.last_started<=?
+                ORDER BY q.due_at,q.project''',(time.time(),time.time(),time.time()-30)).fetchall()
+        for request in rows:
+            if self.stop_event.is_set():return False
+            settings=self.store.settings(request['project'])
+            if not self.access(settings)['configured']:continue
+            try:self.sync(request['project'],background=False,backfill=not request['initial_complete'],history=True)
+            except WatchError as error:
+                if str(error)=='watch-busy':return False
+                continue
+            if self.store.settings(request['project'])['status']=='collected':
+                with self.store.db() as db:
+                    db.execute('DELETE FROM auto_requests WHERE project=? AND generation=?',(request['project'],request['generation']))
+            return True
+        return False
+
     def start(self):
-        if not self.enabled or not self.store:return
+        if not self.enabled or not self.store or self.error or self.leader:return
         try:self.leader=self.lease('poller')
         except WatchError:return
         def loop():
-            # Opt-in never immediately launches network work or backfills missed ticks.
-            while not self.stop_event.wait(self.interval):
-                try:self.sync()
-                except (WatchError,OSError,sqlite3.DatabaseError):continue
-            self.leader.close();self.leader=None
+            try:
+                startup=True
+                while not self.stop_event.is_set():
+                    try:
+                        if startup:
+                            self.prepare_auto(startup=True);startup=False
+                        if self.auto_step():continue
+                    except (WatchError,OSError,sqlite3.DatabaseError):pass
+                    self.stop_event.wait(1)
+            finally:
+                self.leader.close();self.leader=None
         threading.Thread(target=loop,daemon=True).start()
 
     def close(self):
@@ -433,10 +562,13 @@ class GitHubWatch:
 if __name__=='__main__':
     try:
         if len(sys.argv)!=3 or sys.argv[1]!='--collect':raise WatchError('invalid-collector-command')
-        settings=json.loads(sys.stdin.buffer.read(8193))
+        settings=json.loads(sys.stdin.buffer.read(65537))
         if settings.get('project') not in PROJECTS or settings.get('repository')!=PROJECTS[settings['project']]:raise WatchError('unknown-project')
-        reader=GitHubReader(settings['repository'],owner_token(sys.argv[2],settings['repository']))
-        snapshot=collect_project(settings,reader);raw=json.dumps(snapshot)
+        token=settings.get('token') if 'token' in settings else legacy_token(sys.argv[2],settings['repository'])
+        if not isinstance(token,str) or (token and not re.fullmatch(r'[A-Za-z0-9_.-]{20,16384}',token)):raise WatchError('collector-token-invalid')
+        reader=GitHubReader(settings['repository'],token)
+        if type(settings.get('history',False)) is not bool:raise WatchError('invalid-history-mode')
+        snapshot=collect_project(settings,reader,history=settings.get('history',False));raw=json.dumps(snapshot)
         if len(raw.encode())>LIMIT:raise WatchError('collector-output-too-large')
         print(raw)
     except Exception as error:

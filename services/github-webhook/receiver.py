@@ -9,12 +9,13 @@ import sqlite3
 import stat
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from urllib.parse import quote
 from flask import Flask, jsonify, request
 
 PROJECTS = json.loads(Path(__file__).with_name('projects.json').read_text())
 EVENTS = {'ping', 'push', 'pull_request', 'pull_request_review', 'issue_comment',
           'pull_request_review_comment', 'commit_comment', 'workflow_run', 'workflow_job',
-          'check_run', 'check_suite', 'status'}
+          'check_run', 'check_suite', 'status', 'release'}
 GUID = re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}')
 LIMIT = 2 * 1024 * 1024
 
@@ -47,18 +48,23 @@ def normalize(project, event, data, secret):
     primary = {'pull_request': 'pull_request', 'pull_request_review': 'review',
                'issue_comment': 'comment', 'pull_request_review_comment': 'comment',
                'commit_comment': 'comment', 'workflow_run': 'workflow_run',
-               'workflow_job': 'workflow_job', 'check_run': 'check_run', 'check_suite': 'check_suite'}
+               'workflow_job': 'workflow_job', 'check_run': 'check_run', 'check_suite': 'check_suite', 'release': 'release'}
     item = object_value(data, primary[event]) if event in primary else data
     if event in primary and not item: raise ValueError('invalid-payload')
     pr = object_value(data, 'pull_request')
     number = positive(pr.get('number')) or positive(object_value(data, 'issue').get('number')) or positive(data.get('number'))
-    raw_sha = item.get('head_sha') or item.get('commit_id') or object_value(pr, 'head').get('sha') or data.get('after') or data.get('sha')
+    raw_sha = item.get('head_sha') or item.get('commit_id') or object_value(pr, 'head').get('sha') or data.get('after') or data.get('sha') or (item.get('target_commitish') if event == 'release' else None)
     sha = raw_sha if isinstance(raw_sha, str) and re.fullmatch('[a-f0-9]{40}', raw_sha) else None
     identifier = positive(item.get('id'))
     base = 'https://github.com/' + repo
     # URLs are constructed, never fetched from an event or interpreted as commands.
     url = base
     if number and event.startswith(('pull_request', 'issue_comment')): url += '/pull/' + str(number) if pr or 'pull_request' in object_value(data, 'issue') else '/issues/' + str(number)
+    elif event == 'release':
+        tag = item.get('tag_name')
+        if not identifier or not isinstance(tag, str) or not tag or len(tag) > 240 or any(ord(c) < 32 for c in tag):
+            raise ValueError('invalid-release')
+        url += '/releases/tag/' + quote(tag, safe='')
     elif event == 'workflow_run' and identifier: url += '/actions/runs/' + str(identifier)
     elif sha: url += '/commit/' + sha
     details = item.get('body', '')
@@ -69,13 +75,13 @@ def normalize(project, event, data, secret):
         details = '\n'.join(clean(step.get('name', ''), secret, 240) for step in steps[:100] if isinstance(step, dict) and step.get('conclusion') in ('failure', 'timed_out', 'cancelled'))
     if event == 'push': details = clean(data.get('ref', ''), secret, 240) + (' · deleted' if data.get('deleted') is True else '')
     body = clean(details, secret, 8000)
-    title = clean(item.get('title') or item.get('name') or item.get('context') or event, secret, 240)
+    title = clean(item.get('tag_name') if event == 'release' else item.get('title') or item.get('name') or item.get('context') or event, secret, 240)
     action = clean(data.get('action', ''), secret, 80)
     return {'kind': 'webhook', 'event': event, 'action': action, 'title': event + (' · ' + action if action else '') + ' · ' + title,
             'url': url, 'sha': sha, 'binding': 'event-sha-needs-refresh' if sha else 'unbound',
             'actor': clean(object_value(data, 'sender').get('login', ''), secret, 100),
             'body': body, 'conclusion': clean(item.get('conclusion') or item.get('state', ''), secret, 80),
-            'status': clean(item.get('status', ''), secret, 80), 'number': number, 'object_id': identifier,
+            'status': ('draft' if item.get('draft') else 'prerelease' if item.get('prerelease') else 'release') if event == 'release' else clean(item.get('status', ''), secret, 80), 'number': number, 'object_id': identifier,
             'attempt': positive(item.get('run_attempt')), 'path': clean(item.get('path', ''), secret, 300),
             'line': positive(item.get('line')), 'source': 'signed-webhook', 'publish_authorized': False}
 
