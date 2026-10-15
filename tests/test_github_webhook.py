@@ -168,6 +168,17 @@ class IntakeTests(unittest.TestCase):
         finally:db.rollback();db.close()
         self.assertEqual(self.consumer.status()['pending'],0)
 
+    def test_jwt_installation_token_is_redacted_before_durable_queue_and_import(self):
+        credential='ghs_APPID_header.payload.signature-part'
+        data={'repository':{'full_name':PROJECTS['PowerX']},'action':'created',
+              'issue':{'number':3,'pull_request':{}},'comment':{'id':96,'body':'Credential '+credential}}
+        self.assertEqual(self.send(data,event='issue_comment').status_code,202)
+        with self.queue.db() as db:payload=db.execute('SELECT payload FROM events').fetchone()[0]
+        self.assertNotIn(credential,payload);self.assertNotIn('.payload.signature-part',payload)
+        self.consumer.consume()
+        saved=json.dumps(self.store.listing())
+        self.assertNotIn('.payload.signature-part',saved);self.assertIn('[REDACTED]',saved)
+
     def test_private_comments_redaction_sha_path_and_attempt_survive(self):
         body='<script>alert(1)</script> password=hidden '+SECRET+' ghp_privateFakeToken123456789'
         data={'repository':{'full_name':PROJECTS['PowerX']},'pull_request':{'number':3,'head':{'sha':SHA}},'action':'created',

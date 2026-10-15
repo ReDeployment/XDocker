@@ -24,7 +24,7 @@ def clean(value, secret='', limit=2000):
     value = value if isinstance(value, str) else ''
     if secret: value = value.replace(secret, '[REDACTED]')
     value = re.sub(r'(?i)((?:bearer|basic)\s+)[\w.+/=-]+', r'\1[REDACTED]', value)
-    value = re.sub(r'\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b', '[REDACTED]', value)
+    value = re.sub(r'\b(?:gh[pousr]_[A-Za-z0-9_.-]+|github_pat_[A-Za-z0-9_.-]+)', '[REDACTED]', value)
     value = re.sub(r'''(?i)((?:token|password|secret|authorization|api[_-]?key)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)''', r'\1[REDACTED]', value)
     value = re.sub(r'://[^\s/@]+:[^\s/@]+@', '://[REDACTED]@', value)
     value = re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----', '[PRIVATE KEY REDACTED]', value, flags=re.S)
