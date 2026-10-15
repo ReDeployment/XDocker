@@ -13,7 +13,7 @@ FIELDS = {'kind', 'event', 'action', 'title', 'url', 'sha', 'binding', 'actor', 
           'status', 'number', 'object_id', 'attempt', 'path', 'line', 'source', 'publish_authorized'}
 EVENTS = {'ping', 'push', 'pull_request', 'pull_request_review', 'issue_comment',
           'pull_request_review_comment', 'commit_comment', 'workflow_run', 'workflow_job',
-          'check_run', 'check_suite', 'status'}
+          'check_run', 'check_suite', 'status', 'release'}
 GUID = re.compile(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}')
 
 
@@ -91,6 +91,7 @@ class WebhookInbox:
                                 (row['project'], 'webhook', row['at'], json.dumps(payload, ensure_ascii=False)))
             db.execute('INSERT INTO hook_receipts VALUES(?,?,?,?,?)', (row['delivery'], fingerprint, row['project'], stamp(), cursor.lastrowid))
             if row['event'] != 'ping':
+                self.store.queue_refresh(row['project'],'webhook',delay=15,db=db)
                 db.execute("UPDATE projects SET status='webhook-needs-refresh',revision=? WHERE id=?", (hashlib.sha256((row['delivery']+row['fingerprint']).encode()).hexdigest(), row['project']))
         return True
 

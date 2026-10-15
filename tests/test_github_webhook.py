@@ -61,6 +61,28 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(self.consumer.consume()['imported'],6)
         self.assertTrue(all(p['status']=='not-collected' for p in self.store.listing()['projects']))
 
+    def test_non_ping_import_durably_queues_one_project_refresh_without_network(self):
+        self.send({'repository':{'full_name':PROJECTS['PowerX']},'zen':'fixture'},event='ping')
+        self.consumer.consume()
+        with self.store.db() as db:self.assertEqual(db.execute('SELECT count(*) FROM auto_requests').fetchone()[0],0)
+        delivery=str(uuid.uuid4());self.send(delivery=delivery);self.consumer.consume()
+        with self.store.db() as db:
+            first=dict(db.execute('SELECT * FROM auto_requests').fetchone())
+            self.assertEqual(first['project'],'PowerX');self.assertEqual(first['reason'],'webhook')
+        self.send(delivery=delivery);self.consumer.consume()
+        with self.store.db() as db:self.assertEqual(dict(db.execute('SELECT * FROM auto_requests').fetchone()),first)
+        self.send();self.consumer.consume()
+        with self.store.db() as db:
+            rows=db.execute('SELECT * FROM auto_requests').fetchall();self.assertEqual(len(rows),1)
+            self.assertNotEqual(rows[0]['generation'],first['generation']);self.assertEqual(rows[0]['due_at'],first['due_at'])
+        # Status details retain project events independently of the global inbox's first page.
+        with self.store.db() as db:
+            db.executemany('INSERT INTO notifications(project,kind,at,payload) VALUES(?,?,?,?)',
+                [('PowerXPlugin','test','now','{}')]*60)
+        listing=self.store.listing();project=next(p for p in listing['projects'] if p['project']=='PowerX')
+        self.assertTrue(all(n['project']=='PowerXPlugin' for n in listing['notifications']))
+        self.assertEqual(project['event_count'],3);self.assertEqual(len(project['recent_events']),3)
+
     def test_real_loopback_http_delivery_enters_private_inbox(self):
         class QuietHandler(WSGIRequestHandler):
             def log(self,*args,**kwargs): pass

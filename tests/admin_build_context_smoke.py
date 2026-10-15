@@ -8,7 +8,7 @@ import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ('Dockerfile', 'requirements.txt', 'app.py', 'docker_api.py', 'backups.py',
-          'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py',
+          'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py', 'github_triage.py', 'github_auth.py',
           'static/index.html', 'static/app.js', 'static/github.js', 'static/style.css')
 
 

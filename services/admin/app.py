@@ -25,6 +25,7 @@ from backup_plans import BackupPlans, BackupScheduler, PlanConflict, OperationBu
 from image_versions import ImageVersions, VersionCheckBusy
 from github_watch import GitHubWatch, WatchError
 from github_webhooks import WebhookInbox
+from github_triage import GitHubTriage
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -137,6 +138,8 @@ def create_app(settings=None, docker=None):
     watch_interval=max(60,min(3600,watch_interval))
     watch=GitHubWatch(state,bool(app.config['GITHUB_WATCH_ENABLED']),watch_interval)
     app.extensions['github_watch']=watch
+    triage=GitHubTriage(watch.store) if watch.store and not watch.error else None
+    app.extensions['github_triage']=triage
     hooks=WebhookInbox(watch.store,app.config['GITHUB_WEBHOOK_QUEUE'],bool(app.config['GITHUB_WEBHOOK_ENABLED']))
     app.extensions['github_webhooks']=hooks
 
@@ -575,6 +578,7 @@ def create_app(settings=None, docker=None):
             return jsonify(error='通知游标不合法。'),400
         try:
             data=watch.listing(int(cursor) if cursor else None);data['webhooks']=hooks.status()
+            data['triage']=triage.listing() if triage else None
             return jsonify(data)
         except (WatchError,OSError,sqlite3.DatabaseError,ValueError):return jsonify(error='GitHub 观察记录不可读；原文件保留，未启动采集。'),409
 
@@ -589,17 +593,25 @@ def create_app(settings=None, docker=None):
     @app.post('/api/github/action')
     def github_observation_action():
         body=command_payload();action=body.get('action')
-        fields={'sync':{'action','project'},'read':{'action','ids'},'consume-webhooks':{'action'},
+        fields={'sync':{'action','project'},'backfill':{'action','project','confirmation'},
+                'diagnose':{'action','issue','version','confirmation'},
+                'issue-state':{'action','issue','version','state','note','confirmation'},
+                'read':{'action','ids'},'consume-webhooks':{'action'},
                 'configure':{'action','project','revision','enabled','branches','required_checks'}}
-        if request.args or action not in fields or set(body)!=fields[action]:return jsonify(error='仅支持采集、导入 Webhook、标记已读和本地观察配置。'),400
+        if request.args or action not in fields or set(body)!=fields[action]:return jsonify(error='仅支持采集、历史补采集、证据诊断、本地问题状态、导入事件、已读和观察配置。'),400
         try:
             if not watch.store or watch.error:raise WatchError('watch-store-unavailable')
             if action=='consume-webhooks':
                 result=hooks.consume();audit('github-webhook-import','inbox','success')
                 return jsonify(result)
-            if action=='sync':
-                selected=watch.sync(body['project']);audit('github-sync',body['project'],'requested')
+            if action in ('sync','backfill'):
+                if action=='backfill' and body['confirmation']!=body['project']:raise WatchError('backfill-target-unconfirmed')
+                selected=watch.sync(body['project'],backfill=action=='backfill');audit('github-'+action,body['project'],'requested')
                 return jsonify(projects=selected,running=True,github_writes=False),202
+            if action in ('diagnose','issue-state'):
+                if not triage:raise WatchError('triage-unavailable')
+                result=triage.diagnose(body['issue'],body['version'],body['confirmation']) if action=='diagnose' else triage.update(body['issue'],body['version'],body['state'],body['note'],body['confirmation'])
+                audit('github-'+action,body['issue'],'success');return jsonify(result)
             if action=='read':watch.store.mark_read(body['ids'])
             else:watch.store.configure(body['project'],body['revision'],body['enabled'],body['branches'],body['required_checks'])
             audit('github-'+action,body.get('project','inbox'),'success')

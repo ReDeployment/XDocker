@@ -14,13 +14,14 @@ def main():
     parser.add_argument('--state',required=True,help='private local XDocker state directory; never copied into an image')
     parser.add_argument('--project',choices=['all',*PROJECTS],default='all')
     parser.add_argument('--gh',action='store_true',help='explicitly use local gh api GET and its existing credentials')
+    parser.add_argument('--backfill',action='store_true',help='explicit bounded historical import; does not enable polling')
     args=parser.parse_args()
     watcher=GitHubWatch(args.state,reader_factory=(lambda s:GitHubReader(s['repository'],gh=True)) if args.gh else None)
     try:
-        selected=watcher.sync(args.project,background=False)
+        selected=watcher.sync(args.project,background=False,backfill=args.backfill)
         # Do not print private comments, raw bodies, credentials or the whole inbox.
         print(json.dumps({'projects':[{'project':p,**{k:watcher.store.settings(p)[k] for k in ('repository','status','success_at')}} for p in selected],
-            'auto_enabled':False,'github_writes':False},ensure_ascii=False))
+            'backfill':args.backfill,'auto_enabled':False,'github_writes':False},ensure_ascii=False))
         return 0 if all(watcher.store.settings(p)['status']=='collected' for p in selected) else 2
     except Exception:
         print(json.dumps({'error':'collection-unconfirmed','github_writes':False}));return 2

@@ -72,7 +72,7 @@ from pathlib import Path
 import hashlib
 root = Path('services/admin')
 names = ['.dockerignore', 'Dockerfile', 'requirements.txt', 'app.py', 'docker_api.py',
-         'backups.py', 'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py',
+         'backups.py', 'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py', 'github_triage.py', 'github_auth.py',
          'static/index.html', 'static/app.js', 'static/github.js', 'static/style.css']
 digest = hashlib.sha256()
 for name in sorted(names):
@@ -260,3 +260,7 @@ sudo sh scripts/admin.sh start
 界面布局调整（2026-10-13）：总导航按系统管理、PowerX、网站与 HTTPS、研发协作分组；部署检查、研发事件及实例服务使用右侧纵向 Tab。切换只选择当前模块，不自动执行检查、采集或写操作；可用上下方向键、Home/End 操作。原页面地址仍有效，模块地址可用于刷新和浏览器前进/后退。
 
 “网站与 HTTPS → SSH 隧道”管理本机到服务器的 SSH 端口转发，支持本机页面的连接、断开和重连。需要独立的本机管理服务，安装与认证步骤见 [SSH 隧道网页管理](ssh-tunnel.md)。
+
+GitHub 通知的历史补采集、问题处理与证据诊断见 [GitHub 通知管理](github-triage.md)。
+
+- [GitHub App 创建、私钥配置、自动续取与更新验收](github-connection.md)

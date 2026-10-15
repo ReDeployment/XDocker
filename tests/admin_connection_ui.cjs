@@ -47,7 +47,7 @@ function fixture(){
       if(!state.authenticated)return {ok:false,status:401,json:async()=>({error:'请先登录'})};
       if(path==='github/summary')return {ok:true,status:200,json:async()=>({unread:state.githubNotifications.filter(n=>!n.read).length})};
       if(path==='github')return {ok:true,status:200,json:async()=>({projects:state.githubProjects,notifications:state.githubNotifications,unread:state.githubNotifications.filter(n=>!n.read).length,
-        auto_enabled:false,interval_seconds:300,running:false,next_before:null,error:null,webhooks:state.githubWebhooks,publish_authorized:false})};
+        auto_enabled:false,interval_seconds:300,running:false,next_before:null,error:null,webhooks:state.githubWebhooks,triage:state.githubTriage,publish_authorized:false})};
       if(path==='github/action'){
         const body=JSON.parse(options.body);state.lastGithubBody=body;
         if(body.action==='read')state.githubNotifications.filter(n=>body.ids.includes(n.id)).forEach(n=>n.read=true);
@@ -56,7 +56,8 @@ function fixture(){
           assert.equal(body.revision,row.revision);Object.assign(row,{enabled:body.enabled,branches:body.branches,required_checks:body.required_checks});
         }
         if(body.action==='consume-webhooks'){state.githubWebhooks.pending=0;return {ok:true,status:200,json:async()=>({imported:1,acknowledged:1,github_writes:false})};}
-        assert(['sync','read','configure'].includes(body.action));return {ok:true,status:body.action==='sync'?202:200,json:async()=>({saved:true,github_writes:false})};
+        if(body.action==='diagnose')return {ok:true,status:200,json:async()=>state.githubTriage.diagnostics[0]};
+        assert(['sync','read','configure','backfill','issue-state'].includes(body.action));return {ok:true,status:body.action==='sync'?202:200,json:async()=>({saved:true,github_writes:false})};
       }
       if(path==='image-versions')return {ok:true,status:200,json:async()=>({instances:[{instance:'powerx-a',environment:'dev',configured}],candidates:state.versionCandidates,checks:state.versionProofs,catalog_error:null,catalog_notice:'fixture declared catalog'})};
       if(path.startsWith('image-versions/check/')){
@@ -200,8 +201,8 @@ async function login(f){f.element('token').value='fixture-token';await f.handler
   v.element('version-channel').value='stable';v.handlers['document:change']({target:v.element('version-channel')});assert.match(v.element('content').innerHTML,/尚无有效候选记录/);
   const z=fixture();await flush();z.state.mode='engineoffline';await login(z);
   const githubClick=dataset=>z.handlers['document:click']({target:{closest(){return {dataset,disabled:false};}}});
-  await githubClick({tab:'github'});assert.match(z.element('content').innerHTML,/PowerXPluginCRM/);assert.match(z.element('content').innerHTML,/PowerXPluginMediaXStudio/);
-  assert.match(z.element('content').innerHTML,/自动采集关闭/);await githubClick({viewTab:'inbox',view:'github'});assert.match(z.element('content').innerHTML,/&lt;script&gt;/);await githubClick({viewTab:'projects',view:'github'});
+  await githubClick({tab:'github'});await githubClick({viewTab:'projects',view:'github'});assert.match(z.element('content').innerHTML,/PowerXPluginCRM/);assert.match(z.element('content').innerHTML,/PowerXPluginMediaXStudio/);
+  assert.match(z.element('content').innerHTML,/自动更新尚未启用/);await githubClick({viewTab:'inbox',view:'github'});assert.match(z.element('content').innerHTML,/&lt;script&gt;/);await githubClick({viewTab:'projects',view:'github'});
   assert.equal(z.run('githubWritable()'),true);const githubPosts=z.state.posts;
   z.handlers.poll();await flush();await flush();assert.equal(z.state.posts,githubPosts);
   await githubClick({githubSync:'PowerXPluginCRM'});assert.equal(z.state.lastGithubBody.project,'PowerXPluginCRM');
@@ -225,6 +226,49 @@ async function login(f){f.element('token').value='fixture-token';await f.handler
   assert(prevented);assert.equal(z.run('moduleViews.github'),'hooks');assert.equal(z.state.posts,viewPosts);
   z.context.location.hash='#github/inbox';z.handlers['window:hashchange']();assert.equal(z.run('current'),'github');assert.equal(z.run('moduleViews.github'),'inbox');
   assert.match(z.element('content').innerHTML,/aria-labelledby="view-github-inbox"/);
+  const automatic=fixture();await flush();automatic.state.mode='engineoffline';await login(automatic);
+  const autoClick=dataset=>automatic.handlers['document:click']({target:{closest(){return {dataset,disabled:false};}}});
+  await autoClick({tab:'github'});
+  const beforeAutomatic=automatic.state.posts;
+  automatic.run(`githubData.autoEnabled=true;githubData.automation={running:true};
+    githubData.projects[0].access={configured:false,state:'credentials-required',owner:'artisancloud',file:'data/admin/github/credentials/artisancloud.token'};
+    githubData.projects[0].event_count=20;githubData.projects[0].recent_events=[{at:'2026-10-14T00:00:00Z',payload:{title:'PR #415',body:'<script>existing evidence</script>',url:'https://github.com/ArtisanCloud/PowerX/pull/415'}}];
+    githubData.notifications=[];render();`);
+  await autoClick({viewTab:'projects',view:'github'});assert.match(automatic.element('content').innerHTML,/等待连接 GitHub/);
+  assert.match(automatic.element('content').innerHTML,/已保存消息 20 条/);assert(!automatic.element('content').innerHTML.includes('credentials-required'));
+  await autoClick({githubDetail:'PowerX'});assert.match(automatic.element('detail-content').innerHTML,/尚未拉取完整 PR 和 CI/);
+  assert.match(automatic.element('detail-content').innerHTML,/共保存 20 条/);assert.match(automatic.element('detail-content').innerHTML,/PR #415/);
+  assert.match(automatic.element('detail-content').innerHTML,/&lt;script&gt;existing evidence/);
+  await autoClick({githubDetail:'PowerXPlugin'});assert.match(automatic.element('detail-content').innerHTML,/共保存 0 条/);
+  await autoClick({viewTab:'hooks',view:'github'});assert.match(automatic.element('content').innerHTML,/artisancloud.token/);
+  automatic.run(`githubData.projects[0].access.configured=true;render();`);
+  assert.match(automatic.element('content').innerHTML,/每 5 分钟自动补漏/);assert.equal(automatic.state.posts,beforeAutomatic);
+  automatic.run(`githubData.projects[0].access={owner:'artisancloud',configured:true,mode:'github-app',state:'app-configured',file:'data/admin/github/credentials/app.json',app_id:12345,installation_id:101};render();`);
+  assert.match(automatic.element('content').innerHTML,/GitHub App 已配置/);assert.match(automatic.element('content').innerHTML,/后台自动续取/);
+  assert.match(automatic.element('content').innerHTML,/App ID 12345/);assert.equal(automatic.state.posts,beforeAutomatic);
+  automatic.run(`githubData.projects[0].status='github-app-permissions-missing';moduleViews.github='projects';render();`);
+  assert.match(automatic.element('content').innerHTML,/GitHub App 权限需要补齐/);assert(!automatic.element('content').innerHTML.includes('github-app-permissions-missing'));
+  console.log('GitHub automatic UI passed: connection guidance, independent project events without snapshots, escaped details and GET-only navigation.');
+  const gt=fixture();await flush();gt.state.mode='engineoffline';await login(gt);
+  const issue={id:'a'.repeat(32),version:'fixture-version',project:'PowerX',pr:415,sha:'a'.repeat(40),title:'<script>CI failure</script>',
+    publish_signal:'needs-verification',head_binding:'unconfirmed',current_ci:'unknown',evidence_count:1,workflow_state:'new',note:'',
+    evidence:[{url:'https://github.com/ArtisanCloud/PowerX/pull/415',title:'Review',body:'<svg>do not execute</svg>',actor:'bot[bot]',event:'comment'}]};
+  const report={id:'b'.repeat(32),project:'PowerX',summary:'Evidence report',root_cause:'根因未确认 <script>',head_binding:'unconfirmed',failed_jobs:[],locations:[],evidence:issue.evidence,next_steps:['Check source'],at:new Date().toISOString()};
+  gt.state.githubTriage={issues:[issue],releases:[{project:'PowerX',url:'https://github.com/ArtisanCloud/PowerX/releases/tag/dev',title:'dev',status:'prerelease',sha:null}],diagnostics:[report],pending:1};
+  const triageClick=dataset=>gt.handlers['document:click']({target:{closest(){return {dataset,disabled:false};}}});
+  await triageClick({tab:'github'});await triageClick({viewTab:'issues',view:'github'});
+  assert.match(gt.element('content').innerHTML,/&lt;script&gt;CI failure/);assert(!gt.element('content').innerHTML.includes('<script>'));
+  const preTriage=gt.state.posts;await triageClick({viewTab:'releases',view:'github'});assert.match(gt.element('content').innerHTML,/开发预发布/);assert.match(gt.element('content').innerHTML,/完整 SHA 未确认/);
+  await triageClick({viewTab:'diagnostics',view:'github'});assert.equal(gt.state.posts,preTriage);
+  await triageClick({githubIssue:issue.id});assert.match(gt.element('detail-content').innerHTML,/&lt;svg&gt;/);
+  await triageClick({githubDiagnose:'yes'});assert.equal(gt.state.posts,preTriage);assert.match(gt.element('github-issue-error').textContent,/不匹配/);
+  gt.element('github-issue-confirm').value='PowerX';await triageClick({githubDiagnose:'yes'});assert.equal(gt.state.lastGithubBody.action,'diagnose');assert.match(gt.element('detail-content').innerHTML,/根因未确认 &lt;script&gt;/);
+  await triageClick({githubIssue:issue.id});gt.element('github-issue-confirm').value='PowerX';gt.element('github-issue-state').value='investigating';gt.element('github-issue-note').value='核对机器人评论的证据与文件';await triageClick({githubIssueSave:'yes'});assert.equal(gt.state.lastGithubBody.state,'investigating');
+  await triageClick({githubBackfill:'PowerX'});await triageClick({githubBackfillSubmit:'yes'});assert.match(gt.element('github-backfill-error').textContent,/不匹配/);
+  gt.element('github-backfill-confirm').value='PowerX';await triageClick({githubBackfillSubmit:'yes'});assert.equal(gt.state.lastGithubBody.action,'backfill');
+  const triagePosts=gt.state.posts;gt.handlers.poll();await flush();await flush();assert.equal(gt.state.posts,triagePosts);
+  gt.context.navigator.onLine=false;gt.handlers['window:offline']();await triageClick({githubBackfill:'PowerX'});assert.equal(gt.state.posts,triagePosts);
+  console.log('GitHub triage UI passed: distinct issue/release/report tabs, escaped evidence, explicit target confirmation, Docker-independent controls and GET-only recovery.');
   const ssh=fixture();await flush();await login(ssh);const sshPosts=ssh.state.posts;
   await ssh.handlers['document:click']({target:{closest(){return {dataset:{tab:'ssh-tunnel'},disabled:false};}}});
   assert.match(ssh.element('content').innerHTML,/本机连接管理/);
