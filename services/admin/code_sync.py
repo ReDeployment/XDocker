@@ -17,7 +17,7 @@ from host_metrics import private_directory,read_json,atomic_json
 from registry_store import RegistryStore
 from sync_store import SyncStore
 from sync_runtime import (SyncError,require,identifier,repository,backup_branch,safe_path,scan_source,canonical,
-                          text_git,GitTransfer,github_auth,digest,run,SHA,DENY_PARTS,DENY_SUFFIXES,RUNTIME_ROOTS)
+                          text_git,source_branch,GitTransfer,github_auth,digest,run,SHA,DENY_PARTS,DENY_SUFFIXES,RUNTIME_ROOTS)
 from sync_agent import agent_sha
 
 
@@ -77,11 +77,17 @@ class CodeSync:
                     dirs[:]=[]
                     if git_dir.is_file() and str(p) not in by_path:continue
                     try:
-                        repo=canonical(text_git(p,'remote','get-url','origin'));branch=text_git(p,'symbolic-ref','--short','HEAD')
+                        repo=canonical(text_git(p,'remote','get-url','origin'));branch=source_branch(p)
                         project=by_path.get(str(p))
                         found.append({'directory':str(p),'repository':repo,'branch':branch,'name':project['name'] if project else p.name,'project':project['id'] if project else None})
                     except (SyncError,OSError,UnicodeError):continue
                 if depth>=6:dirs[:]=[]
+        # A temporary clone can have its own .git directory; deduplicate by origin,
+        # preferring registered primaries, then the shortest deterministic path.
+        unique={}
+        for item in sorted(found,key=lambda row:(not bool(row['project']),len(row['directory']),row['directory'])):
+            unique.setdefault(item['repository'].lower(),item)
+        found=sorted(unique.values(),key=lambda row:row['directory'])
         self._inventory=(time.monotonic(),found);return found
 
     def listing(self):

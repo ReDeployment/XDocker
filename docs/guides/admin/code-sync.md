@@ -5,7 +5,7 @@
 ## 首次配置与日常使用
 
 1. 管理员在主机批准源码根目录、SSH 身份和固定 Agent 路径；参见页面的「连接与授权指南」与 `scripts/code-sync.py policy-example`。策略文件 0600、目录 0700，私有策略和密钥不能提交到 Git。
-2. `bootstrap-workspace` 对齐批准根目录中的主 Git 仓库，复用应用登记 ID，排除 autobackup 和未登记 worktree；主仓库下的嵌套副本不会重复登记。仅接受 GitHub origin。每个来源和每日 02:00 Asia/Shanghai 计划都保持关闭，不自动上传。
+2. `bootstrap-workspace` 对齐批准根目录中的主 Git 仓库，复用应用登记 ID，排除 autobackup 和未登记 worktree；主仓库下的嵌套副本不会重复登记。仅接受 GitHub origin，相同仓库的临时克隆去重并优先采用已登记主目录。来源若为 detached HEAD，则保存 HEAD@完整SHA 固定引用，切换提交后须重新核对配置。每个来源和每日 02:00 Asia/Shanghai 计划都保持关闭，不自动上传。
 3. 在「源码仓库」添加 GitHub 仓库写入令牌，选择凭据，预览所选文件，输入完整项目名称开启来源。令牌仅保存在主机私有文件，SQLite 只保存引用，API 不回显。
 4. 在「目标设备」填写 VPN / 内网 IP、SSH 用户、已批准的身份引用与从可信渠道核对的主机公钥。设备端需安装同一版本 Agent，并在其私有策略批准副本目录、仓库、备份分支和可选 systemd 服务。当前支持 Linux / macOS，Windows Agent 尚未支持；服务重启仅支持 systemd。
 5. 在「分发策略」核对设备端授权并启用副本。在「上传计划」选择每日上传并分发，或仅同步最近一次已核对的提交，然后确认开启。

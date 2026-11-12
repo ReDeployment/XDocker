@@ -106,6 +106,23 @@ class PipelineTests(unittest.TestCase):
         (self.source/'collision').write_text('incoming code');git(self.source,'add','-f','collision')
         result=self.job();self.assertEqual(result['state'],'partial');self.assertEqual((self.destination/'collision').read_text(),'local generated file');self.assertEqual(text_git(self.destination,'rev-parse','HEAD'),first['sha'])
 
+    def test_detached_source_is_pinned_and_remains_read_only(self):
+        git(self.source,'checkout','--detach');head=text_git(self.source,'rev-parse','HEAD')
+        item=self.hub.inventory(True)[0];self.assertEqual(item['branch'],'HEAD@'+head)
+        self.hub.save('sources',{**self.profile,'revision':2,'branch':item['branch']})
+        index=(self.source/'.git/index').read_bytes();done=self.job()
+        self.assertEqual(done['state'],'success');self.assertEqual((self.source/'.git/index').read_bytes(),index)
+        self.assertEqual(text_git(self.source,'rev-parse','HEAD'),head)
+        git(self.source,'checkout','main')
+        with self.assertRaises(SyncError):self.hub.preview('example')
+
+    def test_workspace_inventory_prefers_primary_over_temporary_clone(self):
+        duplicate=self.sources/'project-production-fix-20261112'
+        git(self.sources,'clone',str(self.source),str(duplicate))
+        git(duplicate,'remote','set-url','origin','https://github.com/example/project.git')
+        inventory=self.hub.inventory(True)
+        self.assertEqual(len(inventory),1);self.assertEqual(inventory[0]['directory'],str(self.source))
+
     def test_archive_keeps_idempotency_and_agent_receipts_without_replaying(self):
         first=self.job();self.hub.archive()
         repeated=self.hub.enqueue({'source':'example','kind':'upload','confirmation':'Example','idempotency_key':first['idempotency_key']})

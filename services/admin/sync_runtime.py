@@ -98,6 +98,13 @@ def git(directory,*arguments,env=None,input=None,allowed=(0,),timeout=60):
 def text_git(directory,*args,**kwargs):return git(directory,*args,**kwargs)[1].decode('utf-8','strict').strip()
 
 
+def source_branch(root):
+    code,raw=git(root,'symbolic-ref','--quiet','--short','HEAD',allowed=(0,1))
+    if code==0:return raw.decode('utf-8','strict').strip()
+    sha=text_git(root,'rev-parse','HEAD');require(SHA.fullmatch(sha),'XD_SYNC_SOURCE_HEAD_INVALID')
+    return 'HEAD@'+sha
+
+
 def allowed_file(name,includes,excludes):
     p=Path(name)
     require(not p.is_absolute() and '..' not in p.parts and '\0' not in name,'XD_SYNC_FILE_INVALID')
@@ -109,7 +116,7 @@ def allowed_file(name,includes,excludes):
 def scan_source(profile,roots,copy_to=None):
     root=safe_path(profile['directory'],roots);require(root.is_dir(),'XD_SYNC_SOURCE_MISSING')
     require(Path(text_git(root,'rev-parse','--show-toplevel')).resolve()==root,'XD_SYNC_REPOSITORY_ROOT_REQUIRED')
-    branch=text_git(root,'symbolic-ref','--short','HEAD');require(branch==profile['branch'],'XD_SYNC_SOURCE_BRANCH_CHANGED')
+    branch=source_branch(root);require(branch==profile['branch'],'XD_SYNC_SOURCE_BRANCH_CHANGED')
     head=text_git(root,'rev-parse','HEAD');require(SHA.fullmatch(head),'XD_SYNC_SOURCE_HEAD_INVALID')
     require(canonical(text_git(root,'remote','get-url','origin')).lower()==profile['repository'].lower(),'XD_SYNC_SOURCE_REMOTE_MISMATCH')
     selection=['.'] if '.' in profile['includes'] else [':(literal)'+v for v in profile['includes']]
@@ -133,7 +140,7 @@ def scan_source(profile,roots,copy_to=None):
         if copy_to:
             target=Path(copy_to)/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body);target.chmod(mode)
     require(manifest,'XD_SYNC_NO_SELECTED_FILES')
-    require(text_git(root,'rev-parse','HEAD')==head and text_git(root,'symbolic-ref','--short','HEAD')==branch,'XD_SYNC_SOURCE_CHANGED')
+    require(text_git(root,'rev-parse','HEAD')==head and source_branch(root)==branch,'XD_SYNC_SOURCE_CHANGED')
     return {'head':head,'branch':branch,'files':len(manifest),'bytes':total,'excluded':excluded,
             'fingerprint':digest({'head':head,'branch':branch,'manifest':manifest}),'selected':[r[0] for r in manifest[:30]]}
 
