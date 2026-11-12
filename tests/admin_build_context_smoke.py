@@ -22,9 +22,9 @@ def local_engine():
         raise SystemExit('Docker test not run: local daemon is unavailable')
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ('Dockerfile', 'requirements.txt', 'app.py', 'host_metrics.py', 'resource_monitor.py', 'registry_store.py', 'native_services.py', 'gateway_runtime.py', 'service_hub_api.py', 'native_runtime.py', 'docker_api.py', 'backups.py',
+PUBLIC = ('Dockerfile', 'requirements.txt', 'app.py', 'sync_runtime.py', 'sync_store.py', 'sync_agent.py', 'code_sync.py', 'code_sync_api.py', 'host_metrics.py', 'resource_monitor.py', 'registry_store.py', 'native_services.py', 'gateway_runtime.py', 'service_hub_api.py', 'native_runtime.py', 'docker_api.py', 'backups.py',
           'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py', 'github_triage.py', 'github_auth.py',
-          'static/index.html', 'static/app.js', 'static/resources.js', 'static/resources.css', 'static/service_hub.js', 'static/service_hub.css', 'static/github.js', 'static/style.css')
+          'static/index.html', 'static/code_sync.js', 'static/code_sync.css', 'static/code-sync-guide.html', 'static/app.js', 'static/resources.js', 'static/resources.css', 'static/service_hub.js', 'static/service_hub.css', 'static/github.js', 'static/style.css')
 
 
 def main():

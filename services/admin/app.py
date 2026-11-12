@@ -29,6 +29,7 @@ from github_webhooks import WebhookInbox
 from github_triage import GitHubTriage
 from resource_monitor import register_resources
 from service_hub_api import register_service_hub
+from code_sync_api import register_code_sync
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -178,6 +179,7 @@ def create_app(settings=None, docker=None):
     register_resources(app, state, audit)
     register_service_hub(app,state,audit,lambda value:redact(value,[token]),
                          lambda:{r['domain'] for r in configuration(config)[0] if r['enabled']})
+    register_code_sync(app,state,audit)
 
     @app.before_request
     def authentication():
@@ -198,8 +200,8 @@ def create_app(settings=None, docker=None):
         g.csrf = row['csrf']
         if request.method == 'POST' and not hmac.compare_digest(request.headers.get('X-CSRF-Token', ''), g.csrf):
             return jsonify(error='操作验证已失效，请刷新页面。'), 403
-        if app.config['NATIVE_MODE'] and request.method=='POST' and request.path not in ('/api/login','/api/logout') and not request.path.startswith(('/api/resources/','/api/service-hub/')):
-            return jsonify(error='原生实例仅开放独立服务接入与资源监控操作。'),409
+        if app.config['NATIVE_MODE'] and request.method=='POST' and request.path not in ('/api/login','/api/logout') and not request.path.startswith(('/api/resources/','/api/service-hub/','/api/code-sync/')):
+            return jsonify(error='原生实例仅开放独立服务、资源监控与代码同步操作。'),409
 
     @app.after_request
     def headers(response):

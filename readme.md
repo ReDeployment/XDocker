@@ -108,3 +108,5 @@ sudo sh scripts/hosting.sh https powerxdoc
 所有 Compose 操作通过 `sh scripts/hosting.sh compose ...` 执行，它按 `ENABLED_SITES` 合并服务并加载各站点镜像变量。直接运行根目录 `docker compose up` 只会操作公共服务。
 
 `.env`、各站点的 `.env` 和 `data/` 不提交 Git。证书、私钥及 ACME 账户需要独立备份。XDocker 配置推送到 GitHub，每个网站镜像独立推送到 GHCR；本仓库无需打包为一个大镜像。本阶段不自动部署生产服务器。
+
+- [代码同步：定时 GitHub 备份与设备副本](docs/guides/admin/code-sync.md)

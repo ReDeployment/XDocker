@@ -268,3 +268,5 @@ GitHub 通知的历史补采集、问题处理与证据诊断见 [GitHub 通知�
 应用发现、资源登记、整机与进程指标及有界历史，见 [应用资源监控](application-resources.md)。该功能不增加被观察应用的运行操作权限。
 
 独立项目自行启动、原生 Python 管理入口、Nginx 网关与现有 systemd 接入见 [独立服务指南](native-services.md)。
+
+- [代码同步：定时 GitHub 备份与设备副本](code-sync.md)

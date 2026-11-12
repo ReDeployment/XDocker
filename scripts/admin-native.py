@@ -47,6 +47,8 @@ def main():
          'ADMIN_NATIVE_HOSTNAME':args.admin_domain,
          'ADMIN_NATIVE_WITHOUT_DOCKER':'true' if args.without_docker else 'false',
          'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str(ROOT/'services/admin')}
+    from code_sync import CodeSync,CodeSyncWorker
+    sync_worker=CodeSyncWorker(CodeSync(state,operations=args.operations));sync_worker.start()
     command=[sys.executable,'-m','gunicorn','--config','python:native_runtime','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']
     if args.reload:command+=['--reload']
     command+=['native_runtime:create_native_app()']
@@ -61,12 +63,14 @@ def main():
     if worker:worker.start()
     def shutdown(*unused):
         stopping.set()
+        sync_worker.stopping.set()
         if child.poll() is None:child.terminate()
     signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown)
     print(f'XDocker native: http://127.0.0.1:{args.port}/#service-hub; metrics={args.collect}, operations={args.operations}',flush=True)
     try:code=child.wait()
     finally:
         shutdown()
+        sync_worker.close()
         if worker:worker.join(timeout=2)
     raise SystemExit(code)
 

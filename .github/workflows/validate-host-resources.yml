@@ -7,6 +7,7 @@ on:
       - scripts/host-monitor*.py
       - scripts/admin-native*.py
       - scripts/service-hub.py
+      - scripts/code-sync*.py
       - tests/**
       - .github/workflows/validate-host-resources.yml
   push:
@@ -31,10 +32,11 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r services/admin/requirements.txt
-      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
+      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_code_sync test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
       - run: python -B tests/admin_build_context_smoke.py --static-only
       - run: node tests/resource_browser_acceptance.cjs
       - run: node tests/service_hub_browser_acceptance.cjs
+      - run: node tests/code_sync_browser_acceptance.cjs
       - run: python -B tests/native_admin_http_smoke.py
       - name: Verify actual Docker build context
         run: python -B tests/admin_build_context_smoke.py

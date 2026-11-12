@@ -36,3 +36,12 @@ static/**
 !static/service_hub.css
 
 !registry_store.py
+
+!sync_runtime.py
+!sync_store.py
+!sync_agent.py
+!code_sync.py
+!code_sync_api.py
+!static/code_sync.js
+!static/code_sync.css
+!static/code-sync-guide.html
