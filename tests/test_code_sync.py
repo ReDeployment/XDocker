@@ -64,6 +64,8 @@ class PipelineTests(unittest.TestCase):
         first=self.job();(self.destination/'app.py').write_text('local work')
         (self.source/'app.py').write_text('incoming change');failed=self.job();self.assertEqual(failed['state'],'partial');self.assertEqual((self.destination/'app.py').read_text(),'local work')
         self.assertEqual(text_git(self.destination,'rev-parse','HEAD'),first['sha'])
+        with self.assertRaises(SyncError):self.hub.enqueue({'source':'example','kind':'upload','confirmation':'Example','idempotency_key':'a'*32})
+        self.hub.close_job(failed['id'],{'confirmation':'Example'})
         git(self.destination,'add','app.py');git(self.destination,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','local divergence')
         head=text_git(self.destination,'rev-parse','HEAD');failed=self.job();self.assertEqual(failed['state'],'partial');self.assertEqual(text_git(self.destination,'rev-parse','HEAD'),head)
 

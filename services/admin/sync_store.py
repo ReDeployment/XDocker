@@ -106,7 +106,7 @@ class SyncStore:
             if old:
                 old=row_dict(old);require((old['source'],old['kind'],old['config_sha'])==(job['source'],job['kind'],job['config_sha']),'XD_SYNC_IDEMPOTENCY_CONFLICT');return old
             require(db.execute('SELECT count(*) FROM jobs').fetchone()[0]<300,'XD_SYNC_HISTORY_CAPACITY')
-            require(not db.execute("SELECT 1 FROM jobs WHERE source=? AND state IN ('queued','running','reconcile-queued','upload-unconfirmed','interrupted')",(job['source'],)).fetchone(),'XD_SYNC_SOURCE_BUSY_OR_UNCONFIRMED')
+            require(not db.execute("SELECT 1 FROM jobs WHERE source=? AND state IN ('queued','running','reconcile-queued','upload-unconfirmed','interrupted','partial')",(job['source'],)).fetchone(),'XD_SYNC_SOURCE_BUSY_OR_UNCONFIRMED')
             fields=list(job);db.execute('INSERT INTO jobs('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',list(job.values()))
         return job
 
