@@ -1,0 +1,13 @@
+{
+  "id": "example",
+  "revision": 1,
+  "name": "示例独立项目",
+  "directory": "/data/workspace/example",
+  "endpoint": "example",
+  "domain": "example.home.test",
+  "service": null,
+  "monitor": null,
+  "delivery": "external",
+  "tls": null,
+  "enabled": false
+}

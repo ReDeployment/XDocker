@@ -4,6 +4,7 @@ import configparser
 import hmac
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import secrets
@@ -26,6 +27,8 @@ from image_versions import ImageVersions, VersionCheckBusy
 from github_watch import GitHubWatch, WatchError
 from github_webhooks import WebhookInbox
 from github_triage import GitHubTriage
+from resource_monitor import register_resources
+from service_hub_api import register_service_hub
 
 PROJECT = 'xdocker-web-hosting'
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]*$')
@@ -120,6 +123,8 @@ def create_app(settings=None, docker=None):
                       GITHUB_WATCH_INTERVAL=os.getenv('ADMIN_GITHUB_WATCH_INTERVAL','300'),
                       GITHUB_WEBHOOK_QUEUE=os.getenv('ADMIN_GITHUB_WEBHOOK_QUEUE','/github-inbox'),
                       GITHUB_WEBHOOK_ENABLED=os.getenv('ADMIN_GITHUB_WEBHOOK_ENABLED','false')=='true',
+                      HOST_METRICS=os.getenv('ADMIN_HOST_METRICS','/host-metrics'),
+                      NATIVE_MODE=False,NATIVE_OPERATIONS_ENABLED=False,
                       TRUSTED_HOSTS=['localhost', '127.0.0.1', '[::1]'])
     app.config.update(settings or {})
     state, config, reports = (Path(app.config[name]) for name in ('STATE', 'CONFIG', 'REPORTS'))
@@ -158,7 +163,7 @@ def create_app(settings=None, docker=None):
         CREATE TABLE IF NOT EXISTS probes (site TEXT PRIMARY KEY, at TEXT, status TEXT, output TEXT);
         ''')
         unfinished = {r['id'] for r in connection.execute("SELECT id FROM jobs WHERE state='running'")}
-        if unfinished:
+        if unfinished and not app.config['NATIVE_MODE']:
             orphan_jobs = engine.request('GET', '/containers/json?' + urlencode({'all':'true','filters':json.dumps({'label':['io.xdocker.admin.job']})}))
             for container in orphan_jobs:
                 if container.get('Labels', {}).get('io.xdocker.admin.job') in unfinished:
@@ -169,6 +174,10 @@ def create_app(settings=None, docker=None):
     def audit(action, target, result):
         with db() as connection:
             connection.execute('INSERT INTO audit(at,action,target,result) VALUES(?,?,?,?)', (now(), action, target, result))
+
+    register_resources(app, state, audit)
+    register_service_hub(app,state,audit,lambda value:redact(value,[token]),
+                         lambda:{r['domain'] for r in configuration(config)[0] if r['enabled']})
 
     @app.before_request
     def authentication():
@@ -189,6 +198,8 @@ def create_app(settings=None, docker=None):
         g.csrf = row['csrf']
         if request.method == 'POST' and not hmac.compare_digest(request.headers.get('X-CSRF-Token', ''), g.csrf):
             return jsonify(error='操作验证已失效，请刷新页面。'), 403
+        if app.config['NATIVE_MODE'] and request.method=='POST' and request.path not in ('/api/login','/api/logout') and not request.path.startswith(('/api/resources/','/api/service-hub/')):
+            return jsonify(error='原生实例仅开放独立服务接入与资源监控操作。'),409
 
     @app.after_request
     def headers(response):
@@ -264,12 +275,16 @@ def create_app(settings=None, docker=None):
 
     # Startup recovery restores only the application services this control
     # plane itself paused; unfinished helper containers were removed above.
-    backup_manager.recover([p for p in managed_projects() if p != PROJECT])
+    if not app.config['NATIVE_MODE']:
+        backup_manager.recover([p for p in managed_projects() if p != PROJECT])
 
     def managed_containers():
         projects = managed_projects()
         filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project']})})
-        containers = engine.request('GET', '/containers/json?' + filters)
+        try:containers = engine.request('GET', '/containers/json?' + filters)
+        except DockerError:
+            if not app.config['NATIVE_MODE']:raise
+            return []
         return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project') in projects
                 and c['Labels'].get('com.docker.compose.service') in projects[c['Labels']['com.docker.compose.project']]
                 and c['Labels'].get('com.docker.compose.oneoff', 'False').lower() != 'true']
@@ -369,9 +384,13 @@ def create_app(settings=None, docker=None):
                     route = parser[section]
                     if route.get('subdomain') == site['domain'].split('.')[0]:
                         site['client_template'] = {'name':section, 'address':route.get('local_ip'), 'port':route.get('local_port')}
-        version = engine.request('GET', '/version')
+        try:
+            version = engine.request('GET', '/version');version['available']=True
+        except DockerError:
+            if not app.config['NATIVE_MODE']:raise
+            version={'Version':'未连接','Os':platform.system().lower(),'Arch':platform.machine(),'available':False}
         return jsonify(at=now(), services=services, sites=sites, certificates=certs, reports=report_history,
-                       engine={k: version.get(k) for k in ('Version', 'ApiVersion', 'Os', 'Arch')},
+                       engine={k: version.get(k) for k in ('Version', 'ApiVersion', 'Os', 'Arch','available')},runtime_mode='native' if app.config['NATIVE_MODE'] else 'container',
                        revision=os.getenv('ADMIN_DEPLOY_REVISION', 'development'), image_revision=os.getenv('XDOCKER_REVISION', 'development'))
 
     @app.get('/api/services/<identifier>/logs')

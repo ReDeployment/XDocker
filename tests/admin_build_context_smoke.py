@@ -5,19 +5,45 @@ import shutil
 import subprocess
 import tempfile
 import argparse
+import sys
+import os
+import re
+
+def local_engine():
+    """Check only local configuration before allowing the disposable Docker test."""
+    if not shutil.which('docker'):
+        raise SystemExit('Docker test not run: docker is unavailable')
+    override=os.environ.get('DOCKER_HOST','')
+    host=subprocess.check_output(['docker','context','inspect','--format','{{.Endpoints.docker.Host}}'],text=True).strip()
+    if not host.startswith('unix://') or override and not override.startswith('unix://'):
+        raise SystemExit('Docker test not run: a local Unix-socket context is required')
+    result=subprocess.run(['docker','info','--format','{{.ServerVersion}}'],capture_output=True,text=True)
+    if result.returncode or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?',result.stdout.strip()):
+        raise SystemExit('Docker test not run: local daemon is unavailable')
 
 ROOT = Path(__file__).resolve().parents[1]
-PUBLIC = ('Dockerfile', 'requirements.txt', 'app.py', 'docker_api.py', 'backups.py',
+PUBLIC = ('Dockerfile', 'requirements.txt', 'app.py', 'host_metrics.py', 'resource_monitor.py', 'registry_store.py', 'native_services.py', 'gateway_runtime.py', 'service_hub_api.py', 'native_runtime.py', 'docker_api.py', 'backups.py',
           'instances.py', 'preflight.py', 'backup_plans.py', 'image_versions.py', 'github_watch.py', 'github_webhooks.py', 'github_triage.py', 'github_auth.py',
-          'static/index.html', 'static/app.js', 'static/github.js', 'static/style.css')
+          'static/index.html', 'static/app.js', 'static/resources.js', 'static/resources.css', 'static/service_hub.js', 'static/service_hub.css', 'static/github.js', 'static/style.css')
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--receiver-only",action="store_true")
+    parser.add_argument('--static-only',action='store_true')
     args=parser.parse_args()
     source = ROOT / ("services/github-webhook" if args.receiver_only else "services/admin")
     public = ("Dockerfile","requirements.txt","receiver.py","projects.json") if args.receiver_only else PUBLIC
+    if args.static_only:
+        with tempfile.TemporaryDirectory(prefix='xdocker-runtime-') as temp:
+            for name in public:
+                p=Path(temp)/name;p.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source/name,p)
+                if name.endswith('.py'):compile(p.read_text(),name,'exec')
+            module='receiver' if args.receiver_only else 'app'
+            subprocess.run([sys.executable,'-B','-c','import '+module],cwd=temp,env={**os.environ,'PYTHONPATH':temp},check=True)
+        print('Static public runtime imports passed; Docker not used.')
+        return
+    local_engine()
     with tempfile.TemporaryDirectory(prefix='xdocker-context-') as temp:
         context = Path(temp)
         for name in (*public, '.dockerignore'):

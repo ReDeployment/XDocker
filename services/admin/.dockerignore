@@ -22,3 +22,17 @@ static/**
 !github_triage.py
 
 !github_auth.py
+
+!host_metrics.py
+!resource_monitor.py
+!static/resources.js
+!static/resources.css
+
+!native_services.py
+!gateway_runtime.py
+!service_hub_api.py
+!native_runtime.py
+!static/service_hub.js
+!static/service_hub.css
+
+!registry_store.py

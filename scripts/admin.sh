@@ -44,6 +44,12 @@ backups.mkdir(mode=0o700, parents=True, exist_ok=True)
 backups.chmod(0o700)
 if os.geteuid() == 0:
     os.chown(backups, owner.st_uid, owner.st_gid)
+metrics = Path('data/host-metrics')
+if any(p.is_symlink() for p in (metrics,*metrics.parents)):
+    raise SystemExit('Refusing symlink host metrics directory.')
+metrics.mkdir(mode=0o700, parents=True, exist_ok=True)
+metrics.chmod(0o700)
+if os.geteuid() == 0: os.chown(metrics, owner.st_uid, owner.st_gid)
 p = Path('services/admin/.env')
 text = p.read_text()
 git = ['git', 'rev-parse', 'HEAD']

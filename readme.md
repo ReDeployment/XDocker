@@ -1,5 +1,7 @@
 # XDocker
 
+独立项目可以保留自己的开发与启动方式，通过 XDocker 统一登记入口、资源和常驻服务。XDocker 自身也支持原生 Python 运行，无需为日常修改构建镜像；参见[独立服务与原生入口](docs/guides/admin/native-services.md)。
+
 XDocker 是多网站容器部署仓库：共享入口 Nginx 和 Certbot，各网站独立配置服务、域名和 GHCR 镜像。
 
 ## 架构

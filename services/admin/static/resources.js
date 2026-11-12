@@ -1,0 +1,97 @@
+'use strict';
+const resourcesUI={data:null,error:'',loading:false,view:'overview',query:'',editor:null,editRevision:0,draft:null,selected:'host',history:null,historyError:'',historyLoading:false};
+const resourceViews={overview:'服务器概览',apps:'已登记应用',discover:'发现应用',history:'历史趋势'};
+const resourceMessages={XD_MONITOR_HOST_CHANGED:'服务器身份发生变化，请重新核对应用绑定和采集目录。',XD_MONITOR_TARGET_INVALID:'请选择 1–16 个不同组件。',XD_MONITOR_ID_INVALID:'应用标识须为小写字母、数字或短横线，且不能使用 host。',XD_MONITOR_CONFIRMATION_REQUIRED:'请输入完整应用名称确认移除。',XD_MONITOR_CAPACITY:'已达到 100 个应用的登记上限。',XD_METRICS_NOT_CONNECTED:'尚未接入这台服务器的采集器。',XD_METRICS_REPORT_UNAVAILABLE:'采集报告无法读取，请检查采集器和目录权限。',XD_METRICS_DOCKER_UNAVAILABLE:'容器指标读取失败，当前仅有可读取的宿主机进程。',XD_METRICS_HISTORY_UNAVAILABLE:'历史采样无法读取或保存。',XD_MONITOR_REVISION_CONFLICT:'登记信息已被更新，请重新读取后编辑。',XD_MONITOR_TARGET_ALREADY_BOUND:'所选组件已属于其他应用，请先调整原登记。',XD_METRICS_STALE:'采集数据已过期，请恢复采集器后再登记。',XD_MONITOR_TARGET_NOT_DISCOVERED:'所选组件已不在当前发现结果中，请重新选择。'};
+const resourceText=v=>resourceMessages[v]||v;
+const resourceBytes=v=>v===null||v===undefined?'—':v>=1073741824?(v/1073741824).toFixed(2)+' GB':(v/1048576).toFixed(1)+' MB';
+const resourceCPU=v=>v===null||v===undefined?'待采样':Number(v).toFixed(1)+'%';
+const resourceButton=(label,data,blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-resource-${k}="${esc(v)}"`).join(' ')} ${blocked?'disabled':''}>${esc(label)}</button>`;
+function resetResources(){resourcesUI.data=null;resourcesUI.error='';resourcesUI.history=null;resourcesUI.draft=null;resourcesUI.editor=null;document.getElementById('resource-dialog')?.close();}
+async function loadResources(){
+ if(!loggedIn||resourcesUI.loading)return;resourcesUI.loading=true;
+ try{const data=await api('resources');if(loggedIn){resourcesUI.data=data;resourcesUI.error='';}}
+ catch(error){resourcesUI.error=error.message;}
+ finally{resourcesUI.loading=false;if(current==='resources'&&loggedIn)renderResourcesPage();}
+}
+async function loadResourceHistory(){
+ if(!loggedIn||resourcesUI.historyLoading)return;resourcesUI.historyLoading=true;const selected=resourcesUI.selected;
+ try{const data=await api('resources/history/'+encodeURIComponent(selected));if(loggedIn&&selected===resourcesUI.selected){resourcesUI.history=data;resourcesUI.historyError='';}}
+ catch(error){if(selected===resourcesUI.selected)resourcesUI.historyError=error.message;}
+ finally{resourcesUI.historyLoading=false;if(current==='resources'&&loggedIn)renderResourcesPage();}
+}
+function resourceChart(history){
+ if(!history?.points.length)return '<div class="empty">尚无历史采样。采集器运行后逐步保留最近 24 小时的数据。</div>';
+ const points=history.points.filter(p=>p.memory_bytes!==null),max=Math.max(1,...points.map(p=>p.memory_bytes));
+ const end=Date.now()/1000,start=end-86400;
+ const segments=[];let segment=[],previous=null;
+ for(const p of points){if(previous!==null&&p.at-previous>300){segments.push(segment);segment=[];}segment.push(`${Math.max(10,Math.min(590,10+(p.at-start)/86400*580)).toFixed(1)},${(110-p.memory_bytes/max*90).toFixed(1)}`);previous=p.at;}segments.push(segment);
+ return `<div class="resource-chart"><p>内存峰值 ${resourceBytes(max)} · 已采集 ${history.points.length} 个五分钟区间</p><svg viewBox="0 0 600 125" role="img" aria-label="最近 24 小时内存趋势，空白代表缺少采样"><path d="M0 110H600" stroke="#dce5ee"/>${segments.map(s=>s.length>1?`<polyline points="${s.join(' ')}" fill="none" stroke="#2563eb" stroke-width="2"/>`:`<circle cx="${s[0].split(',')[0]}" cy="${s[0].split(',')[1]}" r="3" fill="#2563eb"/>`).join('')}</svg><div class="resource-chart-labels"><span>24 小时前</span><span>现在</span></div></div>`+table(['最近区间','CPU 均值','内存峰值','分钟样本'],history.points.slice(-12).reverse().map(p=>`<tr><td>${date(p.at*1000)}</td><td>${resourceCPU(p.cpu_percent)}</td><td>${resourceBytes(p.memory_bytes)}</td><td>${p.samples}</td></tr>`));
+}
+function renderResourcesPage(){
+ const route=location.hash.slice(1).split('/')[1];if(resourceViews[route])resourcesUI.view=route;
+ const d=resourcesUI.data,r=d?.report,view=resourcesUI.view,fresh=!!r&&r.fresh&&Date.now()/1000-r.at<=90,writable=fresh&&d?.configuration_writable!==false;
+ const errors=[resourcesUI.error,d?.error,...(r?.errors||[])].filter(Boolean);
+ if(d?.configuration_writable===false)errors.push('当前为只读视图；登记应用请打开服务器的完整控制台。');
+ if(r&&!fresh)errors.push('采集数据已过期，以下是上次观测；当前资源占用未确认。');
+ if(r?.coverage.process_limit_reached||r?.coverage.group_limit_reached||r?.coverage.docker_limit_reached)errors.push('发现数量达到本轮采集上限，应用清单或汇总可能不完整。');
+ if(r?.coverage.docker_incomplete)errors.push('部分运行容器未取得指标，应用汇总保持未确认。');
+ if(r?.host.memory_available/r?.host.memory_total<.1)errors.push('服务器可用内存低于 10%。');
+ if(r?.host.disk_free/r?.host.disk_total<.1)errors.push('服务器根分区可用空间低于 10%。');
+ if(r?.host.cpu_percent>=85)errors.push('本次采样的整机 CPU 使用率达到 85%。');
+ let body='<div class="empty">正在读取服务器资源…</div>';
+ if(d){
+  if(view==='overview')body=r?`<div class="kpis resource-kpis">${[['CPU',resourceCPU(r.host.cpu_percent),r.host.cpu_logical+' 个逻辑 CPU'],['内存可用',resourceBytes(r.host.memory_available),'总内存 '+resourceBytes(r.host.memory_total)],['根分区可用',resourceBytes(r.host.disk_free),'总空间 '+resourceBytes(r.host.disk_total)],['已登记应用',d.apps.length,'发现 '+r.targets.length+' 个组件']].map(([label,value,help])=>`<article class="kpi"><div class="kpi-label">${esc(label)}</div><strong>${esc(value)}</strong><small>${esc(help)}</small></article>`).join('')}</div>`+panel('服务器状态',esc(r.host.hostname),`<div class="panel-body"><div class="stack-row"><span>最近采样</span><strong>${date(r.at*1000)}</strong></div><div class="stack-row"><span>负载（1 / 5 / 15 分钟）</span><span>${r.host.load.map(v=>v.toFixed(2)).join(' / ')}</span></div><div class="stack-row"><span>交换空间已用</span><span>${resourceBytes(r.host.swap_used)}</span></div><p class="muted">整机 CPU 以全部逻辑 CPU 为 100%；应用 CPU 以单核为 100%，可以超过 100%。</p><p class="muted">已扫描 ${r.coverage.processes_scanned||0} 个进程；${r.coverage.processes_unreadable||0} 个内核、已退出或无权读取的进程未归入应用。容器进程不重复计入宿主机应用。</p></div>`):'<div class="empty">尚未接入宿主机采集器。安装步骤见仓库的应用资源监控指南。</div>';
+  if(view==='apps')body=panel('已登记应用','将同一项目的多个组件归为一个应用',table(['应用','观测状态','CPU / 内存','组件','操作'],d.apps.map(a=>`<tr><td><strong>${esc(a.name)}</strong><small>${esc(a.id)}</small></td><td>${badge(a.status==='observed'&&fresh?'已观测':'未确认',a.status==='observed'&&fresh?'good':'warn')}<small>${esc(a.reason)}</small></td><td>${resourceCPU(a.cpu_percent)}<small>${resourceBytes(a.memory_bytes)}</small></td><td>${a.targets.length} 个${a.missing_targets.length?`<small>${a.missing_targets.length} 个暂未发现</small>`:''}</td><td><div class="actions">${resourceButton('详情',{'detail':a.id})}${resourceButton('编辑',{'edit':a.id},!writable)}</div></td></tr>`)),resourceButton('登记应用',{'edit':'new'},!writable||!r?.targets.length));
+  if(view==='discover'){
+   const bound=new Set(d.apps.flatMap(a=>a.targets)),q=resourcesUI.query.toLowerCase(),rows=(r?.targets||[]).filter(t=>(t.name+' '+t.description).toLowerCase().includes(q));
+   body=panel('发现应用','选择要持续观察的组件；发现结果不会自动获得启停权限',`<div class="panel-body"><label>搜索应用或目录<input id="resource-search" type="search" value="${esc(resourcesUI.query)}" placeholder="服务名、可执行文件或工作目录"></label></div>`+table(['组件','类型 / 状态','CPU / 内存','归属','操作'],rows.map(t=>`<tr><td><strong>${esc(t.name)}</strong><small class="resource-path">${esc(t.description)}</small></td><td>${esc({docker:'Docker 容器',systemd:'systemd 服务',process:'可执行文件与工作目录'}[t.kind])}<small>${esc(t.state)}</small></td><td>${resourceCPU(t.cpu_percent)}<small>${resourceBytes(t.memory_bytes)}</small></td><td>${bound.has(t.id)?'已登记':'待选择'}</td><td>${resourceButton('查看进程',{'target':t.id})} ${resourceButton('登记',{'bind':t.id},!writable||bound.has(t.id))}</td></tr>`)));
+  }
+  if(view==='history')body=panel('历史趋势','每分钟保留一份样本；每五分钟显示 CPU 均值、内存峰值。缺失区间保持空白。',`<div class="panel-body"><div class="actions"><label>查看对象<select id="resource-history-select"><option value="host">整台服务器</option>${d.apps.map(a=>`<option value="${esc(a.id)}" ${a.id===resourcesUI.selected?'selected':''}>${esc(a.name)}</option>`).join('')}</select></label>${resourceButton('读取趋势',{'history':'yes'},resourcesUI.historyLoading)}</div>${resourcesUI.historyError?`<p class="error" role="alert">${esc(resourceText(resourcesUI.historyError))}</p>`:''}${resourceChart(resourcesUI.history)}</div>`);
+ }
+ const top=`<div class="intro"><div><h2>应用资源</h2><p class="muted">查看本服务器的资源与应用占用。</p></div>${resourceButton(resourcesUI.loading?'正在读取…':'刷新指标',{'refresh':'yes'},resourcesUI.loading)}</div><div class="resource-status" role="status">${fresh?'采集连接正常':'采集尚未确认'} · 监控登记只影响展示，不会启停服务</div>${[...new Set(errors)].map(e=>`<div class="resource-alert" role="alert">${esc(resourceText(e))}</div>`).join('')}`;
+ const tabs=Object.entries(resourceViews).map(([key,label])=>({key,label}));
+ $('content').innerHTML='<div class="resource-workspace">'+top+verticalTabs('resources','应用资源分区',tabs,view,body)+'</div>';
+ if(resourcesUI.lastView!==view){$(`view-resources-${view}`)?.scrollIntoView({block:'nearest',inline:'nearest'});resourcesUI.lastView=view;}
+}
+function resourceDraft(){const f=$('resource-form');if(f)resourcesUI.draft={id:f.elements.id.value,name:f.elements.name.value,targets:[...f.querySelectorAll('[name=targets]:checked')].map(e=>e.value)};}
+function resourceEdit(identifier='new',target=null){
+ const d=resourcesUI.data,row=d.apps.find(a=>a.id===identifier),draftKey=row?.id||'new';
+ if(resourcesUI.editor!==draftKey){resourcesUI.draft=null;resourcesUI.editRevision=row?.revision||0;}
+ resourcesUI.editor=draftKey;const draft=resourcesUI.draft||row||{id:'',name:'',targets:target?[target]:[]};
+ let dialog=$('resource-dialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='resource-dialog';dialog.className='resource-dialog';document.body.append(dialog);dialog.addEventListener('cancel',resourceDraft);}
+ const other=new Set(d.apps.filter(a=>a.id!==row?.id).flatMap(a=>a.targets));
+ const candidates=[...(d.report?.targets||[])];for(const id of draft.targets)if(!candidates.some(t=>t.id===id))candidates.push({id,name:'暂未发现的已选组件',description:id});
+ dialog.innerHTML=`<form id="resource-form"><div class="detail-head"><h2>${row?'编辑':'登记'}应用</h2>${resourceButton('关闭',{'close':'yes'})}</div><label>应用标识<input name="id" value="${esc(draft.id)}" required pattern="[a-z0-9][a-z0-9-]{0,63}" ${row?'readonly':''} placeholder="例如 powerx-dev"></label><label>应用名称<input name="name" maxlength="80" required value="${esc(draft.name)}" placeholder="例如 PowerX 开发环境"></label><fieldset class="resource-targets"><legend>应用组件（最多 16 个）</legend>${candidates.filter(t=>!other.has(t.id)).map(t=>`<label><input type="checkbox" name="targets" value="${esc(t.id)}" ${draft.targets.includes(t.id)?'checked':''}><span>${esc(t.name)}<small>${esc(t.description)}</small></span></label>`).join('')}</fieldset><p class="muted">宿主机进程按服务或可执行文件与工作目录分组。共享数据库请单独登记；RSS 合计可能重复计算共享内存页。</p><p id="resource-form-error" class="error" role="alert"></p><div class="dialog-actions">${row?resourceButton('重读登记（放弃草稿）',{'reload':row.id})+resourceButton('移除登记',{'remove':row.id}):''}${resourceButton('取消',{'close':'yes'})}<button class="primary" type="submit">保存登记</button></div></form>`;
+ if(!dialog.open)dialog.showModal();
+}
+document.addEventListener('submit',async event=>{
+ if(event.target.getAttribute('id')!=='resource-form')return;event.preventDefault();resourceDraft();event.submitter.disabled=true;
+ try{await api('resources/apps',{...resourcesUI.draft,revision:resourcesUI.editRevision+1});$('resource-dialog').close();resourcesUI.draft=null;resourcesUI.editor=null;await loadResources();notice('应用监控登记已保存。');}
+ catch(error){$('resource-form-error').textContent=resourceText(error.message);}
+ finally{event.submitter.disabled=false;}
+});
+document.addEventListener('input',event=>{if(event.target.closest('#resource-form'))resourceDraft();});
+document.addEventListener('change',event=>{
+ if(event.target.id==='resource-search'){resourcesUI.query=event.target.value;renderResourcesPage();}
+ if(event.target.id==='resource-history-select'){resourcesUI.selected=event.target.value;resourcesUI.history=null;loadResourceHistory();}
+});
+document.addEventListener('click',async event=>{
+ const b=event.target.closest('[data-resource-reload],[data-resource-refresh],[data-resource-edit],[data-resource-bind],[data-resource-close],[data-resource-detail],[data-resource-target],[data-resource-remove],[data-resource-history]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const v=b.dataset;
+ try{
+  if(v.resourceReload){resourcesUI.editor=null;resourcesUI.draft=null;resourceEdit(v.resourceReload);return;}
+  if(v.resourceRefresh){await loadResources();return;}
+  if(v.resourceEdit||v.resourceBind){resourceEdit(v.resourceEdit||'new',v.resourceBind);return;}
+  if(v.resourceClose){resourceDraft();$('resource-dialog').close();return;}
+  if(v.resourceHistory){await loadResourceHistory();return;}
+  if(v.resourceRemove){const row=resourcesUI.data.apps.find(a=>a.id===v.resourceRemove);$('detail-title').textContent='移除监控登记';$('detail-content').innerHTML=`<p>只移除「${esc(row.name)}」的监控分组，应用继续运行。</p><label>输入应用名称<input id="resource-remove-confirm"></label>${resourceButton('确认移除',{'remove-confirm':row.id})}`;$('resource-dialog').close();$('detail-dialog').showModal();return;}
+  const r=resourcesUI.data.report,app=resourcesUI.data.apps.find(a=>a.id===v.resourceDetail),ids=app?.targets||[v.resourceTarget],targets=(r?.targets||[]).filter(t=>ids.includes(t.id)),processes=(r?.processes||[]).filter(p=>ids.includes(p.target));
+  $('detail-title').textContent=app?.name||targets[0]?.name||'应用详情';
+  $('detail-content').innerHTML=table(['组件','CPU','内存 / 口径'],targets.map(t=>`<tr><td>${esc(t.name)}</td><td>${resourceCPU(t.cpu_percent)}</td><td>${resourceBytes(t.memory_bytes)}<small>${t.memory_kind==='rss'?'RSS（共享页可能重复）':'容器工作集'}</small></td></tr>`))+panel('宿主机进程','容器内部进程不在此列表；这里显示最近采样。',table(['PID / 父 PID','进程','CPU / 内存'],processes.map(p=>`<tr><td>${p.pid} / ${p.ppid}</td><td>${esc(p.name)}</td><td>${resourceCPU(p.cpu_percent)} / ${resourceBytes(p.memory_bytes)}</td></tr>`)));
+  $('detail-dialog').showModal();
+ }catch(error){notice(resourceText(error.message),true);}
+});
+document.addEventListener('click',async event=>{
+ const b=event.target.closest('[data-resource-remove-confirm]');if(!b||b.disabled||!loggedIn)return;const row=resourcesUI.data.apps.find(a=>a.id===b.dataset.resourceRemoveConfirm);b.disabled=true;
+ try{await api('resources/apps/'+row.id+'/remove',{revision:row.revision,confirmation:$('resource-remove-confirm').value});$('detail-dialog').close();resourcesUI.editor=null;resourcesUI.draft=null;if(resourcesUI.selected===row.id){resourcesUI.selected='host';resourcesUI.history=null;}await loadResources();notice('已移除监控登记，应用继续运行。');}
+ catch(error){notice(resourceText(error.message),true);}finally{b.disabled=false;}
+});

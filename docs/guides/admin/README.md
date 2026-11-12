@@ -264,3 +264,7 @@ sudo sh scripts/admin.sh start
 GitHub 通知的历史补采集、问题处理与证据诊断见 [GitHub 通知管理](github-triage.md)。
 
 - [GitHub App 创建、私钥配置、自动续取与更新验收](github-connection.md)
+
+应用发现、资源登记、整机与进程指标及有界历史，见 [应用资源监控](application-resources.md)。该功能不增加被观察应用的运行操作权限。
+
+独立项目自行启动、原生 Python 管理入口、Nginx 网关与现有 systemd 接入见 [独立服务指南](native-services.md)。

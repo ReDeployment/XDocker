@@ -1,0 +1,40 @@
+name: Validate host resource monitoring
+on:
+  pull_request:
+    paths:
+      - services/admin/**
+      - scripts/admin.sh
+      - scripts/host-monitor*.py
+      - scripts/admin-native*.py
+      - scripts/service-hub.py
+      - tests/**
+      - .github/workflows/validate-host-resources.yml
+  push:
+    branches: ['codex/host-resources-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  monitoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: pip install -r services/admin/requirements.txt
+      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
+      - run: python -B tests/admin_build_context_smoke.py --static-only
+      - run: node tests/resource_browser_acceptance.cjs
+      - run: node tests/service_hub_browser_acceptance.cjs
+      - run: python -B tests/native_admin_http_smoke.py
+      - name: Verify actual Docker build context
+        run: python -B tests/admin_build_context_smoke.py

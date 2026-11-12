@@ -21,6 +21,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/admin:/state
+      - ./data/host-metrics:/host-metrics:ro
       - ./data/github-webhook/inbox:/github-inbox
       - ./.env:/config/root.env:ro
       - ./sites:/config/sites:ro

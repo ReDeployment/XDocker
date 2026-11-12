@@ -87,7 +87,11 @@ class AdminTests(unittest.TestCase):
         for _ in range(100):
             rows = self.client.get('/api/jobs').json['jobs']
             row = next(j for j in rows if j['id']==identifier)
-            if row['state']!='running':return row
+            if row['state']!='running':
+                # Job status and its audit are persisted sequentially by the worker.
+                # Wait for the final audit before assertions and temporary-state cleanup.
+                events=self.client.get('/api/audit').json['events']
+                if any(e['action']==row['action'] and e['target']==row['target'] and e['result']==row['state'] for e in events):return row
             time.sleep(.01)
         self.fail('Job never completed')
 
