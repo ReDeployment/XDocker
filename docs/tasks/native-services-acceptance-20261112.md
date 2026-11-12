@@ -1,6 +1,6 @@
 # 独立服务与原生管理入口验收
 
-日期：2026-11-12。状态：本地实现已推送到独立任务分支，home-pc-ubuntu 原生实例、SQLite 与两个真实网页入口已部署并通过实机验收；客户端 DNS 尚未配置。
+日期：2026-11-12。状态：本地实现已推送到独立任务分支，home-pc-ubuntu 原生实例、SQLite 与两个真实网页入口已部署并通过实机验收；当前 Mac 的域名解析和 HTTP 80 标准入口已修复，其他设备仍需各自解析或共享内网 DNS。
 
 ## 定位与范围
 
@@ -77,3 +77,17 @@ PadelU 下的 autobackup 工作树不登记为独立应用。PowerXDocs/repos �
 部署中发现并从本地修正：systemd WorkingDirectory 标量引号、Ubuntu Nginx 默认系统临时目录、nginx -t 留下的空 pid 文件、TIME_WAIT 导致的快速重启端口误判。增加针对性门禁/测试；非空未知 pid、活跃监听和配置漂移仍拒绝，进程启动只重试读取身份而不重放命令。所有修复先本地测试、提交推送，再远端拉取运行。
 
 失败回退只停止本次新增的 XDocker 自身与自己的网关，保留状态/回执，恢复相应配置；不删除业务容器、卷、数据库，不对其他项目执行 reset、迁移或重启。
+
+## 标准入口修复验收
+
+用户反馈 `.home.test:8088` 不能访问并要求统一入口省略端口，随后明确授权 fix。确认当前 Mac 没有两个域名的解析，服务器仅监听 VPN 8088；指定 Host 能返回 200，80/443 空闲。
+
+- 实现提交 `abf552c5286f90953a5c17eda3c89441759d08b3`。策略支持 HTTP 80 / HTTPS 443 或既有高位开发端口，拒绝其他低位端口；页面链接与 HTTPS 跳转省略默认端口。权限不足单独返回 XD_GATEWAY_BIND_PERMISSION_REQUIRED。
+- unit 使用显式 `--operations --gateway-web-ports` 渲染，仅允许 CAP_NET_BIND_SERVICE，User 仍为 michael，NoNewPrivileges=yes。服务器核对 AmbientCapabilities/CapabilityBoundingSet 均只有这一项，没有改全局低端口 sysctl、没有以 root 运行 Admin、没有改业务 unit。
+- 切换前保存 SQLite 一致性备份、旧私有 policy 及原 XDocker unit。先安装并 verify 新 unit，复核旧 8088 网关身份正常，再将 SQLite policy revision 从 2 更新到 3，HTTP 80 / HTTPS 443，按准确指纹应用。实际仅监听 HTTP 80；443 是待配置的 HTTPS 端口，未配置证书，不对外声称 TLS 可用；8088 已停止监听。
+- 当前 Mac /private/etc/hosts 在保留原有条目、owner/mode 的情况下追加两个精确名称到服务器 VPN 地址；修改前有私有原文件备份和 SHA 回执。没有修改系统代理、VPN/DNS 服务或其他项目文件。其他设备的解析不因当前 Mac hosts 自动生效。
+- 从 Mac 直接 curl 不带端口的两个域名均为 200，无 --resolve；真实 Chrome 使用系统实际 DNS/代理，无 host-resolver-rules，访问 http://scoreboard.home.test/ 返回 200，标题 PadelU · 比赛工作台；http://docs.home.test/ 正常进入 /zh/，标题 PowerX 智能体平台 | PowerX Documentation，响应 plan marker 与 SQLite 一致。
+- 只重启 XDocker 自身后，HTTP 80 网关自动恢复且指纹一致，两个入口继续 200；记分板原 4 个进程保持存活。SQLite integrity_check=ok，修复后 backup API 一致性备份 SHA-256 `abd1dae1ad5b6f0583076858c5731e37466c3d6f6dba7901279b2e6115ca05e0`。
+- 本地主工作区 109 项、独立任务分支 53 项通过；服务器用 pinned 依赖和独立 Nginx 运行同样 53 项通过。Chrome 分区验收覆盖 1440×1000 / 390×844，以及 80/443 隐藏端口、8088/8443 保留端口的链接行为。
+
+用户要求的 worktree 合并后收尾规则已加入 AGENT.md；本任务分支尚未合入目标分支，因此保留活动 worktree，不把部署完成当作已合并，也不强删含未提交工作的旧目录。
