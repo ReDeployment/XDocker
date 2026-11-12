@@ -2,7 +2,7 @@
 from pathlib import PurePosixPath
 import re
 
-VERSION = 'committed-content-v1'
+VERSION = 'committed-content-v2'
 TEMP_SUFFIXES = ('.tmp', '.temp', '.swp', '.swo', '.bak', '.log', '.dump', '.sqlite', '.sqlite3', '.db', '.p12', '.pfx', '.key', '.zip', '.gz', '.tar', '.7z')
 TEMP_DIRS = {'node_modules', '__pycache__', '.venv', 'venv', '.ssh', '.cache', '.nuxt', '.output', 'coverage'}
 TOKEN_PATTERNS = [
@@ -13,7 +13,7 @@ TOKEN_PATTERNS = [
     ('api-token', re.compile(r'\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b')),
     ('credential-url', re.compile(r'\b(?:https?|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s/:@]+:([^\s/@]{8,})@')),
 ]
-ASSIGNMENT = re.compile(r'''(?im)(?:^|[,{;])\s*(?:export\s+)?["']?[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]*["']?\s*[:=]\s*(?:["']([^\r\n"']{8,256})["']|([A-Za-z0-9_+/=.!@#$%-]{12,256})(?=\s*(?:#|$)))''')
+ASSIGNMENT = re.compile(r'''(?im)(?:^|[,{;])\s*(?:export\s+)?["']?(?P<key>[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]*)["']?\s*[:=]\s*(?:["']([^\r\n"']{8,256})["']|([A-Za-z0-9_+/=.!@#$%-]{12,256})(?=\s*(?:#|$)))''')
 PLACEHOLDER = re.compile(r'(?i)^(?:\$\{[^}]+\}|<[^>]+>|(?:fixture|example|dummy|fake|test)[_-].*|change[-_]?me.*|replace[-_].*|your[-_].*|\*+|x+|\.\.\.)$')
 ASSETS = {'.png': b'\x89PNG\r\n\x1a\n', '.jpg': b'\xff\xd8', '.jpeg': b'\xff\xd8', '.gif': b'GIF8', '.ico': b'\x00\x00\x01\x00', '.woff': b'wOFF', '.woff2': b'wOF2', '.ttf': b'\x00\x01\x00\x00', '.otf': b'OTTO'}
 
@@ -52,7 +52,10 @@ def content_findings(path, body):
             findings.append({'rule': rule, 'line': text.count('\n', 0, match.start()) + 1})
             break
     for match in ASSIGNMENT.finditer(text):
-        value = match.group(1) or match.group(2)
+        value = match.group(2) or match.group(3)
+        # Token/key fields containing ordinary explanatory prose are common in UIs.
+        # Password assignments and authorization-shaped values remain suspicious.
+        if any(c.isspace() for c in value) and not re.search(r'password|passwd',match.group('key'),re.I) and not re.match(r'(?i)^(?:bearer|basic)\s+\S{8,}$',value):continue
         if not PLACEHOLDER.fullmatch(value):
             findings.append({'rule': 'literal-credential', 'line': text.count('\n', 0, match.start()) + 1})
             break

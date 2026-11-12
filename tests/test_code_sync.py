@@ -200,6 +200,12 @@ class ContentScanTests(unittest.TestCase):
             name,body=case if isinstance(case,tuple) else ('key.txt',case)
             issues=content_findings(name,body.encode());self.assertTrue(issues);self.assertNotIn(value,json.dumps(issues))
 
+    def test_ui_rule_labels_are_not_tokens_but_password_prose_is_checked(self):
+        from sync_scan import content_findings
+        self.assertEqual(content_findings('ui.js',"const labels={'github-token':'GitHub 令牌'};".encode()),[])
+        self.assertTrue(content_findings('settings.json',b'{"password":"correct horse battery staple"}'))
+        self.assertTrue(content_findings('settings.json',b'{"access_token":"Bearer opaque1234567890"}'))
+
     def test_templates_with_explicit_placeholders_and_known_assets(self):
         from sync_scan import content_findings
         self.assertEqual(content_findings('.env.example',b'API_KEY="${API_KEY}"\nPASSWORD="change-me-before-use"\n'),[])
