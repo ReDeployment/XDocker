@@ -49,6 +49,8 @@ class GatewayTests(unittest.TestCase):
         self.assertIn('proxy_pass http://127.0.0.1:3000;',text)
         self.assertIn('proxy_set_header Upgrade $http_upgrade;',text)
         self.assertIn('proxy_set_header Connection $xdocker_connection;',text)
+        for name in ('client_body','proxy','fastcgi','uwsgi','scgi'):
+            self.assertIn(name+'_temp_path "'+str(self.gateway.root)+'/',text)
         self.assertNotIn('127.0.0.11',text);self.assertEqual(self.calls,[])
         with self.assertRaises(ServiceError):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
 

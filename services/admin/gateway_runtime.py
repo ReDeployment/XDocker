@@ -54,6 +54,8 @@ class GatewayRuntime:
             'events { worker_connections 512; }','http {',
             '  access_log off;','  map $http_upgrade $xdocker_connection { default upgrade; "" close; }',
             f'  client_body_temp_path {quote(self.root/"client_temp")};',f'  proxy_temp_path {quote(self.root/"proxy_temp")};',
+            f'  fastcgi_temp_path {quote(self.root/"fastcgi_temp")};',f'  uwsgi_temp_path {quote(self.root/"uwsgi_temp")};',
+            f'  scgi_temp_path {quote(self.root/"scgi_temp")};',
             f'  server {{ listen {http} default_server; server_name _;',
             f'    location = /__xdocker_gateway_status {{ add_header X-XDocker-Plan {plan} always; return 204; }}',
             '    location / { return 404; }','  }']
