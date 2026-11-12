@@ -95,3 +95,19 @@ python3 scripts/admin-native-unit.py --checkout /data/workspace/XDocker --state 
 ```
 
 取得明确部署授权后再安装到 systemd，先 verify，再启用这一个服务；初次默认没有 `--operations`。修改业务项目或它们的 unit，由对应项目维护者处理。只读盘点、原生启动代码及 fixture 通过都不代表已经在 home-pc-ubuntu 安装。
+
+## home-pc-ubuntu 管理访问
+
+已部署实例位于 `/data/workspace/XDocker`，systemd 服务为 `xdocker-native.service`，Admin 保持 loopback 19081。连接 VPN 后，在自己的终端开启转发，再打开 `http://127.0.0.1:19081/#service-hub`：
+
+```sh
+ssh -N -L 19081:127.0.0.1:19081 home-pc-ubuntu-vpn
+```
+
+另一个终端读取自己的登录令牌，不要将结果发到聊天或提交 Git：
+
+```sh
+ssh home-pc-ubuntu-vpn 'cd /data/workspace/XDocker && .venv/bin/python scripts/admin-native.py token --state data/native-admin'
+```
+
+本次网关使用 `scoreboard.home.test:8088`、`docs.home.test:8088`。访问设备须将两个域名解析到 home-pc-ubuntu 的 VPN 地址；可使用受管 DNS 或自己设备的 hosts。服务端 Host 转发检查及客户端 DNS 是两个步骤；本次未改客户端系统 hosts/DNS。部署状态与实机证据见 [验收记录](../../tasks/native-services-acceptance-20261112.md)。
