@@ -78,6 +78,13 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(ServiceError):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
         self.assertFalse(self.calls)
 
+    def test_empty_pid_from_nginx_test_can_start_but_nonempty_unknown_pid_cannot(self):
+        self.enable();(self.gateway.root/'nginx.pid').touch(mode=0o600);plan=self.gateway.preview()
+        self.assertEqual(self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})['state'],'applied')
+        self.live=False;(self.gateway.root/'nginx.pid').write_text('invalid');before=len(self.calls)
+        with self.assertRaisesRegex(ServiceError,'OWNER_UNCONFIRMED'):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
+        self.assertEqual(len(self.calls),before)
+
     def test_restore_only_applied_plan_and_reject_pending_edits(self):
         self.assertEqual(self.gateway.restore()['state'],'not-configured')
         self.enable();plan=self.gateway.preview();self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})

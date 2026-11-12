@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import socket
+import stat
 import tempfile
 import time
 import urllib.request
@@ -119,6 +120,14 @@ class GatewayRuntime:
     def command(self,policy,*args):
         return [policy['gateway']['binary'],'-p',str(self.root)+'/', '-c',str(self.root/'active.conf'),*args]
 
+    def empty_pid_file(self):
+        # nginx -t creates a zero-byte pid file, including on a failed config test.
+        # It carries no process identity; starting still requires both ports free.
+        try:
+            info=(self.root/'nginx.pid').lstat()
+            return stat.S_ISREG(info.st_mode) and info.st_uid==os.geteuid() and info.st_nlink==1 and info.st_size==0
+        except OSError:return False
+
     def restore(self):
         """Only restore the last explicitly applied plan, never promote pending edits."""
         with self.hub.locked():
@@ -128,7 +137,7 @@ class GatewayRuntime:
             require(plan['fingerprint']==runtime['fingerprint'],'XD_GATEWAY_PENDING_CONFIGURATION')
             require((self.root/'active.conf').read_text()==plan['configuration'],'XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED')
             pid_file=self.root/'nginx.pid'
-            if pid_file.exists() and self.owner_reader(self.hub.policy(),runtime) is None:
+            if pid_file.exists() and not self.empty_pid_file() and self.owner_reader(self.hub.policy(),runtime) is None:
                 require(not pid_file.is_symlink() and int(pid_file.read_text().strip())==runtime['owner']['pid'],'XD_GATEWAY_OWNER_UNCONFIRMED')
                 # A stale receipt is removable only after the recorded process is gone.
                 require(not (Path('/proc')/str(runtime['owner']['pid'])).exists(),'XD_GATEWAY_OWNER_UNCONFIRMED')
@@ -143,7 +152,7 @@ class GatewayRuntime:
             runtime=self.hub.store.read_gateway()
             owner=self.owner_reader(policy,runtime)
             require(owner is None or runtime is not None and runtime.get('owner')==owner,'XD_GATEWAY_OWNER_UNCONFIRMED')
-            require(not (self.root/'nginx.pid').exists() or owner is not None,'XD_GATEWAY_OWNER_UNCONFIRMED')
+            require(not (self.root/'nginx.pid').exists() or owner is not None or self.empty_pid_file(),'XD_GATEWAY_OWNER_UNCONFIRMED')
             if runtime and owner and runtime['fingerprint']==plan['fingerprint'] and self.marker_reader(policy,plan['fingerprint']):
                 return {'state':'applied','fingerprint':plan['fingerprint'],'owner':owner,'routes':plan['routes'],'at':runtime['at'],'reused':True}
             if owner is None:
