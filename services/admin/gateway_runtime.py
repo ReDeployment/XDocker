@@ -159,7 +159,10 @@ class GatewayRuntime:
                 address=policy['gateway']['listen'];family=socket.AF_INET6 if ':' in address else socket.AF_INET
                 for port in (policy['gateway']['http_port'],policy['gateway']['https_port']):
                     with socket.socket(family) as sock:
-                        try:sock.bind((address,port))
+                        # Match Nginx's bind semantics after an owned listener stops.
+                        # TIME_WAIT connections do not mean another server owns the port.
+                        sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+                        try:sock.bind((address,port));sock.listen(1)
                         except OSError:raise ServiceError('XD_GATEWAY_PORT_IN_USE') from None
             candidate=self.root/'candidate.conf';atomic_text(candidate,plan['configuration'])
             checked=self.runner([policy['gateway']['binary'],'-p',str(self.root)+'/', '-c',str(candidate),'-t'])
@@ -172,7 +175,10 @@ class GatewayRuntime:
             try:
                 result=self.runner(self.command(policy,*(['-s','reload'] if owner else [])))
                 require(result['code']==0 and not result['truncated'],'XD_GATEWAY_RELOAD_FAILED')
-                started_owner=self.owner_reader(policy,runtime)
+                for _ in range(10):
+                    started_owner=self.owner_reader(policy,runtime)
+                    if started_owner is not None:break
+                    time.sleep(.05)
                 require(started_owner is not None,'XD_GATEWAY_OWNER_UNCONFIRMED')
                 require(self.marker_reader(policy,plan['fingerprint']),'XD_GATEWAY_RUNTIME_UNCONFIRMED')
                 require(self.preview()['fingerprint']==plan['fingerprint'],'XD_GATEWAY_PLAN_CHANGED')

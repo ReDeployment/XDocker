@@ -34,14 +34,17 @@ def main():
     if args.collect and sys.platform!='linux':parser.error('--collect requires Linux; metrics are not simulated on this host')
     if read_json(state/'native-runtime.json')!={'schema':1,'checkout':str(ROOT)}:parser.error('Run init for this checkout first')
     if args.operations:
-        from native_services import ServiceHub
+        from native_services import ServiceHub,ServiceError
         from gateway_runtime import GatewayRuntime
+        from registry_store import RegistryError
         try:GatewayRuntime(ServiceHub(state)).restore()
-        except (OSError,ValueError):print('XD_GATEWAY_RESTORE_UNCONFIRMED: review the saved gateway plan in Admin',file=sys.stderr,flush=True)
+        except (OSError,ValueError) as exc:
+            code=str(exc) if isinstance(exc,(ServiceError,RegistryError)) else 'XD_GATEWAY_RESTORE_UNCONFIRMED'
+            print(code+': review the saved gateway plan in Admin',file=sys.stderr,flush=True)
     env={**os.environ,'ADMIN_NATIVE_STATE':str(state),'ADMIN_NATIVE_OPERATIONS':'true' if args.operations else 'false',
          'ADMIN_NATIVE_WITHOUT_DOCKER':'true' if args.without_docker else 'false',
          'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str(ROOT/'services/admin')}
-    command=[sys.executable,'-m','gunicorn','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']
+    command=[sys.executable,'-m','gunicorn','--config','python:native_runtime','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']
     if args.reload:command+=['--reload']
     command+=['native_runtime:create_native_app()']
     child=subprocess.Popen(command,cwd=ROOT/'services/admin',env=env)

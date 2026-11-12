@@ -85,6 +85,28 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(ServiceError,'OWNER_UNCONFIRMED'):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
         self.assertEqual(len(self.calls),before)
 
+    def test_recent_connections_do_not_prevent_restart_but_live_listener_does(self):
+        listener=socket.socket();listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);listener.bind(('127.0.0.1',0));port=listener.getsockname()[1];listener.listen(1)
+        client=socket.create_connection(('127.0.0.1',port));accepted,_=listener.accept()
+        accepted.shutdown(socket.SHUT_WR);client.recv(1);client.close();accepted.close();listener.close()
+        value=self.hub.policy();value['revision']+=1;value['gateway'].update(enabled=True,http_port=port);self.hub.import_policy(value)
+        plan=self.gateway.preview();self.assertEqual(self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})['state'],'applied')
+        self.live=False;(self.gateway.root/'nginx.pid').unlink();before=len(self.calls)
+        with socket.socket() as occupied:
+            occupied.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);occupied.bind(('127.0.0.1',port));occupied.listen(1)
+            with self.assertRaisesRegex(ServiceError,'PORT_IN_USE'):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
+        self.assertEqual(len(self.calls),before)
+
+    def test_daemon_identity_is_polled_without_replaying_start(self):
+        self.enable();reads=[]
+        def owner(*args):
+            if not self.live:return None
+            reads.append(True)
+            return {'pid':9000,'started':42} if len(reads)>1 else None
+        self.gateway.owner_reader=owner;plan=self.gateway.preview()
+        self.assertEqual(self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})['state'],'applied')
+        self.assertEqual(len(reads),2);self.assertEqual(sum('-t' not in call for call in self.calls),1)
+
     def test_restore_only_applied_plan_and_reject_pending_edits(self):
         self.assertEqual(self.gateway.restore()['state'],'not-configured')
         self.enable();plan=self.gateway.preview();self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})

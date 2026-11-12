@@ -7,6 +7,10 @@ from host_metrics import atomic_json, private_directory, read_json
 from native_services import require
 from registry_store import RegistryStore
 
+# Gunicorn 26 otherwise opens a shared per-user control socket outside this state.
+# Older supported development installations ignore unknown config settings.
+control_socket_disable=True
+
 
 def initialize(state,checkout):
     root=private_directory(Path(state).resolve());checkout=Path(checkout).resolve()
