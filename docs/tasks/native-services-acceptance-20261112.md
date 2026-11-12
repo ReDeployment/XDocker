@@ -1,6 +1,6 @@
 # 独立服务与原生管理入口验收
 
-日期：2026-11-12。状态：本地实现已推送到独立任务分支，home-pc-ubuntu 原生实例、SQLite 与两个真实网页入口已部署并通过实机验收；当前 Mac 的域名解析和 HTTP 80 标准入口已修复，其他设备仍需各自解析或共享内网 DNS。
+日期：2026-11-12。状态：本地实现已推送到独立任务分支，home-pc-ubuntu 原生实例、SQLite 与三个真实网页入口已部署并通过实机验收；当前 Mac 的域名解析和 HTTP 80 标准入口已修复，其他设备仍需各自解析或共享内网 DNS。
 
 ## 定位与范围
 
@@ -91,3 +91,15 @@ PadelU 下的 autobackup 工作树不登记为独立应用。PowerXDocs/repos �
 - 本地主工作区 109 项、独立任务分支 53 项通过；服务器用 pinned 依赖和独立 Nginx 运行同样 53 项通过。Chrome 分区验收覆盖 1440×1000 / 390×844，以及 80/443 隐藏端口、8088/8443 保留端口的链接行为。
 
 用户要求的 worktree 合并后收尾规则已加入 AGENT.md；本任务分支尚未合入目标分支，因此保留活动 worktree，不把部署完成当作已合并，也不强删含未提交工作的旧目录。
+
+## XDocker 管理域名接入验收
+
+用户明确要求 XDocker 也通过 `xdocker.home.test` 直接访问，不需要 SSH 转发。实现提交 `2cb703d5ad69a5fbdaba89ae94731217b054402b`：
+
+- 原生 serve / unit 增加 `--admin-domain`，只接受一个准确的 DNS 名称，拒绝通配符、URL、端口或前导点；通过显式配置加入 Flask TRUSTED_HOSTS，保留 loopback 及原有 Host、Origin、session、CSRF 校验，没有添加信任任意代理头的中间件。后端仍只监听 127.0.0.1:19081。
+- 本地测试覆盖自定义 Host 下完整登录、登记与登出，未知 Host/子域名 400、错误 Origin 403、缺少 CSRF 403、未登录/登出后的管理读取 401，以及错误 hostname / unit 参数拒绝。主工作区 110 项、功能分支 54 项通过；服务器用 pinned 依赖及独立 Nginx 同样 54 项通过。真实 Gunicorn HTTP smoke 通过自定义 Host 完成登录/会话/CSRF，并拒绝未知 Host。
+- 源码从 GitHub task branch 拉取后安装带 `--admin-domain xdocker.home.test` 的 XDocker 自身 unit。SQLite 备份及旧 unit / policy 已保留；新 policy revision=4 加入准确的 loopback 19081 endpoint，项目 xdocker-admin/domain xdocker.home.test，自身监控绑定到发现的 xdocker-native.service，service=null，不赋予管理自己的启停权限。当前总计三个项目、三个 endpoint、三个监控分组/绑定。
+- 当前 Mac hosts 仅追加准确的管理域名到 home-pc-ubuntu VPN 地址，修改前保存原文件与 SHA 回执，保留其他条目和文件权限；系统代理未改。Nginx 应用三条规则后，管理首页与健康 200，未登录 API 401，记分板及文档入口继续 200。
+- 真实 Chrome 用 `http://xdocker.home.test/#service-hub` 的实际系统解析及代理完成登录、三条登记/监控、健康、桌面 1440×1000 / 窄屏 390×844 五分区检查、缺少 CSRF 拒绝、登出；0 JS 异常。没有为管理站点开启 SSH 本地转发或设置浏览器 hostname 覆盖。
+- 重启 XDocker 自身后，三条网关规则自动恢复；从管理域名经网关再次完成登录、正确 CSRF 的健康检查及网关幂等应用，错误 Origin / 缺少 CSRF 仍为 403，登出后 401。记分板原 4 个进程保持存活，两个既有业务入口健康。
+- SQLite integrity_check=ok；接入后一致性备份 SHA-256 `e81287802ae6e28c47e764eb7e9330ce2e5a263cb7b83f7aa60080508133d1ef`。临时浏览器/profile、部署连接和本地令牌副本在验收结束后清理；服务端常驻实例及私有备份保留。
