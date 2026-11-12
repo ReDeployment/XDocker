@@ -100,13 +100,19 @@ python3 scripts/admin-native-unit.py --checkout /data/workspace/XDocker --state 
 
 ## home-pc-ubuntu 管理访问
 
-已部署实例位于 `/data/workspace/XDocker`，systemd 服务为 `xdocker-native.service`，Admin 保持 loopback 19081。连接 VPN 后，在自己的终端开启转发，再打开 `http://127.0.0.1:19081/#service-hub`：
+正常管理入口为 `http://xdocker.home.test/#service-hub`。连接 VPN 后可直接打开，不需要 SSH 转发。当前 Mac 的 hosts 已补齐该名称，其他设备需要自己的解析或共享内网 DNS。
+
+已部署实例位于 `/data/workspace/XDocker`，systemd 服务为 `xdocker-native.service`，后端保持 loopback 19081，由 HTTP 80 网关转发。unit 使用 `--operations --gateway-web-ports --admin-domain xdocker.home.test`；只信任明确指定的管理域名及原有 localhost，不允许通配符，继续执行 Host、Origin、会话和 CSRF 检查。网关的固定地址/项目登记保存到 SQLite，自身不授予服务启停权限。
+
+登录仍使用该实例自己的管理令牌。首次需要时，在服务器私有终端运行 `scripts/admin-native.py token --state data/native-admin` 读取；令牌不放在域名、URL 或公开配置中。
+
+需要排查时，也可使用备用 SSH 转发，再打开 `http://127.0.0.1:19081/#service-hub`：
 
 ```sh
 ssh -N -L 19081:127.0.0.1:19081 home-pc-ubuntu-vpn
 ```
 
-另一个终端读取自己的登录令牌，不要将结果发到聊天或提交 Git：
+从自己的终端读取登录令牌的命令为：
 
 ```sh
 ssh home-pc-ubuntu-vpn 'cd /data/workspace/XDocker && .venv/bin/python scripts/admin-native.py token --state data/native-admin'

@@ -11,7 +11,7 @@ import threading
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'services/admin'))
-from native_runtime import initialize
+from native_runtime import initialize,native_trusted_hosts
 from host_metrics import collect, read_json
 
 
@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--collect',action='store_true',help='Sample this Linux host outside the reloadable web worker')
     parser.add_argument('--operations',action='store_true',help='Allow explicitly granted native service/gateway operations')
     parser.add_argument('--without-docker',action='store_true',help='Disable Docker reads and collect native processes only')
+    parser.add_argument('--admin-domain',default='',help='One exact hostname for accessing Admin through the native gateway')
     args=parser.parse_args();state=Path(args.state).resolve()
     if args.action=='init':print(json.dumps(initialize(state,ROOT)));return
     if args.action=='token':
@@ -32,6 +33,7 @@ def main():
     if not 1024<=args.port<=65535:parser.error('Use a non-privileged port between 1024 and 65535')
     if args.reload and args.operations:parser.error('--reload and --operations cannot be combined')
     if args.collect and sys.platform!='linux':parser.error('--collect requires Linux; metrics are not simulated on this host')
+    native_trusted_hosts(args.admin_domain)
     if read_json(state/'native-runtime.json')!={'schema':1,'checkout':str(ROOT)}:parser.error('Run init for this checkout first')
     if args.operations:
         from native_services import ServiceHub,ServiceError
@@ -42,6 +44,7 @@ def main():
             code=str(exc) if isinstance(exc,(ServiceError,RegistryError)) else 'XD_GATEWAY_RESTORE_UNCONFIRMED'
             print(code+': review the saved gateway plan in Admin',file=sys.stderr,flush=True)
     env={**os.environ,'ADMIN_NATIVE_STATE':str(state),'ADMIN_NATIVE_OPERATIONS':'true' if args.operations else 'false',
+         'ADMIN_NATIVE_HOSTNAME':args.admin_domain,
          'ADMIN_NATIVE_WITHOUT_DOCKER':'true' if args.without_docker else 'false',
          'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str(ROOT/'services/admin')}
     command=[sys.executable,'-m','gunicorn','--config','python:native_runtime','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']

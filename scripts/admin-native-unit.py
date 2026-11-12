@@ -17,11 +17,14 @@ if __name__=='__main__':
     parser.add_argument('--port',type=int,default=19081)
     parser.add_argument('--operations',action='store_true')
     parser.add_argument('--gateway-web-ports',action='store_true',help='Grant CAP_NET_BIND_SERVICE for the native gateway on HTTP 80 / HTTPS 443')
+    parser.add_argument('--admin-domain',help='One exact Admin hostname served by the native gateway')
     args=parser.parse_args()
     if not all(re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',v) for v in (args.user,args.group)) or not 1024<=args.port<=65535:parser.error('Invalid user, group or port')
     if args.gateway_web_ports and not args.operations:parser.error('--gateway-web-ports requires --operations')
+    if args.admin_domain and not re.fullmatch(r'(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?',args.admin_domain):parser.error('Use one exact lowercase DNS hostname without scheme, port or wildcard')
     capabilities='AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n' if args.gateway_web_ports else ''
     command=f'{quoted(args.python)} {quoted(args.checkout.rstrip("/")+"/scripts/admin-native.py")} serve --state {quoted(args.state)} --port {args.port} --collect'+(' --operations' if args.operations else '')
+    if args.admin_domain:command+=' --admin-domain '+args.admin_domain
     print(f'''[Unit]
 Description=XDocker native service administration
 After=network.target

@@ -14,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'services/admin'))
 from host_metrics import atomic_json, read_json
 from native_services import ServiceHub, ServiceError, SystemdServices, default_policy, validate_policy, fingerprint
-from native_runtime import initialize, create_native_app
+from native_runtime import initialize, create_native_app, native_trusted_hosts
 from docker_api import DockerError
 from app import create_app
 import test_admin
@@ -83,6 +83,9 @@ class HubTests(unittest.TestCase):
         unit=subprocess.check_output([*command,'--operations','--gateway-web-ports'],text=True)
         self.assertIn('User=michael\n',unit);self.assertIn('NoNewPrivileges=yes\n',unit)
         self.assertIn('AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n',unit)
+        domain_unit=subprocess.check_output([*command,'--admin-domain','xdocker.home.test'],text=True)
+        self.assertIn('--admin-domain xdocker.home.test\n',domain_unit)
+        self.assertNotEqual(subprocess.run([*command,'--admin-domain','*.home.test'],capture_output=True).returncode,0)
 
     def test_gateway_loop_and_existing_domain_are_rejected(self):
         value=policy();value['gateway']['listen']='0.0.0.0';value['endpoints']['example']['port']=8088;value['revision']=3
@@ -177,6 +180,28 @@ class NativeRuntimeTests(unittest.TestCase):
         self.assertEqual(client.get('/api/service-hub').status_code,200)
         result=client.post('/api/services/'+'a'*64+'/action',json={'action':'stop'},headers={'Origin':'http://localhost','X-CSRF-Token':login.json['csrf']})
         self.assertEqual(result.status_code,409)
+
+    def test_exact_admin_domain_preserves_host_origin_auth_and_csrf_checks(self):
+        state=self.root/'native';initialize(state,ROOT)
+        with patch.dict(os.environ,{'ADMIN_NATIVE_STATE':str(state),'ADMIN_NATIVE_HOSTNAME':'xdocker.home.test','ADMIN_NATIVE_WITHOUT_DOCKER':'true'},clear=False):app=create_native_app()
+        client=app.test_client();base='http://xdocker.home.test'
+        self.assertEqual(client.get('/healthz',base_url=base).status_code,200)
+        for host in ('evil.home.test','evil.xdocker.home.test'):
+            self.assertEqual(client.get('/healthz',base_url='http://'+host).status_code,400)
+        self.assertEqual(client.get('/api/service-hub',base_url=base).status_code,401)
+        token=(state/'access-token').read_text().strip()
+        self.assertEqual(client.post('/api/login',base_url=base,json={'token':token},headers={'Origin':'http://evil.home.test'}).status_code,403)
+        login=client.post('/api/login',base_url=base,json={'token':token},headers={'Origin':base})
+        self.assertEqual(login.status_code,200)
+        hub=app.extensions['service_hub'];hub.import_policy(policy())
+        self.assertEqual(client.post('/api/service-hub/projects',base_url=base,json=project(),headers={'Origin':base}).status_code,403)
+        headers={'Origin':base,'X-CSRF-Token':login.json['csrf']}
+        saved=client.post('/api/service-hub/projects',base_url=base,json=project(),headers=headers)
+        self.assertEqual(saved.status_code,200);self.assertFalse(saved.json['runtime_started'])
+        self.assertEqual(client.post('/api/logout',base_url=base,json={},headers=headers).status_code,200)
+        self.assertEqual(client.get('/api/service-hub',base_url=base).status_code,401)
+        for hostname in ('*.home.test','.home.test','xdocker.home.test:80','http://xdocker.home.test'):
+            with self.assertRaises(ServiceError):native_trusted_hosts(hostname)
 
 
 if __name__=='__main__':unittest.main()

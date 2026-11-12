@@ -4,12 +4,17 @@ from pathlib import Path
 import secrets
 
 from host_metrics import atomic_json, private_directory, read_json
-from native_services import require
+from native_services import require,DOMAIN
 from registry_store import RegistryStore
 
 # Gunicorn 26 otherwise opens a shared per-user control socket outside this state.
 # Older supported development installations ignore unknown config settings.
 control_socket_disable=True
+
+
+def native_trusted_hosts(hostname):
+    require(isinstance(hostname,str) and (not hostname or DOMAIN.fullmatch(hostname)), 'XD_NATIVE_ADMIN_DOMAIN_INVALID')
+    return ['localhost','127.0.0.1','[::1]']+([hostname] if hostname else [])
 
 
 def initialize(state,checkout):
@@ -48,6 +53,7 @@ def create_native_app():
     return create_app({'STATE':str(root),'CONFIG':str(root/'native-config'),'HOST_ROOT':str(checkout),
         'REPORTS':str(root/'reports'),'BACKUPS':str(root/'backups'),'HOST_METRICS':str(root/'host-metrics'),
         'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':os.getenv('ADMIN_NATIVE_OPERATIONS')=='true',
+        'TRUSTED_HOSTS':native_trusted_hosts(os.getenv('ADMIN_NATIVE_HOSTNAME','')),
         'BACKUP_SCHEDULER_ENABLED':False,'GITHUB_WATCH_ENABLED':False,'GITHUB_WEBHOOK_ENABLED':False,
         'RELEASE_OBSERVER_ENABLED':False,'DELIVERY_CI_OBSERVER_ENABLED':False},
         docker=NoDocker() if os.getenv('ADMIN_NATIVE_WITHOUT_DOCKER')=='true' else None)

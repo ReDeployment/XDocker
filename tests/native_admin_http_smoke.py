@@ -21,12 +21,12 @@ def main():
         assert json.loads(init.stdout)['docker_required'] is False
         with socket.socket() as listener:listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
         with (root/'server.log').open('w+') as log:
-            child=subprocess.Popen([sys.executable,'-B',str(ROOT/'scripts/admin-native.py'),'serve','--state',str(state),'--port',str(port),'--without-docker'],stdout=log,stderr=log)
+            child=subprocess.Popen([sys.executable,'-B',str(ROOT/'scripts/admin-native.py'),'serve','--state',str(state),'--port',str(port),'--without-docker','--admin-domain','xdocker.home.test'],stdout=log,stderr=log)
             origin=f'http://127.0.0.1:{port}'
             client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),urllib.request.ProxyHandler({}))
             def read(path,body=None,csrf=None):
-                headers={}
-                if body is not None:headers={'Origin':origin,'Content-Type':'application/json',**({'X-CSRF-Token':csrf} if csrf else {})}
+                headers={'Host':'xdocker.home.test'}
+                if body is not None:headers.update({'Origin':'http://xdocker.home.test','Content-Type':'application/json',**({'X-CSRF-Token':csrf} if csrf else {})})
                 with client.open(urllib.request.Request(origin+path,data=json.dumps(body).encode() if body is not None else None,headers=headers),timeout=3) as response:return json.load(response)
             try:
                 ready=False
@@ -37,6 +37,10 @@ def main():
                         if ready:break
                     except OSError:time.sleep(.1)
                 assert ready
+                try:
+                    client.open(urllib.request.Request(origin+'/healthz',headers={'Host':'evil.home.test'}),timeout=3)
+                    raise AssertionError('Unknown management hostname accepted')
+                except urllib.error.HTTPError as error:assert error.code==400;error.close()
                 token=(state/'access-token').read_text().strip()
                 session=read('/api/login',{'token':token})
                 snapshot=read('/api/snapshot');assert snapshot['runtime_mode']=='native' and snapshot['engine']['available'] is False
@@ -45,7 +49,7 @@ def main():
                 try:read('/api/service-hub/gateway/apply',{},session['csrf']);raise AssertionError('Runtime operations unexpectedly enabled')
                 except urllib.error.HTTPError as error:assert error.code==409;error.close()
                 read('/api/logout',{},session['csrf'])
-                print(json.dumps({'passed':True,'real_gunicorn':True,'docker_connected':False,'private_state':True,'login_and_csrf':True,'runtime_operations':False}))
+                print(json.dumps({'passed':True,'real_gunicorn':True,'docker_connected':False,'private_state':True,'admin_domain':'xdocker.home.test','login_and_csrf':True,'runtime_operations':False}))
             finally:
                 if child.poll() is None:
                     child.terminate()
