@@ -67,7 +67,8 @@ class GatewayRuntime:
             lines+=[f'  server {{ listen {http}; server_name {row["domain"]};']
             if row['tls'] is not None:
                 cert=policy['certificates'][row['tls']]
-                lines += ['    location / { return 301 https://$host:'+str(gateway['https_port'])+'$request_uri; }','  }',
+                port='' if gateway['https_port']==443 else ':'+str(gateway['https_port'])
+                lines += ['    location / { return 301 https://$host'+port+'$request_uri; }','  }',
                     f'  server {{ listen {listen(gateway["listen"],gateway["https_port"])} ssl; server_name {row["domain"]};',
                     f'    ssl_certificate {quote(cert["certificate"])};',f'    ssl_certificate_key {quote(cert["key"])};',
                     '    ssl_protocols TLSv1.2 TLSv1.3;']
@@ -163,6 +164,7 @@ class GatewayRuntime:
                         # TIME_WAIT connections do not mean another server owns the port.
                         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
                         try:sock.bind((address,port));sock.listen(1)
+                        except PermissionError:raise ServiceError('XD_GATEWAY_BIND_PERMISSION_REQUIRED') from None
                         except OSError:raise ServiceError('XD_GATEWAY_PORT_IN_USE') from None
             candidate=self.root/'candidate.conf';atomic_text(candidate,plan['configuration'])
             checked=self.runner([policy['gateway']['binary'],'-p',str(self.root)+'/', '-c',str(candidate),'-t'])

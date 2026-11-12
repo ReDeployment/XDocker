@@ -28,6 +28,9 @@ async function main(){
  await until(`document.querySelector('#login-form')&&typeof renderServiceHubPage==='function'`);
  await evaluate(`document.querySelector('#token').value=${JSON.stringify(info.fixture_token)};document.querySelector('#login-form').requestSubmit(document.querySelector('#login-form button[type=submit]'))`);
  await until(`serviceHubUI.data&&document.querySelector('.hub-kpis')`);
+ for(const [tls,port,url] of [[null,80,'http://example.home.test'],['fixture',443,'https://example.home.test'],[null,8088,'http://example.home.test:8088'],['fixture',8443,'https://example.home.test:8443']]){
+  assert(await evaluate(`hubEntry({domain:'example.home.test',tls:${JSON.stringify(tls)},enabled:true},{gateway:{http_port:${port},https_port:${port}}},true).includes('href="'+${JSON.stringify(url)}+'"')`),'Incorrect public entry port');
+ }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.hub-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));await shot('desktop-overview');
  await pane('projects');await click('[data-hub-edit="new"]');await evaluate(`document.querySelector('[name=id]').value='browser-project';document.querySelector('[name=name]').value='浏览器项目'`);await click('[data-hub-close]');
  await pane('gateway');await pane('projects');await click('[data-hub-edit="new"]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-project');

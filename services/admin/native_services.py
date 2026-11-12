@@ -87,7 +87,9 @@ def validate_policy(value):
     try:address=ipaddress.ip_address(gateway['listen'])
     except (ValueError,TypeError):raise ServiceError('XD_SERVICE_LITERAL_ADDRESS_REQUIRED') from None
     require(not address.is_multicast and not address.is_link_local,'XD_SERVICE_GATEWAY_INVALID')
-    require(all(type(gateway[k]) is int and 1024<=gateway[k]<=65535 for k in ('http_port','https_port')) and gateway['http_port']!=gateway['https_port'],'XD_SERVICE_GATEWAY_INVALID')
+    require(all(type(gateway[k]) is int and (gateway[k]==standard or 1024<=gateway[k]<=65535)
+                for k,standard in (('http_port',80),('https_port',443)))
+            and gateway['http_port']!=gateway['https_port'],'XD_SERVICE_GATEWAY_INVALID')
     safe_path(gateway['binary'])
     # One exact systemd unit is represented by one grant, not conflicting aliases.
     identities=[(r['scope'],r['unit']) for r in value['services'].values()]

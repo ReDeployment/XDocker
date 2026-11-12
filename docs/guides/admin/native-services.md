@@ -60,9 +60,9 @@ policy-import 仅为受信 CLI，不提供网页上传策略入口。JSON 文件
 
 首版执行器面向 Linux 宿主机 Nginx，使用 `<state>/service-hub/gateway/` 独立 prefix、pid、日志和配置，不改 `/etc/nginx`，不接管已有 Nginx。原有容器网站/FRP 路径继续使用既有 hosting 功能；容器中的 127.0.0.1 不能当作宿主机地址。
 
-网关默认禁用。需要启动它时，主机须已安装 Nginx，在私有 policy 中显式配置 enabled、固定可执行文件、监听 IP 与高位端口（1024–65535）；原生 Admin 启动时再明确加 `--operations`。`--reload` 与 `--operations` 不可同时使用。主机权限不会被自动扩大，不会自动 sudo 或安装系统软件。
+网关默认禁用。需要启动它时，主机须已安装 Nginx，在私有 policy 中显式配置 enabled、固定可执行文件、监听 IP 与端口；原生 Admin 启动时再明确加 `--operations`。支持标准 HTTP 80 / HTTPS 443，或开发用高位端口（1024–65535），不开放其他低位端口。`--reload` 与 `--operations` 不可同时使用。主机权限不会被自动扩大，不会自动 sudo 或安装系统软件。
 
-默认 HTTP 网关访问形式为 `http://example.home.test:8088`，HTTPS 为配置的 8443 端口。应用 plan 已核对后，项目/入口列表提供可点击链接；链接存在不代表 DNS/TLS 或业务验收已完成。域名转发到原地址，保留路径，显式传递 Host、来源协议和 WebSocket Upgrade/Connection，支持开发 HMR；不会关闭项目框架自身的 Host 检查。参考 [Nginx WebSocket 文档](https://nginx.org/en/docs/http/websocket.html)。目标为 HTTPS 时验证上游证书，Ubuntu 使用系统 CA bundle。
+标准入口使用 `http://example.home.test`；80/443 会在页面链接及 HTTPS 跳转中省略。开发配置仍可使用 `http://example.home.test:8088` / HTTPS 8443。应用 plan 已核对后，项目/入口列表提供可点击链接；链接存在不代表 DNS/TLS 或业务验收已完成。域名转发到原地址，保留路径，显式传递 Host、来源协议和 WebSocket Upgrade/Connection，支持开发 HMR；不会关闭项目框架自身的 Host 检查。参考 [Nginx WebSocket 文档](https://nginx.org/en/docs/http/websocket.html)。目标为 HTTPS 时验证上游证书，Ubuntu 使用系统 CA bundle。
 
 TLS 可选引用主机 policy 中的既有 certificate/key 路径和准确域名列表；网页只选择引用，不上传私钥。证书内容纳入计划指纹，`nginx -t` 检查文件及证书/密钥。默认只提供 HTTP，不会申请证书或修改 DNS。HTTPS 的真实握手、域名和到期状态仍需单独验收。
 
@@ -96,6 +96,8 @@ python3 scripts/admin-native-unit.py --checkout /data/workspace/XDocker --state 
 
 取得明确部署授权后再安装到 systemd，先 verify，再启用这一个服务；初次默认没有 `--operations`。修改业务项目或它们的 unit，由对应项目维护者处理。只读盘点、原生启动代码及 fixture 通过都不代表已经在 home-pc-ubuntu 安装。
 
+网关使用 80/443 时，在经过审核的 unit 渲染命令上加 `--operations --gateway-web-ports`，仅授予 `CAP_NET_BIND_SERVICE`，同时将 CapabilityBoundingSet 限制到这一项；仍保持指定普通用户和 NoNewPrivileges。Admin 仍监听 loopback 高位端口。安装/重启自己的 unit 后，核对能力与原网关，再导入新 policy revision、预览并应用标准端口，避免给整台主机降低低位端口保护或让 Admin 以 root 运行。缺少权限时返回 `XD_GATEWAY_BIND_PERMISSION_REQUIRED`，不把它误报为端口占用。
+
 ## home-pc-ubuntu 管理访问
 
 已部署实例位于 `/data/workspace/XDocker`，systemd 服务为 `xdocker-native.service`，Admin 保持 loopback 19081。连接 VPN 后，在自己的终端开启转发，再打开 `http://127.0.0.1:19081/#service-hub`：
@@ -110,4 +112,4 @@ ssh -N -L 19081:127.0.0.1:19081 home-pc-ubuntu-vpn
 ssh home-pc-ubuntu-vpn 'cd /data/workspace/XDocker && .venv/bin/python scripts/admin-native.py token --state data/native-admin'
 ```
 
-本次网关使用 `scoreboard.home.test:8088`、`docs.home.test:8088`。访问设备须将两个域名解析到 home-pc-ubuntu 的 VPN 地址；可使用受管 DNS 或自己设备的 hosts。服务端 Host 转发检查及客户端 DNS 是两个步骤；本次未改客户端系统 hosts/DNS。部署状态与实机证据见 [验收记录](../../tasks/native-services-acceptance-20261112.md)。
+网关使用 `http://scoreboard.home.test`、`http://docs.home.test`，后端仍分别使用 18080、8080。访问设备须将两个域名解析到 home-pc-ubuntu 的 VPN 地址；可使用受管 DNS 或自己设备的 hosts。本次修复补齐当前 Mac 的 hosts；其他设备仍需各自的解析配置或共享内网 DNS。HTTPS 需要另行配置既有证书，登记 443 不等于已开启 TLS。部署状态与实机证据见 [验收记录](../../tasks/native-services-acceptance-20261112.md)。

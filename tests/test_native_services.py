@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -70,6 +71,18 @@ class HubTests(unittest.TestCase):
         value['services']['app']['definition_sha256']='a'*64;validate_policy(value)
         value['services']['app']['unit']='example.service;reboot'
         with self.assertRaises(ServiceError):validate_policy(value)
+
+    def test_standard_gateway_ports_and_explicit_unit_capability(self):
+        value=policy();value['gateway'].update(http_port=80,https_port=443);validate_policy(value)
+        for field,port in (('http_port',22),('http_port',443),('https_port',80),('https_port',True),('http_port',0)):
+            bad=copy.deepcopy(value);bad['gateway'][field]=port
+            with self.assertRaises(ServiceError):validate_policy(bad)
+        command=[sys.executable,str(ROOT/'scripts/admin-native-unit.py'),'--checkout','/data/workspace/XDocker','--state','/data/workspace/XDocker/data/native-admin','--python','/data/workspace/XDocker/.venv/bin/python','--user','michael','--group','michael']
+        default=subprocess.check_output(command,text=True);self.assertNotIn('AmbientCapabilities=',default)
+        self.assertNotEqual(subprocess.run([*command,'--gateway-web-ports'],capture_output=True).returncode,0)
+        unit=subprocess.check_output([*command,'--operations','--gateway-web-ports'],text=True)
+        self.assertIn('User=michael\n',unit);self.assertIn('NoNewPrivileges=yes\n',unit)
+        self.assertIn('AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n',unit)
 
     def test_gateway_loop_and_existing_domain_are_rejected(self):
         value=policy();value['gateway']['listen']='0.0.0.0';value['endpoints']['example']['port']=8088;value['revision']=3
