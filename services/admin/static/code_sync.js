@@ -21,6 +21,9 @@ function renderCodeSync(){
  if(d?.jobs.some(j=>['interrupted','upload-unconfirmed','partial'].includes(j.state)))alerts.push('有上传或设备结果待核对，请到执行记录处理；不会自动重放未知结果。');
  if(d?.sources.some(s=>{const row=d.inventory.find(r=>r.directory===s.directory);return row&&row.branch!==s.branch;}))alerts.push('部分项目已切换分支，请重新编辑源码配置并核对。');
  if(d?.archive_error)alerts.push('历史归档受阻：'+syncText(d.archive_error));
+ const latestJobs=new Map();for(const job of d?.jobs||[])if(!latestJobs.has(job.source))latestJobs.set(job.source,job);
+ const failures=[...latestJobs.values()].filter(job=>job.state==='failed');
+ if(failures.length)alerts.push('最近有 '+failures.length+' 个项目同步失败：'+failures.slice(0,3).map(job=>(syncSource(job.source)?.name||job.source)+' · '+syncText(job.error||'XD_SYNC_OPERATION_FAILED')).join('；')+'。请在执行记录核对阻断原因。');
  if(d?.schedules.some(r=>r.last_error))alerts.push('有定时任务被阻断，请在推送计划查看原因。');
  let body='<div class="empty">正在读取代码同步配置…</div>';
  if(d){
