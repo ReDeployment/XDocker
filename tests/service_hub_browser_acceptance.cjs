@@ -9,6 +9,8 @@ async function evaluate(expression){const r=await rpc('Runtime.evaluate',{expres
 async function until(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await sleep(100);}throw Error('UI timeout: '+expression);}
 async function click(selector){assert(await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)return false;e.click();return true})()`),'Missing active control: '+selector);}
 async function pane(name){await click(`[data-view="service-hub"][data-view-tab="${name}"]`);await until(`document.querySelector('#view-service-hub-panel')?.getAttribute('aria-labelledby')==='view-service-hub-${name}'`);}
+async function hubPage(name){await evaluate(`location.hash='service-hub/${name}'`);await until(`current==='service-hub'&&document.querySelector('#view-service-hub-panel')?.getAttribute('aria-labelledby')==='view-service-hub-${name}'`);}
+async function sitesPage(name='overview'){await evaluate(`location.hash='sites/${name}'`);await until(`current==='sites'&&document.querySelector('#view-sites-panel')?.getAttribute('aria-labelledby')==='view-sites-${name}'`);}
 async function form(values,operation=false){await evaluate(`(()=>{const f=document.querySelector(${operation?JSON.stringify('#hub-operation-form'):JSON.stringify('#hub-form')});for(const [k,v] of Object.entries(${JSON.stringify(values)})){const e=f.elements.namedItem(k);if(e.type==='checkbox')e.checked=v;else e.value=v;}f.requestSubmit(f.querySelector('button[type=submit]'));})()`);}
 async function shot(name){if(process.env.HUB_UI_ARTIFACTS){fs.mkdirSync(process.env.HUB_UI_ARTIFACTS,{recursive:true});const r=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(process.env.HUB_UI_ARTIFACTS,name+'.png'),Buffer.from(r.data,'base64'));}}
 async function stop(child){if(!child||child.exitCode!==null)return;try{process.kill(-child.pid,'SIGINT');}catch{}for(let i=0;i<30&&child.exitCode===null;i++)await sleep(100);if(child.exitCode===null){try{process.kill(-child.pid,'SIGKILL');}catch{}}}
@@ -33,18 +35,24 @@ async function main(){
  }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.hub-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));await shot('desktop-overview');
  await pane('projects');await click('[data-hub-edit="new"]');await evaluate(`document.querySelector('[name=id]').value='browser-project';document.querySelector('[name=name]').value='浏览器项目'`);await click('[data-hub-close]');
- await pane('gateway');await pane('projects');await click('[data-hub-edit="new"]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-project');
+ await sitesPage();await hubPage('projects');await click('[data-hub-edit="new"]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-project');
  await form({id:'browser-project',name:'浏览器项目',endpoint:'example',domain:'browser.home.test',service:'example',monitor:'example-resources',enabled:true});
  await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===1`);
  await click('[data-hub-health="browser-project"]');await until(`serviceHubUI.data.projects[0].health?.state==='healthy'`);
  await click('[data-hub-edit="browser-project"]');await evaluate(`document.querySelector('[name=name]').value='保留中的草稿'`);await click('[data-hub-close]');await evaluate('loadServiceHub()');
- await pane('gateway');await click('[data-hub-preview]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('proxy_pass http://127.0.0.1:3000;')`));await click('#close-detail');
+ await sitesPage();
+ assert(await evaluate(`document.querySelectorAll('[data-site-source]').length===2&&document.querySelector('.sites-workspace').textContent.includes('legacy.example.test')`));
+ assert(await evaluate(`!document.querySelector('[data-view="service-hub"][data-view-tab="gateway"]')`));
+ await click('[data-hub-entry="browser-project"]');await evaluate(`document.querySelector('[name=domain]').value='draft.home.test'`);await click('[data-hub-close]');await sitesPage('gateway');await sitesPage();await click('[data-hub-entry="browser-project"]');assert.equal(await evaluate(`document.querySelector('[name=domain]').value`),'draft.home.test');
+ await form({domain:'browser.home.test'});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects[0].revision===2`);
+ await evaluate(`location.hash='service-hub/gateway'`);await until(`location.hash==='#sites/gateway'&&document.querySelector('#view-sites-panel')`);
+ await click('[data-hub-preview]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('proxy_pass http://127.0.0.1:3000;')`));await click('#close-detail');
  await click('[data-hub-gateway]');await until(`document.querySelector('#hub-operation-form')`);await form({confirmation:'xdocker-gateway'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.gateway.runtime_verified`);
- await pane('services');await click('[data-hub-logs="browser-project"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`!document.querySelector('#detail-content').textContent.includes('fixture-secret')`));await click('#close-detail');
+ await hubPage('services');await click('[data-hub-logs="browser-project"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`!document.querySelector('#detail-content').textContent.includes('fixture-secret')`));await click('#close-detail');
  await click('[data-hub-action="browser-project"]');await until(`document.querySelector('#hub-dialog').open&&serviceHubUI.editor?.kind==='action'`);await form({confirmation:'浏览器项目',action:'restart'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.operations.length===1`);
  await pane('records');assert(await evaluate(`document.querySelector('#view-service-hub-panel').textContent.includes('状态已核对')`));await shot('desktop-records');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
- for(const name of ['overview','projects','gateway','services','records']){
+ for(const name of ['overview','projects','services','records']){
   await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);
   assert.equal(await evaluate(`document.querySelectorAll('.hub-workspace [role=tabpanel]').length`),1);
   assert(await evaluate(`(()=>{const n=document.querySelector('.hub-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.hub-workspace [aria-selected=true]').getBoundingClientRect();return a.left>=n.left-1&&a.right<=n.right+1})()`),'Active task outside narrow nav '+name);
@@ -52,7 +60,17 @@ async function main(){
  await pane('projects');await click('[data-hub-edit="browser-project"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');assert(await evaluate(`document.querySelector('#hub-form button[type=submit]').getBoundingClientRect().bottom<=innerHeight`),'Primary save action is outside narrow viewport');await shot('mobile-editor');await click('[data-hub-close]');
  await pane('services');await shot('mobile-services');
  await evaluate(`serviceHubUI.error='fixture-visible-error';serviceHubUI.data.operations[0].state='unconfirmed';renderServiceHubPage()`);
- for(const name of ['overview','projects','gateway','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:5,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
+ for(const name of ['overview','projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
+ await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
+ await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
+ for(const view of ['overview','gateway']){
+  await sitesPage(view);assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes('HTTP 403')`));
+  assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`));assert.equal(await evaluate(`document.querySelectorAll('.sites-workspace [role=tabpanel]').length`),1);
+ }
+ await sitesPage();await evaluate(`document.querySelector('#sites-source').value='deployment';document.querySelector('#sites-source').dispatchEvent(new Event('change',{bubbles:true}))`);
+ assert.equal(await evaluate(`document.querySelectorAll('[data-site-source]').length`),1);await sitesPage('gateway');await sitesPage();assert.equal(await evaluate(`document.querySelector('#sites-source').value`),'deployment');await shot('mobile-unified-sites');
+ await evaluate(`document.querySelector('#sites-source').value='all';document.querySelector('#sites-source').dispatchEvent(new Event('change',{bubbles:true}))`);
+ await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});await shot('desktop-unified-sites');
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

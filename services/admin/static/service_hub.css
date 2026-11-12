@@ -2,3 +2,5 @@
 
 .hub-dialog #hub-form{display:flex;flex-direction:column;max-height:calc(90vh - 48px);min-height:0}.hub-dialog #hub-form>.detail-head,.hub-dialog #hub-form>.dialog-actions,.hub-dialog #hub-form>.error{flex:none}.hub-form-body{overflow-y:auto;min-height:0;padding-right:6px}
 .hub-workspace .panel-head>button{flex:none;white-space:nowrap}
+
+.sites-filter{display:block;max-width:260px;margin:0 0 18px}.sites-filter select{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);margin-top:6px}.sites-workspace .panel-head>button{flex:none;white-space:nowrap}

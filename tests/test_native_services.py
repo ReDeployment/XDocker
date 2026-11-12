@@ -13,7 +13,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'services/admin'))
 from host_metrics import atomic_json, read_json
-from native_services import ServiceHub, ServiceError, SystemdServices, default_policy, validate_policy, fingerprint
+from native_services import ServiceHub, ServiceError, SystemdServices, default_policy, validate_policy, fingerprint, probe_endpoint
 from native_runtime import initialize, create_native_app, native_trusted_hosts
 from docker_api import DockerError
 from app import create_app
@@ -99,6 +99,26 @@ class HubTests(unittest.TestCase):
         self.assertIsNotNone(self.hub.listing()['projects'][0]['health'])
         self.hub.save(project(revision=2,domain='new.home.test'))
         self.assertIsNone(self.hub.listing()['projects'][0]['health'])
+
+    def test_domain_host_probe_and_last_failure_survive_reload(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+        received=[]
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                received.append(self.headers.get('Host'));self.send_response(403 if self.headers.get('Host')=='blocked.home.test' else 200);self.end_headers()
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            value=policy();value['revision']=3;value['endpoints']['example']['port']=server.server_port
+            self.hub.import_policy(value);self.hub.save(project(domain='blocked.home.test'));self.hub.probe=probe_endpoint
+            result=self.hub.health('example');self.assertEqual(result['status'],403);self.assertEqual(result['state'],'unexpected-status');self.assertEqual(received,['blocked.home.test'])
+            reopened=ServiceHub(self.root/'state')
+            with patch('native_services.time.time',return_value=time.time()+60):
+                row=reopened.listing()['projects'][0];self.assertIsNone(row['health']);self.assertEqual(row['last_health']['status'],403)
+            reopened.save(project(revision=2,domain='allowed.home.test'));self.assertIsNone(reopened.listing()['projects'][0]['last_health'])
+            self.assertEqual(reopened.health('example')['status'],200)
+        finally:server.shutdown();worker.join(timeout=3);server.server_close()
 
     def setup_service(self):
         unit=self.root/'example.service';unit.write_text('[Service]\nExecStart=/usr/bin/example\n')

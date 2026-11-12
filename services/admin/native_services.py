@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-from host_metrics import private_directory
+from host_metrics import private_directory,read_json,atomic_json
 from registry_store import RegistryStore
 
 IDENTIFIER = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
@@ -135,7 +135,7 @@ def probe_endpoint(endpoint):
     client=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
     started=time.monotonic()
     try:
-        with client.open(urllib.request.Request(url,method='GET'),timeout=3) as response:status=response.status
+        with client.open(urllib.request.Request(url,method='GET',headers={'Host':endpoint['host_header']} if endpoint.get('host_header') else {}),timeout=3) as response:status=response.status
     except urllib.error.HTTPError as exc:status=exc.code;exc.close()
     except (OSError,ValueError):return {'state':'unreachable','at':time.time(),'status':None,'elapsed_ms':round((time.monotonic()-started)*1000)}
     return {'state':'healthy' if status==endpoint['expected_status'] else 'unexpected-status','at':time.time(),
@@ -264,9 +264,10 @@ class ServiceHub:
 
     def health(self,identifier):
         row,policy=self.bound(identifier);expected=fingerprint({'row':row,'policy':policy})
-        value=self.probe(policy['endpoints'][row['endpoint']])
+        value=self.probe({**policy['endpoints'][row['endpoint']], 'host_header':row['domain']})
         require(expected==fingerprint({'row':self.bound(identifier)[0],'policy':self.policy()}),'XD_SERVICE_CONFIGURATION_CHANGED')
         self.observations[identifier]={'fingerprint':expected,**value}
+        atomic_json(private_directory(self.root/'health')/(identifier+'.json'),self.observations[identifier])
         return value
 
     def status(self,identifier):
@@ -309,8 +310,11 @@ class ServiceHub:
         policy=self.policy();data=self.data();rows=[];monitors=self.monitors()
         for row in data['projects'].values():
             snapshot=self.observations.get(row['id'])
-            fresh=bool(snapshot and time.time()-snapshot['at']<=30 and snapshot['fingerprint']==fingerprint({'row':row,'policy':policy}))
-            rows.append({**row,'health':snapshot if fresh else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
+            if snapshot is None and (self.root/'health'/(row['id']+'.json')).exists():
+                snapshot=read_json(self.root/'health'/(row['id']+'.json'))
+            matches=bool(snapshot and snapshot.get('fingerprint')==fingerprint({'row':row,'policy':policy}))
+            fresh=bool(matches and time.time()-snapshot['at']<=30)
+            rows.append({**row,'health':snapshot if fresh else None,'last_health':snapshot if matches else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
                          'service_available':row['service'] is None or row['service'] in policy['services'],
                          'monitor_available':row['monitor'] is None or row['monitor'] in monitors})
         return {'projects':rows,'endpoints':policy['endpoints'],

@@ -23,7 +23,7 @@ Ubuntu 长期运行可使用 `serve --collect`，此时每 15 秒的指标采集
 
 ## 登记顺序
 
-进入「系统管理 → 独立服务」，依次使用接入概览、项目登记、网页入口、常驻服务、操作记录。桌面左侧纵向导航，窄屏横向任务导航；只显示当前任务，编辑在弹窗，切换/刷新保留草稿。绑定失效、运行结果未确认及网关回退异常在所有分区外持续显示。
+进入「系统管理 → 独立服务」，使用接入概览、项目登记、常驻服务、操作记录；所有域名统一在「网站与 HTTPS → 网站入口」管理，分为网站列表和网关配置。旧 `/#service-hub/gateway` 自动跳转至 `/#sites/gateway`。桌面左侧纵向导航，窄屏横向任务导航；只显示当前任务，编辑在弹窗，切换/刷新保留草稿。绑定失效、运行结果未确认及网关回退异常在所有分区外持续显示。
 
 1. **项目自行启动**：由项目维护者使用自己的开发命令或正式部署流程，确认实际设备、监听地址与端口。目录中存在 Git checkout 不代表已经启动，也不能把文档内的采集副本当运行实例。
 2. **主机管理员批准接入地址**：在私有 policy 中登记别名、固定 IP/协议/端口、健康路径和预期 HTTP 状态。HTTP API 只选择已有别名，不接受任意 URL、shell 或 unit。域名不用于后端探测解析；探测不使用系统代理、不跟随重定向、不返回业务响应正文。
@@ -119,3 +119,12 @@ ssh home-pc-ubuntu-vpn 'cd /data/workspace/XDocker && .venv/bin/python scripts/a
 ```
 
 网关使用 `http://scoreboard.home.test`、`http://docs.home.test`，后端仍分别使用 18080、8080。访问设备须将两个域名解析到 home-pc-ubuntu 的 VPN 地址；可使用受管 DNS 或自己设备的 hosts。本次修复补齐当前 Mac 的 hosts；其他设备仍需各自的解析配置或共享内网 DNS。HTTPS 需要另行配置既有证书，登记 443 不等于已开启 TLS。部署状态与实机证据见 [验收记录](../../tasks/native-services-acceptance-20261112.md)。
+
+
+## PadelU home PC 管理入口
+
+XDocker 登记的目标是 `http://100.100.0.3:15173`，域名 `padelu-admin.home.test`。登记不授予业务服务启停权限。应用连接检查向固定目标发送已登记的 Host；上次失败持久保存并标记检查时间，不把 TCP 可达等同于域名可用。
+
+如果应用返回「host is not allowed」，由 **PadelU 项目维护者**在 `/data/runtime/padelu/dev/conf/development.env` 的 `VITE_ALLOWED_HOSTS` 保留现有域名并追加 `padelu-admin.home.test`，再按该项目流程重启自己的 `padelu-home-web.service`。对应读取位置为 `/data/workspace/PadelU/PadelU/docker/backoffice/frontend/vite.config.*` 中的 `server.allowedHosts`。不要使用允许所有 Host 或代理改写 Host 来绕过检查。
+
+客户端还需将该域名解析到 `100.100.0.3`。完成后应分别检查目标携带 Host 返回 200、网关域名返回 200、登录及开发 WebSocket；应用放行与业务服务重启由 PadelU 项目负责。
