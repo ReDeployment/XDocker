@@ -11,8 +11,8 @@ from sync_runtime import require,SyncError
 
 SCHEMA='''
 CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,uid TEXT NOT NULL,project TEXT,
- name TEXT NOT NULL,directory TEXT NOT NULL,repository TEXT NOT NULL,branch TEXT NOT NULL,backup_branch TEXT NOT NULL,
- includes TEXT NOT NULL,excludes TEXT NOT NULL,credential TEXT,enabled INTEGER NOT NULL);
+ name TEXT NOT NULL,directory TEXT NOT NULL,repository TEXT NOT NULL,branch TEXT NOT NULL,
+ credential TEXT,enabled INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,name TEXT NOT NULL,host TEXT NOT NULL,
  port INTEGER NOT NULL,username TEXT NOT NULL,identity TEXT NOT NULL,host_key TEXT NOT NULL,enabled INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS targets(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,source TEXT NOT NULL REFERENCES sources(id),
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS credentials(id TEXT PRIMARY KEY,name TEXT NOT NULL,up
 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 '''
 TABLES={'sources','devices','targets','schedules'}
-JSON_COLUMNS={'includes','excludes','snapshot','result'}
+JSON_COLUMNS={'snapshot','result'}
 BOOL_COLUMNS={'enabled','restart'}
 
 
@@ -46,13 +46,21 @@ class SyncStore:
         if not self.path.exists():fd=os.open(self.path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
         require(not self.path.stat().st_mode&0o077,'XD_SYNC_UNSAFE_DATABASE')
         with self.db(write=True) as db:
-            version=db.execute('PRAGMA user_version').fetchone()[0];require(version in (0,1),'XD_SYNC_SCHEMA_UNSUPPORTED')
+            version=db.execute('PRAGMA user_version').fetchone()[0];require(version in (0,1,2),'XD_SYNC_SCHEMA_UNSUPPORTED')
             appid=db.execute('PRAGMA application_id').fetchone()[0]
             tables=[row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-            require((version==0 and appid==0 and not tables) or (version==1 and appid==0x5853594E),'XD_SYNC_SCHEMA_UNSUPPORTED')
+            require((version==0 and appid==0 and not tables) or (version in (1,2) and appid==0x5853594E),'XD_SYNC_SCHEMA_UNSUPPORTED')
+            if version==1:
+                # Preserve history; invalidate every old snapshot grant/job before switching modes.
+                require(sqlite3.sqlite_version_info>=(3,35,0),'XD_SYNC_SQLITE_UPGRADE_REQUIRED')
+                for column in ('backup_branch','includes','excludes'):db.execute('ALTER TABLE sources DROP COLUMN '+column)
+                for table in ('sources','targets','schedules'):db.execute('UPDATE '+table+' SET enabled=0,revision=revision+1')
+                db.execute('UPDATE targets SET grant_sha=NULL')
+                db.execute("UPDATE jobs SET state=CASE WHEN sha IS NULL THEN 'failed' ELSE 'interrupted' END,error='XD_SYNC_POLICY_REVIEW_REQUIRED',updated=? WHERE state IN ('queued','running','reconcile-queued')",(time.time(),))
+                db.execute("INSERT INTO metadata VALUES('mode-migration','committed-only-v2') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             for statement in SCHEMA.split(';'):
                 if statement.strip():db.execute(statement)
-            db.execute('PRAGMA user_version=1')
+            db.execute('PRAGMA user_version=2')
             db.execute('PRAGMA application_id=1481857358')
 
     @contextmanager

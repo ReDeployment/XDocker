@@ -29,10 +29,11 @@ def main():
         (source/'app.py').write_text('print("fixture")\n');(source/'.gitignore').write_text('.env\n')
         git(source,'add','.');git(source,'commit','-m','initial');git(source,'remote','add','origin','https://github.com/example/project.git')
         original_head=text_git(source,'rev-parse','HEAD');original_index=(source/'.git/index').read_bytes();(source/'app.py').write_text('print("uncommitted fixture")\n')
+        (source/'scratch.tmp').write_text('private untracked scratch')
         (source/'.env').write_text('PRIVATE_FIXTURE=not-for-upload')
         remote=root/'remote.git';git(root,'init','--bare',str(remote));copies=root/'copies';copies.mkdir();copy_path=copies/'project'
         agent_root=private_directory(root/'agent');policy_file=agent_root/'policy.json'
-        atomic_json(policy_file,{'schema':1,'roots':[str(copies)],'credentials':{},'targets':{'example':{'directory':str(copy_path),'repository':'example/project','backup_branch':'xdocker-backup/example','credential':None,'service':None}}})
+        atomic_json(policy_file,{'schema':2,'roots':[str(copies)],'credentials':{},'targets':{'example':{'directory':str(copy_path),'repository':'example/project','branch':'main','credential':None,'service':None}}})
         resolver=lambda repo:str(remote);agent=CopyAgent(policy_file,resolver)
         docker=NoDocker();app=create_app({'TESTING':True,'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':True,'STATE':str(state),'CONFIG':str(state/'native-config'),
             'REPORTS':str(state/'reports'),'BACKUPS':str(state/'backups'),'HOST_ROOT':str(ROOT),'HOST_METRICS':str(state/'host-metrics')},docker)
@@ -47,7 +48,9 @@ def main():
         finally:worker.close();server.server_close();app.extensions['github_watch'].close()
         assert all(m=='GET' for m in docker.calls)
         assert text_git(source,'rev-parse','HEAD')==original_head and (source/'.git/index').read_bytes()==original_index
-        assert copy_path.is_dir() and not (copy_path/'.env').exists()
+        assert copy_path.is_dir() and not (copy_path/'.env').exists() and not (copy_path/'scratch.tmp').exists()
+        assert (copy_path/'app.py').read_text()=='print("fixture")\n'
+        assert text_git(copy_path,'rev-parse','HEAD')==original_head
         assert any(j['state']=='success' for j in hub.store.all('jobs'))
 
 

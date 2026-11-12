@@ -1,4 +1,4 @@
-"""Bounded Git snapshots and fast-forward copies; source worktrees are read-only."""
+"""Push existing commits and fast-forward copies; source worktrees are read-only."""
 from contextlib import contextmanager
 import fnmatch
 import hashlib
@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from host_metrics import private_directory
+from sync_scan import content_findings,safe_label,VERSION as SCAN_VERSION
 
 SHA=re.compile(r'^[a-f0-9]{40}$')
 KEY=re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
@@ -23,8 +24,6 @@ MAX_FILES=10000
 MAX_BYTES=64*1024*1024
 MAX_FILE=8*1024*1024
 DENY_PARTS={'.git','.ssh','.venv','venv','node_modules','__pycache__','.cache','.nuxt','.output'}
-RUNTIME_ROOTS={'data','logs','backups','uploads'}
-DENY_SUFFIXES=('.pem','.key','.p12','.pfx','.sqlite','.sqlite3','.db','.dump','.tar','.gz','.zip','.log','.pyc')
 
 
 class SyncError(ValueError):pass
@@ -51,9 +50,9 @@ def canonical(value):
     raise SyncError('XD_SYNC_GITHUB_REMOTE_REQUIRED')
 
 
-def backup_branch(value):
-    require(isinstance(value,str) and re.fullmatch(r'xdocker-backup/[a-z0-9][a-z0-9._/-]{0,120}',value)
-            and '..' not in value and '//' not in value and not value.endswith(('/','.','.lock')),'XD_SYNC_BACKUP_BRANCH_REQUIRED')
+def branch_name(value):
+    require(isinstance(value,str) and 1<=len(value)<=200 and not value.startswith(('HEAD@','-')) and not any(c.isspace() or ord(c)<32 for c in value),'XD_SYNC_SOURCE_BRANCH_REQUIRED')
+    require(run(['git','check-ref-format','--branch',value],allowed=(0,128),limit=4096)[0]==0,'XD_SYNC_BRANCH_INVALID')
     return value
 
 
@@ -67,32 +66,33 @@ def safe_path(value,roots):
 
 def run(command,*,env=None,input=None,timeout=60,limit=4*1024*1024,allowed=(0,)):
     environment={k:os.environ[k] for k in ('PATH','HOME','USER','LOGNAME','XDG_RUNTIME_DIR','DBUS_SESSION_BUS_ADDRESS') if k in os.environ}
-    environment.update({'GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_GLOBAL':os.devnull,'GIT_CONFIG_NOSYSTEM':'1','GIT_OPTIONAL_LOCKS':'0','LC_ALL':'C','GIT_LFS_SKIP_SMUDGE':'1'})
+    environment.update({'GIT_TERMINAL_PROMPT':'0','GIT_CONFIG_GLOBAL':os.devnull,'GIT_CONFIG_NOSYSTEM':'1','GIT_OPTIONAL_LOCKS':'0','LC_ALL':'C','GIT_LFS_SKIP_SMUDGE':'1','GIT_NO_REPLACE_OBJECTS':'1'})
     environment.update(env or {})
     with tempfile.TemporaryFile() as incoming:
         if input is not None:incoming.write(input);incoming.seek(0)
-        child=subprocess.Popen(command,stdin=incoming,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=environment,start_new_session=True)
-        output=bytearray();deadline=time.monotonic()+timeout;poll=selectors.DefaultSelector();poll.register(child.stdout,selectors.EVENT_READ)
+        child=subprocess.Popen(command,stdin=incoming,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=environment,start_new_session=True)
+        output=bytearray();deadline=time.monotonic()+timeout;poll=selectors.DefaultSelector();poll.register(child.stdout,selectors.EVENT_READ,'stdout');poll.register(child.stderr,selectors.EVENT_READ,'stderr');error_size=0
         try:
             while poll.get_map():
                 require(time.monotonic()<deadline,'XD_SYNC_COMMAND_TIMEOUT')
                 for key,_ in poll.select(.1):
                     block=os.read(key.fd,65536)
                     if not block:poll.unregister(key.fileobj);continue
-                    output.extend(block);require(len(output)<=limit,'XD_SYNC_OUTPUT_LIMIT')
+                    if key.data=='stdout':output.extend(block);require(len(output)<=limit,'XD_SYNC_OUTPUT_LIMIT')
+                    else:error_size+=len(block);require(error_size<=65536,'XD_SYNC_OUTPUT_LIMIT')
             try:child.wait(timeout=max(.1,deadline-time.monotonic()))
             except subprocess.TimeoutExpired:raise SyncError('XD_SYNC_COMMAND_TIMEOUT') from None
             require(child.returncode in allowed,'XD_SYNC_GIT_REJECTED' if command[0]=='git' else 'XD_SYNC_TRANSPORT_REJECTED')
             return child.returncode,bytes(output)
         finally:
-            poll.close();child.stdout.close()
+            poll.close();child.stdout.close();child.stderr.close()
             if child.poll() is None:
                 os.killpg(child.pid,signal.SIGKILL);child.wait(timeout=5)
 
 
-def git(directory,*arguments,env=None,input=None,allowed=(0,),timeout=60):
-    return run(['git','-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','commit.gpgsign=false',
-                '-c','credential.helper=','-c','gc.auto=0','-C',str(directory),*arguments],env=env,input=input,allowed=allowed,timeout=timeout)
+def git(directory,*arguments,env=None,input=None,allowed=(0,),timeout=60,limit=4*1024*1024):
+    return run(['git','--no-replace-objects','-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','commit.gpgsign=false',
+                '-c','credential.helper=','-c','gc.auto=0','-C',str(directory),*arguments],env=env,input=input,allowed=allowed,timeout=timeout,limit=limit)
 
 
 def text_git(directory,*args,**kwargs):return git(directory,*args,**kwargs)[1].decode('utf-8','strict').strip()
@@ -105,44 +105,68 @@ def source_branch(root):
     return 'HEAD@'+sha
 
 
-def allowed_file(name,includes,excludes):
-    p=Path(name)
-    require(not p.is_absolute() and '..' not in p.parts and '\0' not in name,'XD_SYNC_FILE_INVALID')
-    if p.parts[0] in RUNTIME_ROOTS or any(v.lower() in DENY_PARTS or v.lower().startswith('.env') for v in p.parts) or name.lower().endswith(DENY_SUFFIXES):return False
-    if any(fnmatch.fnmatchcase(name,v) or any(fnmatch.fnmatchcase(part,v) for part in p.parts) for v in excludes):return False
-    return any(v=='.' or name==v or name.startswith(v.rstrip('/')+'/') for v in includes)
+MAX_COMMITS=500
+MAX_PACK=256*1024*1024
 
 
-def scan_source(profile,roots,copy_to=None):
+class ScanRejected(SyncError):
+    def __init__(self,summary):super().__init__('XD_SYNC_SENSITIVE_CONTENT');self.summary=summary
+
+
+def inspect_source(profile,roots):
     root=safe_path(profile['directory'],roots);require(root.is_dir(),'XD_SYNC_SOURCE_MISSING')
     require(Path(text_git(root,'rev-parse','--show-toplevel')).resolve()==root,'XD_SYNC_REPOSITORY_ROOT_REQUIRED')
     branch=source_branch(root);require(branch==profile['branch'],'XD_SYNC_SOURCE_BRANCH_CHANGED')
+    graft=Path(text_git(root,'rev-parse','--git-path','info/grafts'));graft=graft if graft.is_absolute() else root/graft
+    require(not graft.exists(),'XD_SYNC_GRAFTED_SOURCE_UNSUPPORTED')
     head=text_git(root,'rev-parse','HEAD');require(SHA.fullmatch(head),'XD_SYNC_SOURCE_HEAD_INVALID')
     require(canonical(text_git(root,'remote','get-url','origin')).lower()==profile['repository'].lower(),'XD_SYNC_SOURCE_REMOTE_MISMATCH')
-    selection=['.'] if '.' in profile['includes'] else [':(literal)'+v for v in profile['includes']]
-    names=set(git(root,'ls-files','-z','--cached','--others','--exclude-standard','--',*selection)[1].decode('utf-8','strict').split('\0'))-{''}
-    require(len(names)<=MAX_FILES*2,'XD_SYNC_FILE_LIMIT')
-    manifest=[];total=0;excluded=0
-    for name in sorted(names):
-        require(len(name)<=1024,'XD_SYNC_FILE_PATH_LIMIT')
-        if not allowed_file(name,profile['includes'],profile['excludes']):excluded+=1;continue
-        p=root/name
-        if not p.exists() and not p.is_symlink():continue
-        require(not any(x.is_symlink() for x in (p,*list(p.parents)[:len(p.relative_to(root).parts)])),'XD_SYNC_SYMLINK_DENIED')
-        fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
-        with os.fdopen(fd,'rb') as source:
-            info=os.fstat(source.fileno());require(stat.S_ISREG(info.st_mode) and info.st_size<=MAX_FILE,'XD_SYNC_FILE_LIMIT')
-            body=source.read(MAX_FILE+1);after=os.fstat(source.fileno())
-        require(len(body)<=MAX_FILE and (info.st_size,info.st_mtime_ns)==(after.st_size,after.st_mtime_ns),'XD_SYNC_SOURCE_CHANGED')
-        total+=len(body);require(total<=MAX_BYTES and len(manifest)<MAX_FILES,'XD_SYNC_SNAPSHOT_LIMIT')
-        mode=0o755 if info.st_mode&0o111 else 0o644
-        manifest.append([name,hashlib.sha256(body).hexdigest(),mode,len(body)])
-        if copy_to:
-            target=Path(copy_to)/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body);target.chmod(mode)
-    require(manifest,'XD_SYNC_NO_SELECTED_FILES')
-    require(text_git(root,'rev-parse','HEAD')==head and source_branch(root)==branch,'XD_SYNC_SOURCE_CHANGED')
-    return {'head':head,'branch':branch,'files':len(manifest),'bytes':total,'excluded':excluded,
-            'fingerprint':digest({'head':head,'branch':branch,'manifest':manifest}),'selected':[r[0] for r in manifest[:30]]}
+    pending={}
+    for name,args in [('modified',('diff','--name-only','-z')),('staged',('diff','--cached','--name-only','-z')),('untracked',('ls-files','--others','--exclude-standard','-z'))]:
+        paths=git(root,*args)[1].decode('utf-8','strict').split('\0');paths=[v for v in paths if v]
+        pending[name]={'count':len(paths),'paths':[safe_label(v) for v in paths[:20]]}
+    return {'mode':'committed-only','head':head,'branch':branch,'pending':pending,'pushable':not branch.startswith('HEAD@'),
+            'shallow':text_git(root,'rev-parse','--is-shallow-repository')=='true'}
+
+
+def scan_commits(directory,commits,context,base=None,scope='outgoing-history'):
+    require(len(commits)<=MAX_COMMITS,'XD_SYNC_SCAN_COMMIT_LIMIT')
+    summary={**context,'scope':scope,'remote_head':base,'commit_count':len(commits),'commits':[],
+             'scan_version':SCAN_VERSION,'files':0,'bytes':0,'findings':[],'findings_count':0,'blocked':False}
+    seen=set();paths=set();findings=[]
+    for sha in commits:
+        require(SHA.fullmatch(sha),'XD_SYNC_SHA_INVALID')
+        message=git(directory,'show','-s','--format=%B',sha,limit=65536)[1]
+        issues=content_findings('<commit-metadata>',git(directory,'cat-file','commit',sha,limit=65536)[1])
+        findings.extend({'commit':sha,'path':'<commit-metadata>',**issue} for issue in issues)
+        title='提交说明含敏感信息，已隐藏' if issues else message.decode('utf-8','replace').split('\n')[0][:200]
+        if len(summary['commits'])<30:summary['commits'].append({'sha':sha,'title':title})
+        raw=git(directory,'diff-tree','--no-commit-id','--root','-r','-m','--no-renames','--raw','-z',sha)[1].split(b'\0')
+        index=0
+        while index<len(raw) and raw[index]:
+            fields=raw[index].decode('ascii').split();require(len(fields)==5 and fields[0].startswith(':'),'XD_SYNC_SCAN_INVALID_TREE')
+            path=raw[index+1].decode('utf-8','strict');index+=2
+            mode,oid=fields[1],fields[3]
+            if mode=='000000':continue
+            require(SHA.fullmatch(oid) and len(path)<=1024,'XD_SYNC_SCAN_INVALID_TREE')
+            paths.add(path);require(len(paths)<=MAX_FILES,'XD_SYNC_SCAN_FILE_LIMIT')
+            if mode!='100644' and mode!='100755':
+                findings.append({'commit':sha,'path':safe_label(path),'rule':'symlink-or-submodule','line':None});continue
+            if (path,oid) in seen:continue
+            seen.add((path,oid));require(len(seen)<=MAX_FILES,'XD_SYNC_SCAN_FILE_LIMIT')
+            size=int(text_git(directory,'cat-file','-s',oid));require(size<=MAX_FILE,'XD_SYNC_SCAN_FILE_LIMIT')
+            summary['bytes']+=size;require(summary['bytes']<=MAX_BYTES,'XD_SYNC_SCAN_BYTE_LIMIT')
+            body=git(directory,'cat-file','blob',oid,limit=MAX_FILE+1024)[1]
+            findings.extend({'commit':sha,'path':safe_label(path),**issue} for issue in content_findings(path,body))
+    summary.update(files=len(paths),findings=findings[:30],findings_count=len(findings),blocked=bool(findings))
+    return summary
+
+
+def scan_source(profile,roots):
+    context=inspect_source(profile,roots)
+    result=scan_commits(profile['directory'],[context['head']],context,scope='local-head-only')
+    require(inspect_source(profile,roots)['head']==context['head'],'XD_SYNC_SOURCE_CHANGED')
+    return result
 
 
 @contextmanager
@@ -161,56 +185,69 @@ class GitTransfer:
         self.root=private_directory(root);self.remotes=remote_resolver or (lambda value:'https://github.com/'+repository(value)+'.git')
 
     def remote_head(self,directory,profile,env):
-        code,raw=git(directory,'ls-remote','--exit-code',self.remotes(profile['repository']),'refs/heads/'+profile['backup_branch'],env=env,allowed=(0,2))
+        branch_name(profile['branch'])
+        code,raw=git(directory,'ls-remote','--exit-code',self.remotes(profile['repository']),'refs/heads/'+profile['branch'],env=env,allowed=(0,2))
         if code==2:return None
         rows=raw.decode().strip().splitlines();require(len(rows)==1,'XD_SYNC_REMOTE_HEAD_INVALID')
-        sha,ref=rows[0].split();require(SHA.fullmatch(sha) and ref=='refs/heads/'+profile['backup_branch'],'XD_SYNC_REMOTE_HEAD_INVALID');return sha
+        sha,ref=rows[0].split();require(SHA.fullmatch(sha) and ref=='refs/heads/'+profile['branch'],'XD_SYNC_REMOTE_HEAD_INVALID');return sha
+
+    def prepare(self,profile,roots,env):
+        context=inspect_source(profile,roots);branch_name(context['branch'])
+        require(not context['shallow'],'XD_SYNC_SHALLOW_SOURCE_UNSUPPORTED')
+        source=Path(profile['directory']);cache=self.root/(profile['id']+'-commits-v2.git')
+        require(not cache.is_symlink(),'XD_SYNC_SYMLINK_DENIED')
+        if not cache.exists():git(self.root,'init','--bare',str(cache))
+        require(sum(p.stat().st_size for p in cache.rglob('*') if p.is_file())<=512*1024*1024,'XD_SYNC_CACHE_CAPACITY')
+        parent=self.remote_head(cache,profile,env);head=context['head']
+        if parent:
+            git(cache,'fetch','--no-tags','--no-recurse-submodules',self.remotes(profile['repository']),'refs/heads/'+profile['branch'],env=env)
+            require(text_git(cache,'rev-parse','FETCH_HEAD')==parent,'XD_SYNC_REMOTE_MOVED')
+        if parent!=head:
+            present=bool(parent and git(source,'cat-file','-e',parent+'^{commit}',allowed=(0,1,128))[0]==0)
+            if present:require(git(source,'merge-base','--is-ancestor',parent,head,allowed=(0,1))[0]==0,'XD_SYNC_REMOTE_DIVERGED')
+            revisions=head+'\n'+('^'+parent+'\n' if present else '')
+            # Transfer only Git objects into a private bare cache. No source index/ref writes,
+            # and source-local URL rewrites or credential helpers cannot affect the push.
+            outgoing=text_git(source,'rev-list','--max-count='+str(MAX_COMMITS+1),head,*(['^'+parent] if present else [])).splitlines()
+            require(len(outgoing)<=MAX_COMMITS,'XD_SYNC_SCAN_COMMIT_LIMIT')
+            packed=git(source,'pack-objects','--stdout','--revs','--quiet',input=revisions.encode(),limit=MAX_PACK,timeout=120)[1]
+            git(cache,'index-pack','--stdin',input=packed,timeout=120)
+            if parent:require(git(cache,'merge-base','--is-ancestor',parent,head,allowed=(0,1))[0]==0,'XD_SYNC_REMOTE_DIVERGED')
+        commits=text_git(cache,'rev-list','--reverse','--topo-order','--max-count='+str(MAX_COMMITS+1),head,*(['^'+parent] if parent else [])).splitlines()
+        summary=scan_commits(cache,commits,context,parent)
+        latest=inspect_source(profile,roots);require(latest['head']==head and latest['branch']==context['branch'],'XD_SYNC_SOURCE_CHANGED')
+        return cache,summary
+
+    def preview(self,profile,roots,env):return self.prepare(profile,roots,env)[1]
 
     def publish(self,profile,roots,env,before_push):
-        cache=self.root/(profile['id']+'.git')
-        if not cache.exists():git(self.root,'init','--bare',str(cache))
-        require(not cache.is_symlink(),'XD_SYNC_SYMLINK_DENIED')
-        size=sum(p.stat().st_size for p in cache.rglob('*') if p.is_file());require(size<=512*1024*1024,'XD_SYNC_CACHE_CAPACITY')
-        with tempfile.TemporaryDirectory(prefix='snapshot-',dir=self.root) as temporary:
-            copied=Path(temporary)/'files';copied.mkdir();snapshot=scan_source(profile,roots,copied)
-            index_env={**env,'GIT_INDEX_FILE':str(Path(temporary)/'index')}
-            command=['git','--git-dir',str(cache),'--work-tree',str(copied)]
-            run([*command,'add','--force','--all'],env=index_env)
-            # The index lives outside the work tree so it can never become a source file.
-            tree=run([*command,'write-tree'],env=index_env)[1].decode().strip()
-            parent=self.remote_head(cache,profile,env)
-            if parent:
-                git(cache,'fetch','--no-tags',self.remotes(profile['repository']),'refs/heads/'+profile['backup_branch'],env=env)
-                require(text_git(cache,'rev-parse','FETCH_HEAD')==parent,'XD_SYNC_REMOTE_MOVED')
-                message=text_git(cache,'show','-s','--format=%B',parent)
-                require('XDocker-Profile: '+profile['uid'] in message,'XD_SYNC_UNMANAGED_BACKUP_BRANCH')
-                if text_git(cache,'rev-parse',parent+'^{tree}')==tree:return {'sha':parent,'changed':False,'snapshot':snapshot}
-            message=f'XDocker snapshot: {profile["id"]}\n\nSource-Commit: {snapshot["head"]}\nXDocker-Profile: {profile["uid"]}\n'
-            author={**env,'GIT_AUTHOR_NAME':'XDocker Backup','GIT_AUTHOR_EMAIL':'backup@xdocker.invalid','GIT_COMMITTER_NAME':'XDocker Backup','GIT_COMMITTER_EMAIL':'backup@xdocker.invalid'}
-            sha=text_git(cache,'commit-tree',tree,*(['-p',parent] if parent else []),env=author,input=message.encode())
-            require(scan_source(profile,roots)['fingerprint']==snapshot['fingerprint'],'XD_SYNC_SOURCE_CHANGED')
-            before_push(sha,snapshot)
-            try:git(cache,'push',self.remotes(profile['repository']),sha+':refs/heads/'+profile['backup_branch'],env=env)
+        cache,summary=self.prepare(profile,roots,env);sha=summary['head']
+        if summary['blocked']:raise ScanRejected(summary)
+        changed=summary['remote_head']!=sha
+        if changed:
+            require(self.remote_head(cache,profile,env)==summary['remote_head'],'XD_SYNC_REMOTE_MOVED')
+            before_push(sha,summary)
+            require(inspect_source(profile,roots)['head']==sha,'XD_SYNC_SOURCE_CHANGED')
+            try:git(cache,'push',self.remotes(profile['repository']),sha+':refs/heads/'+profile['branch'],env=env)
             except SyncError:
                 try:confirmed=self.remote_head(cache,profile,env)==sha
                 except SyncError:confirmed=False
                 require(confirmed,'XD_SYNC_UPLOAD_UNCONFIRMED')
-            require(self.remote_head(cache,profile,env)==sha,'XD_SYNC_UPLOAD_UNCONFIRMED')
-            git(cache,'update-ref','refs/heads/'+profile['backup_branch'],sha)
-            return {'sha':sha,'changed':True,'snapshot':snapshot}
+        require(self.remote_head(cache,profile,env)==sha,'XD_SYNC_UPLOAD_UNCONFIRMED')
+        git(cache,'update-ref','refs/heads/'+profile['branch'],sha)
+        return {'sha':sha,'changed':changed,'snapshot':summary}
 
-    def verify(self,profile,sha,env):
-        return self.remote_head(self.root,profile,env)==sha
+    def verify(self,profile,sha,env):return self.remote_head(self.root,profile,env)==sha
 
 
 def inspect_copy(grant,roots):
     path=safe_path(grant['directory'],roots)
-    if not path.exists():return {'exists':False,'head':None,'clean':True,'branch':grant['backup_branch']}
+    if not path.exists():return {'exists':False,'head':None,'clean':True,'branch':grant['branch']}
     require(path.is_dir(),'XD_SYNC_TARGET_NOT_DIRECTORY')
-    if not any(path.iterdir()):return {'exists':False,'head':None,'clean':True,'branch':grant['backup_branch']}
+    if not any(path.iterdir()):return {'exists':False,'head':None,'clean':True,'branch':grant['branch']}
     require(Path(text_git(path,'rev-parse','--show-toplevel')).resolve()==path,'XD_SYNC_TARGET_ROOT_MISMATCH')
     require(canonical(text_git(path,'remote','get-url','origin')).lower()==grant['repository'].lower(),'XD_SYNC_TARGET_REMOTE_MISMATCH')
-    branch=text_git(path,'symbolic-ref','--short','HEAD');require(branch==grant['backup_branch'],'XD_SYNC_TARGET_BRANCH_MISMATCH')
+    branch=text_git(path,'symbolic-ref','--short','HEAD');require(branch==grant['branch'],'XD_SYNC_TARGET_BRANCH_MISMATCH')
     return {'exists':True,'head':text_git(path,'rev-parse','HEAD'),'clean':not bool(git(path,'status','--porcelain','--untracked-files=normal')[1]),'branch':branch}
 
 
@@ -223,14 +260,14 @@ def pull_copy(grant,roots,sha,observation,env,remote_resolver=None):
         require(path.parent.is_dir(),'XD_SYNC_TARGET_PARENT_MISSING')
         with tempfile.TemporaryDirectory(prefix='.xdocker-copy-',dir=path.parent) as temp:
             staged=Path(temp)/'repository'
-            git(path.parent,'clone','--single-branch','--no-tags','--branch',grant['backup_branch'],remote,str(staged),env=env)
+            git(path.parent,'clone','--single-branch','--no-tags','--branch',grant['branch'],remote,str(staged),env=env)
             require(text_git(staged,'rev-parse','HEAD')==sha,'XD_SYNC_REMOTE_MOVED')
             # Pin the canonical origin even when a fixture resolver supplied a local transport.
             git(staged,'remote','set-url','origin','https://github.com/'+grant['repository']+'.git')
             if path.exists():path.rmdir()  # refuses non-empty concurrent user state
             staged.rename(path)
     else:
-        git(path,'fetch','--no-tags',remote,'refs/heads/'+grant['backup_branch'],env=env)
+        git(path,'fetch','--no-tags',remote,'refs/heads/'+grant['branch'],env=env)
         require(text_git(path,'rev-parse','FETCH_HEAD')==sha,'XD_SYNC_REMOTE_MOVED')
         require(inspect_copy(grant,roots)==before,'XD_SYNC_TARGET_CHANGED')
         git(path,'merge-base','--is-ancestor',before['head'],sha)

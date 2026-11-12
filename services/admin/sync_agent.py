@@ -10,24 +10,24 @@ import time
 
 from host_metrics import private_directory,read_json,atomic_json
 from native_services import SystemdServices,validate_policy,default_policy
-from sync_runtime import (SyncError,require,identifier,repository,backup_branch,safe_path,inspect_copy,pull_copy,
+from sync_runtime import (SyncError,require,identifier,repository,branch_name,safe_path,inspect_copy,pull_copy,
                           digest,github_auth)
 
 
 @lru_cache(maxsize=1)
 def agent_sha():
     root=Path(__file__).parent
-    return hashlib.sha256(b''.join((root/name).read_bytes() for name in ('sync_agent.py','sync_runtime.py','native_services.py','host_metrics.py'))).hexdigest()
+    return hashlib.sha256(b''.join((root/name).read_bytes() for name in ('sync_agent.py','sync_runtime.py','native_services.py','host_metrics.py','sync_scan.py'))).hexdigest()
 
 
 def validate_agent_policy(value):
-    require(isinstance(value,dict) and set(value)=={'schema','roots','targets','credentials'} and value['schema']==1,'XD_SYNC_AGENT_POLICY_INVALID')
+    require(isinstance(value,dict) and set(value)=={'schema','roots','targets','credentials'} and value['schema']==2,'XD_SYNC_AGENT_POLICY_INVALID')
     require(isinstance(value['roots'],list) and 1<=len(value['roots'])<=20,'XD_SYNC_AGENT_POLICY_INVALID')
     for root in value['roots']:require(isinstance(root,str) and root.startswith('/') and '..' not in Path(root).parts,'XD_SYNC_AGENT_POLICY_INVALID')
     require(isinstance(value['targets'],dict) and len(value['targets'])<=100 and isinstance(value['credentials'],dict),'XD_SYNC_AGENT_POLICY_INVALID')
     for name,grant in value['targets'].items():
-        identifier(name);require(isinstance(grant,dict) and set(grant)=={'directory','repository','backup_branch','credential','service'},'XD_SYNC_AGENT_POLICY_INVALID')
-        safe_path(grant['directory'],value['roots']);repository(grant['repository']);backup_branch(grant['backup_branch'])
+        identifier(name);require(isinstance(grant,dict) and set(grant)=={'directory','repository','branch','credential','service'},'XD_SYNC_AGENT_POLICY_INVALID')
+        safe_path(grant['directory'],value['roots']);repository(grant['repository']);branch_name(grant['branch'])
         require(grant['credential'] is None or grant['credential'] in value['credentials'],'XD_SYNC_AGENT_CREDENTIAL_UNAVAILABLE')
         if grant['service'] is not None:
             p=default_policy();p['services']['copy']=grant['service'];validate_policy(p)
@@ -50,7 +50,7 @@ class CopyAgent:
         identifier(name);require(name in self.policy['targets'],'XD_SYNC_AGENT_TARGET_NOT_GRANTED')
         grant=self.policy['targets'][name];snapshot=inspect_copy(grant,self.policy['roots'])
         return {'agent_sha':agent_sha(),'grant_sha':digest(grant),'observation':digest(snapshot),**snapshot,
-                'directory':grant['directory'],'repository':grant['repository'],'backup_branch':grant['backup_branch'],
+                'directory':grant['directory'],'repository':grant['repository'],'branch':grant['branch'],
                 'restart_available':grant['service'] is not None}
 
     def handle(self,body):

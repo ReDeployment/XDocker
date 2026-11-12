@@ -45,3 +45,5 @@ static/**
 !static/code_sync.js
 !static/code_sync.css
 !static/code-sync-guide.html
+
+!sync_scan.py

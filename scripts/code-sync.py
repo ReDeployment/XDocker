@@ -20,7 +20,7 @@ def main():
     if args.action=='policy-example':print(json.dumps(default_policy(),indent=2));return
     if args.action=='agent-sha':print(agent_sha());return
     if args.action=='agent-example':
-        print(json.dumps({'schema':1,'roots':['/data/workspace'],'credentials':{},'targets':{'example':{'directory':'/data/workspace/example-copy','repository':'example/project','backup_branch':'xdocker-backup/example','credential':None,'service':None}}},indent=2));return
+        print(json.dumps({'schema':2,'roots':['/data/workspace'],'credentials':{},'targets':{'example':{'directory':'/data/workspace/example-copy','repository':'example/project','branch':'main','credential':None,'service':None}}},indent=2));return
     hub=CodeSync(args.state)
     if args.action=='policy-import':
         if not args.file:parser.error('--file is required (private 0600 policy)')
@@ -33,7 +33,7 @@ def main():
             identifier=item['project'] or re.sub('[^a-z0-9-]+','-',item['name'].lower()).strip('-')[:50] or 'project'
             if identifier in ids:identifier=identifier[:50]+'-'+digest(item['directory'])[:8]
             source=hub.save('sources',{'id':identifier,'revision':1,'project':item['project'],'name':item['name'],'directory':item['directory'],
-                'repository':item['repository'],'branch':item['branch'],'backup_branch':'xdocker-backup/'+identifier,'includes':['.'],'excludes':[],
+                'repository':item['repository'],'branch':item['branch'],
                 'credential':None,'enabled':False})
             hub.save('schedules',{'id':identifier,'revision':1,'source':identifier,'mode':'upload','hour':2,'minute':0,'timezone':'Asia/Shanghai','enabled':False})
             created.append(source['id']);known.add(item['directory']);ids.add(identifier)

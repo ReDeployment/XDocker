@@ -16,9 +16,10 @@ from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 from host_metrics import private_directory,read_json,atomic_json
 from registry_store import RegistryStore
 from sync_store import SyncStore
-from sync_runtime import (SyncError,require,identifier,repository,backup_branch,safe_path,scan_source,canonical,
-                          text_git,source_branch,GitTransfer,github_auth,digest,run,SHA,DENY_PARTS,DENY_SUFFIXES,RUNTIME_ROOTS)
+from sync_runtime import (SyncError,require,identifier,repository,branch_name,safe_path,scan_source,inspect_source,ScanRejected,canonical,
+                          text_git,source_branch,GitTransfer,github_auth,digest,run,SHA,DENY_PARTS)
 from sync_agent import agent_sha
+from sync_scan import VERSION as SCAN_VERSION
 
 
 def default_policy():
@@ -79,7 +80,8 @@ class CodeSync:
                     try:
                         repo=canonical(text_git(p,'remote','get-url','origin'));branch=source_branch(p)
                         project=by_path.get(str(p))
-                        found.append({'directory':str(p),'repository':repo,'branch':branch,'name':project['name'] if project else p.name,'project':project['id'] if project else None})
+                        item={'directory':str(p),'repository':repo,'branch':branch,'name':project['name'] if project else p.name,'project':project['id'] if project else None}
+                        item.update({k:v for k,v in inspect_source(item,self.policy()['source_roots']).items() if k in ('head','pending','pushable','shallow')});found.append(item)
                     except (SyncError,OSError,UnicodeError):continue
                 if depth>=6:dirs[:]=[]
         # A temporary clone can have its own .git directory; deduplicate by origin,
@@ -103,7 +105,7 @@ class CodeSync:
                 'archive_error':self.store.metadata('archive-error'),
                 'worker':{'connected':bool(heartbeat and time.time()-float(heartbeat[0])<45)},
                 'execution_enabled':bool(self.operations and policy['execution']),'configuration_writable':True,
-                'builtin_excludes':sorted(DENY_PARTS)+[v+'/' for v in sorted(RUNTIME_ROOTS)]+list(DENY_SUFFIXES)+['.env*'],'backup_namespace':'xdocker-backup/'}
+                'sync_mode':'committed-only','scan_version':SCAN_VERSION,'mode_migration':self.store.metadata('mode-migration')}
 
     def save_credential(self,body):
         require(isinstance(body,dict) and set(body)=={'id','name','token'},'XD_SYNC_INPUT_INVALID');identifier(body['id'])
@@ -126,7 +128,7 @@ class CodeSync:
     def save(self,kind,body):
         require(kind in ('sources','devices','targets','schedules') and isinstance(body,dict),'XD_SYNC_INPUT_INVALID')
         value=dict(body);confirmation=value.pop('confirmation',None)
-        fields={'sources':{'id','revision','project','name','directory','repository','branch','backup_branch','includes','excludes','credential','enabled'},
+        fields={'sources':{'id','revision','project','name','directory','repository','branch','credential','enabled'},
                 'devices':{'id','revision','name','host','port','username','identity','host_key','enabled'},
                 'targets':{'id','revision','source','device','remote_target','directory','restart','enabled'},
                 'schedules':{'id','revision','source','mode','hour','minute','timezone','enabled'}}[kind]
@@ -134,14 +136,12 @@ class CodeSync:
         require(type(value['revision']) is int and value['revision']>=1 and type(value['enabled']) is bool,'XD_SYNC_INPUT_INVALID')
         if kind in ('sources','devices'):require(isinstance(value['name'],str) and 1<=len(value['name'])<=80 and all(c.isprintable() for c in value['name']),'XD_SYNC_NAME_INVALID')
         if kind=='sources':
-            safe_path(value['directory'],self.policy()['source_roots']);repository(value['repository']);backup_branch(value['backup_branch'])
+            safe_path(value['directory'],self.policy()['source_roots']);repository(value['repository'])
             require(any(row['directory']==value['directory'] and row['repository'].lower()==value['repository'].lower() and row['branch']==value['branch'] for row in self.inventory(True)),'XD_SYNC_SOURCE_NOT_DISCOVERED')
             require(value['project'] is None or value['project'] in self.registry.read_hub()['projects'],'XD_SYNC_PROJECT_UNAVAILABLE')
-            for key in ('includes','excludes'):
-                require(isinstance(value[key],list) and 1<=len(value[key])<=30 if key=='includes' else isinstance(value[key],list) and len(value[key])<=30,'XD_SYNC_SELECTION_INVALID')
-                for item in value[key]:require(isinstance(item,str) and 1<=len(item)<=200 and not item.startswith('/') and '..' not in Path(item).parts and not any(c in item for c in '\n\r\0'),'XD_SYNC_SELECTION_INVALID')
             require(value['credential'] is None or self.store.get('credentials',value['credential']) is not None,'XD_SYNC_CREDENTIAL_REQUIRED')
-            if value['enabled']:require(value['credential'] is not None and confirmation==value['name'],'XD_SYNC_CONFIRMATION_REQUIRED')
+            if value['enabled']:
+                branch_name(value['branch']);require(value['credential'] is not None and confirmation==value['name'],'XD_SYNC_CONFIRMATION_REQUIRED')
             old=self.store.get(kind,value['id']);value['uid']=old['uid'] if old else secrets.token_hex(16)
         elif kind=='devices':
             try:address=ipaddress.ip_address(value['host'])
@@ -169,12 +169,19 @@ class CodeSync:
     def source(self,identifier):
         value=self.store.get('sources',identifier);require(value is not None,'XD_SYNC_SOURCE_NOT_FOUND');return value
 
-    def preview(self,name):return scan_source(self.source(name),self.policy()['source_roots'])
+    def preview(self,name):
+        source=self.source(name)
+        if source['credential']:
+            with github_auth(self.transient,self.secret(source['credential'])) as env:return self.transfer.preview(source,self.policy()['source_roots'],env)
+        return scan_source(source,self.policy()['source_roots'])
+
+    def published_identity(self,source):
+        return digest({'mode':'committed-only-v2','scan':SCAN_VERSION,**{k:source[k] for k in ('repository','branch','uid')}})
 
     def configuration(self,name):
         source=self.source(name);targets=[t for t in self.store.all('targets') if t['source']==name and t['enabled']]
         devices=[self.store.get('devices',t['device']) for t in targets]
-        return digest({'source':source,'targets':targets,'devices':devices,'policy':self.policy(),'credentials':self.store.all('credentials')})
+        return digest({'mode':'committed-only-v2','scan':SCAN_VERSION,'source':source,'targets':targets,'devices':devices,'policy':self.policy(),'credentials':self.store.all('credentials')})
 
     def enqueue(self,body):
         require(isinstance(body,dict) and set(body)=={'source','kind','confirmation','idempotency_key'},'XD_SYNC_INPUT_INVALID')
@@ -209,7 +216,7 @@ class CodeSync:
         result=self.transport(device,{'operation':'inspect','target':target['remote_target']})
         require(result.get('agent_sha')==agent_sha(),'XD_SYNC_AGENT_VERSION_MISMATCH')
         require(not target.get('grant_sha') or result.get('grant_sha')==target['grant_sha'],'XD_SYNC_TARGET_GRANT_CHANGED')
-        require((result.get('repository','').lower(),result.get('backup_branch'),result.get('directory'))==(source['repository'].lower(),source['backup_branch'],target['directory']),'XD_SYNC_TARGET_GRANT_MISMATCH')
+        require((result.get('repository','').lower(),result.get('branch'),result.get('directory'))==(source['repository'].lower(),source['branch'],target['directory']),'XD_SYNC_TARGET_GRANT_MISMATCH')
         require(result.get('clean') and (not target['restart'] or result.get('restart_available')),'XD_SYNC_TARGET_DIRTY_OR_RESTART_NOT_GRANTED')
         return result
 
@@ -227,13 +234,13 @@ class CodeSync:
                     self.store.patch_job(job['id'],sha=sha,snapshot=published['snapshot'])
                 else:
                     raw=self.store.metadata('published:'+source['id']);require(raw is not None,'XD_SYNC_NO_CONFIRMED_UPLOAD');previous=json.loads(raw)
-                    require(previous['source']==digest({k:source[k] for k in ('repository','backup_branch','uid')}),'XD_SYNC_NO_CONFIRMED_UPLOAD');sha=previous['sha']
+                    require(previous['source']==self.published_identity(source),'XD_SYNC_NO_CONFIRMED_UPLOAD');sha=previous['sha']
                     require(self.transfer.verify(source,sha,env),'XD_SYNC_REMOTE_MOVED');self.store.patch_job(job['id'],sha=sha)
-            self.store.metadata('published:'+source['id'],json.dumps({'sha':sha,'source':digest({k:source[k] for k in ('repository','backup_branch','uid')})}))
+            self.store.metadata('published:'+source['id'],json.dumps({'sha':sha,'source':self.published_identity(source)}))
             self.distribute(job,sha)
         except (OSError,ValueError,KeyError,TypeError) as error:
             code=str(error) if isinstance(error,SyncError) else 'XD_SYNC_OPERATION_FAILED'
-            self.store.patch_job(job['id'],state='upload-unconfirmed' if code=='XD_SYNC_UPLOAD_UNCONFIRMED' else 'failed',error=code)
+            self.store.patch_job(job['id'],state='upload-unconfirmed' if code=='XD_SYNC_UPLOAD_UNCONFIRMED' else 'failed',error=code,**({'snapshot':error.summary} if isinstance(error,ScanRejected) else {}))
 
     def distribute(self,job,sha):
         require(job['config_sha']==self.configuration(job['source']),'XD_SYNC_CONFIGURATION_CHANGED')
@@ -261,7 +268,7 @@ class CodeSync:
         require(self.operations and self.policy()['execution'] and job['config_sha']==self.configuration(source['id']),'XD_SYNC_CONFIGURATION_CHANGED')
         self.store.patch_job(job['id'],state='running')
         with github_auth(self.transient,self.secret(source['credential'])) as env:require(self.transfer.verify(source,job['sha'],env),'XD_SYNC_UPLOAD_NOT_CONFIRMED')
-        self.store.metadata('published:'+source['id'],json.dumps({'sha':job['sha'],'source':digest({k:source[k] for k in ('repository','backup_branch','uid')})}))
+        self.store.metadata('published:'+source['id'],json.dumps({'sha':job['sha'],'source':self.published_identity(source)}))
         self.distribute(job,job['sha']);return self.store.get('jobs',identifier)
 
     def close_job(self,identifier,body):
