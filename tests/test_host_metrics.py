@@ -83,10 +83,14 @@ class MetricsTests(unittest.TestCase):
         self.process();output=self.root/'metrics'
         class EmptyDocker:
             def request(self,method,path,**kwargs):assert method=='GET';return []
-        result=collect(output,self.proc,EmptyDocker());self.assertTrue(result['sampled'])
+        from test_gpu_metrics import GPUTests
+        gpu=GPUTests();gpu.setUp();self.addCleanup(gpu.doCleanups);gpu.device()
+        result=collect(output,self.proc,EmptyDocker(),sys_root=gpu.sys);self.assertTrue(result['sampled'])
         self.assertEqual((output/'report.json').stat().st_mode&0o777,0o600)
         self.assertEqual(output.stat().st_mode&0o777,0o700)
         report=read_json(output/'report.json')
+        self.assertEqual(report['gpu']['state'],'ready')
+        self.assertEqual(report['gpu']['devices'][0]['temperature_celsius'],39)
         with sqlite3.connect(output/'history.sqlite3') as db:
             db.execute('INSERT INTO samples VALUES(?,?,?,?,?)',(int(time.time())-90000,'old',1,1,1))
         write_history(output,report)

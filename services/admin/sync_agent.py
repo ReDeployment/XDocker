@@ -17,7 +17,7 @@ from sync_runtime import (SyncError,require,identifier,repository,branch_name,sa
 @lru_cache(maxsize=1)
 def agent_sha():
     root=Path(__file__).parent
-    return hashlib.sha256(b''.join((root/name).read_bytes() for name in ('sync_agent.py','sync_runtime.py','native_services.py','host_metrics.py','sync_scan.py'))).hexdigest()
+    return hashlib.sha256(b''.join((root/name).read_bytes() for name in ('sync_agent.py','sync_runtime.py','native_services.py','host_metrics.py','gpu_metrics.py','sync_scan.py'))).hexdigest()
 
 
 def validate_agent_policy(value):

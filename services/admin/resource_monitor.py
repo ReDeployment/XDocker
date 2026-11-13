@@ -11,6 +11,7 @@ import time
 from flask import jsonify, request
 from registry_store import RegistryStore, RegistryError
 from host_metrics import MAX_AGE, MAX_REPORT, atomic_json, number, private_directory, read_json
+from gpu_metrics import public_gpu
 
 ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 TARGET = re.compile(r'^[a-f0-9]{64}$')
@@ -67,7 +68,7 @@ def report_read(root):
         or (k in ('process_limit_reached','group_limit_reached','docker_limit_reached') and type(v) is bool)}
     errors = raw.get('errors', [])
     require(isinstance(errors,list) and len(errors)<=10, 'XD_METRICS_REPORT_INVALID')
-    return {'at':raw['at'], 'host':host, 'targets':targets, 'processes':safe_processes,
+    return {'at':raw['at'], 'host':host, 'gpu':public_gpu(raw.get('gpu')), 'targets':targets, 'processes':safe_processes,
         'coverage':safe_coverage, 'errors':[v for v in errors if v in ('XD_METRICS_DOCKER_UNAVAILABLE','XD_METRICS_HISTORY_UNAVAILABLE')],
         'fresh':time.time()-raw['at']<=MAX_AGE}
 

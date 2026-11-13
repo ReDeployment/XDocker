@@ -6,7 +6,7 @@
 
 项目源码可以继续留在开发电脑。XDocker 源码也在本地开发、验证和推送；服务器只同步已推送的固定提交，再运行自己的 XDocker 与采集器。采集器观察服务器上的运行负载，不要求把开发仓库搬上服务器；若服务器需要从源码构建某应用，那是该应用另行登记的构建需求。
 
-控制台依次分为服务器概览、已登记应用、发现应用、历史趋势。桌面左侧纵向任务导航；窄屏横向导航，当前只展示一个分区。表单在弹窗中编辑，取消、分区切换和定时刷新保留未保存草稿。采集错误、过期、容量限制及资源提示在所有分区外可见。
+控制台依次分为服务器概览、GPU 资源、已登记应用、发现应用、历史趋势。桌面左侧纵向任务导航；窄屏横向导航，当前只展示一个分区。表单在弹窗中编辑，取消、分区切换和定时刷新保留未保存草稿。采集错误、过期、容量限制及资源提示在所有分区外可见。
 
 宿主机 `scripts/host-monitor.py` 是无第三方 Python 依赖的有界单次采集器；读取 `/proc` 和固定 [Docker Engine API](https://docs.docker.com/reference/api/engine/version/v1.44/) GET 接口，将私有 JSON 与 SQLite 历史写到 `data/host-metrics/`。Admin 只读挂载此目录，不挂载宿主机 `/proc`，不使用 host PID namespace。默认以部署用户运行；无权读取、已退出及内核进程会计入覆盖说明，不冒充完整应用覆盖。
 
@@ -42,9 +42,21 @@ python3 scripts/host-monitor-unit.py timer --root /home/michael/xdocker --user m
 ## 本地验收与当前部署边界
 
 ```sh
-PYTHONPATH=tests:services/admin:scripts python3 -B -m unittest test_host_metrics test_resource_monitor test_admin
+PYTHONPATH=tests:services/admin:scripts python3 -B -m unittest test_gpu_metrics test_host_metrics test_resource_monitor test_admin
 python3 -B tests/admin_build_context_smoke.py --static-only
 node tests/resource_browser_acceptance.cjs
 ```
 
 浏览器使用隔离的临时 Flask、假 procfs/容器报告及独立 Chrome profile，检查桌面与窄屏任务导航、登记与编辑、草稿保留、过期与错误提示、历史和监控不授权运行操作。Linux 实机、定时器自启、实际 Docker 计量与服务器访问须另行记录，fixture 不能作为部署验收。
+
+## GPU 资源（2026-11-13）
+
+概览显示 GPU 利用率摘要；“GPU 资源”分区显示当前设备、利用率、温度、显存及共享内存 GTT。多设备选择在切换分区和刷新时保留。CPU、内存等已有指标与应用绑定不受 GPU 读取失败影响。
+
+当前支持 Linux `amdgpu` 的只读 sysfs 采样，不执行 GPU 命令、不打开 `/dev/dri`、不更改权限或驱动。发现 `/sys/class/drm/cardN/device` 后按物理设备去重，以 PCI 地址生成稳定身份；最多 8 台设备、256 个发现条目、16 个 hwmon 条目，单属性最多 4 KiB。缺失、无权读取、越界或不支持的指标为 null，页面显示“不可用”；旧报告显示“尚未采集”，不会将缺失值补成 0。
+
+- `gpu_busy_percent` 是设备忙碌比例；有效的 0% 表示这次采样空闲。温度由 `temp1_input` 的毫摄氏度换算。接口定义见 [Linux AMDGPU 文档](https://docs.kernel.org/gpu/amdgpu/thermal.html)。
+- home PC 的 `1002:1638` Cezanne 核显将 VRAM 标为“预留显存”；GTT 用量和驱动上限单独显示。GTT 上限来自 `mem_info_gtt_total`，属于系统内存的可用上限，不是额外物理容量，不能与总内存或预留显存相加。
+- APU 的 `power1_input` 包含 CPU，当前不展示为 GPU 功耗。不提供应用/进程/容器 GPU 归属，也不将设备当前采样写入已有 CPU/RSS 历史表。其他驱动仅展示身份与“不支持”状态。
+
+报告保持 schema 1，新增可选 `gpu` 字段；API 对字段、范围和设备数独立校验，拒绝透传 sysfs 原始内容。无数据库迁移。回退到旧提交只会恢复原有 CPU/内存页面；GPU 字段可随下一轮采样覆盖。

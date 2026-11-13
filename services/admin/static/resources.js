@@ -1,12 +1,35 @@
 'use strict';
-const resourcesUI={data:null,error:'',loading:false,view:'overview',query:'',editor:null,editRevision:0,draft:null,selected:'host',history:null,historyError:'',historyLoading:false};
-const resourceViews={overview:'服务器概览',apps:'已登记应用',discover:'发现应用',history:'历史趋势'};
+const resourcesUI={data:null,error:'',loading:false,view:'overview',gpuSelected:'',query:'',editor:null,editRevision:0,draft:null,selected:'host',history:null,historyError:'',historyLoading:false};
+const resourceViews={overview:'服务器概览',gpu:'GPU 资源',apps:'已登记应用',discover:'发现应用',history:'历史趋势'};
 const resourceMessages={XD_MONITOR_HOST_CHANGED:'服务器身份发生变化，请重新核对应用绑定和采集目录。',XD_MONITOR_TARGET_INVALID:'请选择 1–16 个不同组件。',XD_MONITOR_ID_INVALID:'应用标识须为小写字母、数字或短横线，且不能使用 host。',XD_MONITOR_CONFIRMATION_REQUIRED:'请输入完整应用名称确认移除。',XD_MONITOR_CAPACITY:'已达到 100 个应用的登记上限。',XD_METRICS_NOT_CONNECTED:'尚未接入这台服务器的采集器。',XD_METRICS_REPORT_UNAVAILABLE:'采集报告无法读取，请检查采集器和目录权限。',XD_METRICS_DOCKER_UNAVAILABLE:'容器指标读取失败，当前仅有可读取的宿主机进程。',XD_METRICS_HISTORY_UNAVAILABLE:'历史采样无法读取或保存。',XD_MONITOR_REVISION_CONFLICT:'登记信息已被更新，请重新读取后编辑。',XD_MONITOR_TARGET_ALREADY_BOUND:'所选组件已属于其他应用，请先调整原登记。',XD_METRICS_STALE:'采集数据已过期，请恢复采集器后再登记。',XD_MONITOR_TARGET_NOT_DISCOVERED:'所选组件已不在当前发现结果中，请重新选择。'};
 const resourceText=v=>resourceMessages[v]||v;
 const resourceBytes=v=>v===null||v===undefined?'—':v>=1073741824?(v/1073741824).toFixed(2)+' GB':(v/1048576).toFixed(1)+' MB';
 const resourceCPU=v=>v===null||v===undefined?'待采样':Number(v).toFixed(1)+'%';
 const resourceButton=(label,data,blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-resource-${k}="${esc(v)}"`).join(' ')} ${blocked?'disabled':''}>${esc(label)}</button>`;
-function resetResources(){resourcesUI.data=null;resourcesUI.error='';resourcesUI.history=null;resourcesUI.draft=null;resourcesUI.editor=null;document.getElementById('resource-dialog')?.close();}
+function resetResources(){resourcesUI.data=null;resourcesUI.error='';resourcesUI.history=null;resourcesUI.draft=null;resourcesUI.editor=null;resourcesUI.gpuSelected='';document.getElementById('resource-dialog')?.close();}
+const gpuValue=(v,suffix='',digits=1)=>v===null||v===undefined?'不可用':Number(v).toFixed(digits)+suffix;
+const gpuBytes=v=>v===null||v===undefined?'不可用':v>=1073741824?(v/1073741824).toFixed(2)+' GiB':(v/1048576).toFixed(1)+' MiB';
+const gpuStates={'not-collected':'尚未采集 GPU 指标，请核对采集器版本。','not-detected':'当前未发现 DRM 显卡设备，请核对驱动及采集器可见范围。',unavailable:'GPU 指标无法读取，请核对采集器权限和驱动。'};
+function gpuNotice(gpu){
+ if(!gpu||gpuStates[gpu.state])return gpuStates[gpu?.state||'not-collected'];
+ const notes=[];
+ if(gpu.devices.some(d=>d.state==='unsupported'))notes.push('部分 GPU 驱动暂不支持指标采集。');
+ if(gpu.devices.some(d=>['partial','unavailable'].includes(d.state)))notes.push('部分 GPU 指标无法读取，缺失项显示“不可用”。');
+ if(gpu.limit_reached)notes.push('GPU 发现范围达到上限，本轮最多展示 8 台设备。');
+ return notes.join(' ');
+}
+function resourceGPU(gpu){
+ const devices=gpu?.devices||[];
+ if(!devices.length)return `<div class="empty">${esc(gpuNotice(gpu)||'暂无 GPU 数据。')}</div>`;
+ const d=devices.find(d=>d.id===resourcesUI.gpuSelected)||devices[0];resourcesUI.gpuSelected=d.id;
+ const selection=devices.length>1?`<label class="resource-gpu-select">查看显卡<select id="resource-gpu-select">${devices.map(d=>`<option value="${esc(d.id)}" ${d.id===resourcesUI.gpuSelected?'selected':''}>${esc(d.name)} · ${esc(d.bus_id||d.driver)}</option>`).join('')}</select></label>`:'';
+ return panel('GPU 资源','整台设备的当前采样；应用分组和历史趋势仍展示 CPU 与内存。',`<div class="panel-body">${selection}<h3 class="resource-gpu-name">${esc(d.name)}</h3><div class="kpis resource-kpis">${[
+ ['GPU 利用率',gpuValue(d.utilization_percent,'%'),'当前设备忙碌比例'],
+ ['温度',gpuValue(d.temperature_celsius,' °C'),'驱动 hwmon 传感器'],
+ [d.integrated?'预留显存已用':'显存已用',gpuBytes(d.vram_used_bytes),'总量 '+gpuBytes(d.vram_total_bytes)],
+ ['共享内存（GTT）已用',gpuBytes(d.shared_used_bytes),'驱动上限 '+gpuBytes(d.shared_total_bytes)]
+ ].map(([label,value,help])=>`<article class="kpi"><div class="kpi-label">${esc(label)}</div><strong>${esc(value)}</strong><small>${esc(help)}</small></article>`).join('')}</div><div class="stack-row"><span>驱动</span><strong>${esc(d.driver)}</strong></div><div class="stack-row"><span>PCI 地址 / 设备 ID</span><span>${esc(d.bus_id||'不可用')} / ${esc(d.pci_id||'不可用')}</span></div><p class="muted">${d.integrated?'这张核显的预留显存与共享内存分开统计。':''}GTT 使用系统内存；驱动上限不是额外物理内存，也不代表已占用。当前不提供进程或容器的 GPU 归属。</p></div>`);
+}
 async function loadResources(){
  if(!loggedIn||resourcesUI.loading)return;resourcesUI.loading=true;
  try{const data=await api('resources');if(loggedIn){resourcesUI.data=data;resourcesUI.error='';}}
@@ -38,9 +61,12 @@ function renderResourcesPage(){
  if(r?.host.memory_available/r?.host.memory_total<.1)errors.push('服务器可用内存低于 10%。');
  if(r?.host.disk_free/r?.host.disk_total<.1)errors.push('服务器根分区可用空间低于 10%。');
  if(r?.host.cpu_percent>=85)errors.push('本次采样的整机 CPU 使用率达到 85%。');
+ if(r&&gpuNotice(r.gpu))errors.push(gpuNotice(r.gpu));
+ const gpus=r?.gpu?.devices||[],gpuBusy=gpus.map(d=>d.utilization_percent).filter(v=>v!==null&&v!==undefined);
  let body='<div class="empty">正在读取服务器资源…</div>';
  if(d){
-  if(view==='overview')body=r?`<div class="kpis resource-kpis">${[['CPU',resourceCPU(r.host.cpu_percent),r.host.cpu_logical+' 个逻辑 CPU'],['内存可用',resourceBytes(r.host.memory_available),'总内存 '+resourceBytes(r.host.memory_total)],['根分区可用',resourceBytes(r.host.disk_free),'总空间 '+resourceBytes(r.host.disk_total)],['已登记应用',d.apps.length,'发现 '+r.targets.length+' 个组件']].map(([label,value,help])=>`<article class="kpi"><div class="kpi-label">${esc(label)}</div><strong>${esc(value)}</strong><small>${esc(help)}</small></article>`).join('')}</div>`+panel('服务器状态',esc(r.host.hostname),`<div class="panel-body"><div class="stack-row"><span>最近采样</span><strong>${date(r.at*1000)}</strong></div><div class="stack-row"><span>负载（1 / 5 / 15 分钟）</span><span>${r.host.load.map(v=>v.toFixed(2)).join(' / ')}</span></div><div class="stack-row"><span>交换空间已用</span><span>${resourceBytes(r.host.swap_used)}</span></div><p class="muted">整机 CPU 以全部逻辑 CPU 为 100%；应用 CPU 以单核为 100%，可以超过 100%。</p><p class="muted">已扫描 ${r.coverage.processes_scanned||0} 个进程；${r.coverage.processes_unreadable||0} 个内核、已退出或无权读取的进程未归入应用。容器进程不重复计入宿主机应用。</p></div>`):'<div class="empty">尚未接入宿主机采集器。安装步骤见仓库的应用资源监控指南。</div>';
+  if(view==='overview')body=r?`<div class="kpis resource-kpis">${[['CPU',resourceCPU(r.host.cpu_percent),r.host.cpu_logical+' 个逻辑 CPU'],['内存可用',resourceBytes(r.host.memory_available),'总内存 '+resourceBytes(r.host.memory_total)],['GPU',gpuBusy.length?gpuValue(Math.max(...gpuBusy),'%'):'不可用',gpus.length===1?gpus[0].name:gpus.length+' 台设备 · 最高利用率'],['根分区可用',resourceBytes(r.host.disk_free),'总空间 '+resourceBytes(r.host.disk_total)]].map(([label,value,help])=>`<article class="kpi"><div class="kpi-label">${esc(label)}</div><strong>${esc(value)}</strong><small>${esc(help)}</small>${label==='GPU'?resourceButton('查看 GPU',{'gpu-view':'yes'}):''}</article>`).join('')}</div>`+panel('服务器状态',esc(r.host.hostname),`<div class="panel-body"><div class="stack-row"><span>最近采样</span><strong>${date(r.at*1000)}</strong></div><div class="stack-row"><span>已登记应用 / 发现组件</span><span>${d.apps.length} / ${r.targets.length}</span></div><div class="stack-row"><span>负载（1 / 5 / 15 分钟）</span><span>${r.host.load.map(v=>v.toFixed(2)).join(' / ')}</span></div><div class="stack-row"><span>交换空间已用</span><span>${resourceBytes(r.host.swap_used)}</span></div><p class="muted">整机 CPU 以全部逻辑 CPU 为 100%；应用 CPU 以单核为 100%，可以超过 100%。</p><p class="muted">已扫描 ${r.coverage.processes_scanned||0} 个进程；${r.coverage.processes_unreadable||0} 个内核、已退出或无权读取的进程未归入应用。容器进程不重复计入宿主机应用。</p></div>`):'<div class="empty">尚未接入宿主机采集器。安装步骤见仓库的应用资源监控指南。</div>';
+  if(view==='gpu')body=resourceGPU(r?.gpu);
   if(view==='apps')body=panel('已登记应用','将同一项目的多个组件归为一个应用',table(['应用','观测状态','CPU / 内存','组件','操作'],d.apps.map(a=>`<tr><td><strong>${esc(a.name)}</strong><small>${esc(a.id)}</small></td><td>${badge(a.status==='observed'&&fresh?'已观测':'未确认',a.status==='observed'&&fresh?'good':'warn')}<small>${esc(a.reason)}</small></td><td>${resourceCPU(a.cpu_percent)}<small>${resourceBytes(a.memory_bytes)}</small></td><td>${a.targets.length} 个${a.missing_targets.length?`<small>${a.missing_targets.length} 个暂未发现</small>`:''}</td><td><div class="actions">${resourceButton('详情',{'detail':a.id})}${resourceButton('编辑',{'edit':a.id},!writable)}</div></td></tr>`)),resourceButton('登记应用',{'edit':'new'},!writable||!r?.targets.length));
   if(view==='discover'){
    const bound=new Set(d.apps.flatMap(a=>a.targets)),q=resourcesUI.query.toLowerCase(),rows=(r?.targets||[]).filter(t=>(t.name+' '+t.description).toLowerCase().includes(q));
@@ -73,11 +99,13 @@ document.addEventListener('submit',async event=>{
 document.addEventListener('input',event=>{if(event.target.closest('#resource-form'))resourceDraft();});
 document.addEventListener('change',event=>{
  if(event.target.id==='resource-search'){resourcesUI.query=event.target.value;renderResourcesPage();}
+ if(event.target.id==='resource-gpu-select'){resourcesUI.gpuSelected=event.target.value;renderResourcesPage();}
  if(event.target.id==='resource-history-select'){resourcesUI.selected=event.target.value;resourcesUI.history=null;loadResourceHistory();}
 });
 document.addEventListener('click',async event=>{
- const b=event.target.closest('[data-resource-reload],[data-resource-refresh],[data-resource-edit],[data-resource-bind],[data-resource-close],[data-resource-detail],[data-resource-target],[data-resource-remove],[data-resource-history]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const v=b.dataset;
+ const b=event.target.closest('[data-resource-gpu-view],[data-resource-reload],[data-resource-refresh],[data-resource-edit],[data-resource-bind],[data-resource-close],[data-resource-detail],[data-resource-target],[data-resource-remove],[data-resource-history]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const v=b.dataset;
  try{
+  if(v.resourceGpuView){location.hash='resources/gpu';return;}
   if(v.resourceReload){resourcesUI.editor=null;resourcesUI.draft=null;resourceEdit(v.resourceReload);return;}
   if(v.resourceRefresh){await loadResources();return;}
   if(v.resourceEdit||v.resourceBind){resourceEdit(v.resourceEdit||'new',v.resourceBind);return;}

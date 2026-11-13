@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r services/admin/requirements.txt
-      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_code_sync test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
+      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_code_sync test_gpu_metrics test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
       - run: python -B tests/admin_build_context_smoke.py --static-only
       - run: node tests/resource_browser_acceptance.cjs
       - run: node tests/service_hub_browser_acceptance.cjs

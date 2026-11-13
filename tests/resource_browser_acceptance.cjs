@@ -30,6 +30,16 @@ async function main(){
  await until(`resourcesUI.data?.report&&document.querySelector('.resource-kpis')`);
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.resource-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));
  assert.equal(await evaluate(`document.querySelectorAll('.resource-workspace [role=tabpanel]').length`),1);await shot('desktop-overview');
+ assert(await evaluate(`document.querySelector('.resource-kpis').textContent.includes('GPU')`));
+ await click('[data-resource-gpu-view]');await until(`location.hash==='#resources/gpu'&&document.querySelector('.resource-gpu-name')`);
+ assert(await evaluate(`document.querySelector('#view-resources-panel').textContent.includes('512.0 MiB')&&document.querySelector('#view-resources-panel').textContent.includes('39.0 °C')&&document.querySelector('#view-resources-panel').textContent.includes('0.0%')&&document.querySelector('#view-resources-panel').textContent.includes('预留显存')`));
+ await shot('desktop-gpu');
+ await evaluate(`window.originalGPU=structuredClone(resourcesUI.data.report.gpu);const second=structuredClone(originalGPU.devices[0]);second.id='f'.repeat(64);second.name='AMD 第二张显卡';second.bus_id='0000:06:00.0';resourcesUI.data.report.gpu.devices.push(second);renderResourcesPage();const select=document.querySelector('#resource-gpu-select');select.value=second.id;select.dispatchEvent(new Event('change',{bubbles:true}));`);
+ await pane('overview');await pane('gpu');assert.equal(await evaluate(`document.querySelector('#resource-gpu-select').value`),'f'.repeat(64));
+ await evaluate(`resourcesUI.data.report.gpu.devices[1].temperature_celsius=null;resourcesUI.data.report.gpu.devices[1].state='partial';renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('#view-resources-panel').textContent.includes('不可用')&&document.querySelector('.resource-alert').textContent.includes('部分 GPU')`));
+ await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('部分 GPU')`));
+ await evaluate(`resourcesUI.data.report.gpu=originalGPU;renderResourcesPage()`);
  await pane('discover');await click('[data-resource-bind]');await evaluate(`document.querySelector('[name=id]').value='browser-app';document.querySelector('[name=name]').value='浏览器应用'`);await click('[data-resource-close]');
  await pane('apps');await pane('discover');await click('[data-resource-bind]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-app');
  await form({id:'browser-app',name:'浏览器应用'});await until(`!document.querySelector('#resource-dialog').open&&resourcesUI.data.apps.length===1`);
@@ -38,17 +48,20 @@ async function main(){
  await pane('history');await until('!resourcesUI.historyLoading');await click('[data-resource-history]');await until(`document.querySelector('.resource-chart')`);await shot('desktop-history');
  await pane('apps');await click('[data-resource-edit="browser-app"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');await click('[data-resource-close]');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
- for(const name of ['overview','apps','discover','history']){
+ for(const name of ['overview','gpu','apps','discover','history']){
   await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);
   assert(await evaluate(`document.querySelectorAll('.resource-workspace [role=tabpanel]').length===1`));
   assert(await evaluate(`(()=>{const list=document.querySelector('.resource-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.resource-workspace [role=tab][aria-selected=true]').getBoundingClientRect();return a.left>=list.left-1&&a.right<=list.right+1})()`),'Active tab outside navigation '+name);
  }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.resource-workspace [role=tab]');return Math.abs(b[1].getBoundingClientRect().top-b[0].getBoundingClientRect().top)<2})()`));
+ await pane('gpu');await shot('mobile-gpu-navigation');await evaluate(`document.querySelector('#view-resources-panel').scrollIntoView({block:'start'})`);await shot('mobile-gpu');
+ for(const state of ['not-collected','not-detected','unavailable']){await evaluate(`resourcesUI.data.report.gpu={state:${JSON.stringify(state)},devices:[],limit_reached:false};renderResourcesPage()`);assert(await evaluate(`!document.querySelector('#view-resources-panel').textContent.includes('0.0%')&&!!document.querySelector('.resource-alert')`));}
+ await evaluate(`resourcesUI.data.report.gpu=originalGPU;renderResourcesPage()`);
  await pane('apps');await shot('mobile-apps');await click('[data-resource-edit="browser-app"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');await shot('mobile-editor');await click('[data-resource-close]');
  await evaluate(`resourcesUI.data.report.at-=200;resourcesUI.error='fixture-visible-error';renderResourcesPage()`);
- for(const name of ['overview','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
+ for(const name of ['overview','gpu','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
  assert.equal(await evaluate(`resourcesUI.data.runtime_control`),false);assert.deepEqual(exceptions,[]);
- console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:4,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+ console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:5,gpu:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
 }
 async function loadRefresh(){await evaluate('loadResources()');}
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof resourcesUI==='object'?resourcesUI.error:'not loaded',formError:document.querySelector('#resource-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

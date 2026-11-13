@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from docker_api import Docker, DockerError
+from gpu_metrics import gpu_sample
 
 MAX_PROCESSES = 4096
 MAX_GROUPS = 128
@@ -222,7 +223,7 @@ def write_history(root, report):
         db.executemany('INSERT OR IGNORE INTO samples VALUES(?,?,?,?,?)', [(at,*r) for r in values])
 
 
-def collect(output, proc=Path('/proc'), engine=None, include_docker=True):
+def collect(output, proc=Path('/proc'), engine=None, include_docker=True, sys_root=Path('/sys')):
     root = private_directory(output)
     fd = os.open(root/'collector.lock', os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW, 0o600)
     try:
@@ -231,7 +232,7 @@ def collect(output, proc=Path('/proc'), engine=None, include_docker=True):
         try: previous = read_json(root/'report.json').get('_counters', {})
         except FileNotFoundError: previous = {}
         report, counters = proc_sample(proc, previous)
-        report.update(schema=1, at=time.time(), errors=[])
+        report.update(schema=1, at=time.time(), errors=[], gpu=gpu_sample(sys_root))
         if include_docker:
             try:
                 targets, docker_counters, coverage = docker_sample(engine or Docker(), previous.get('docker', {}))

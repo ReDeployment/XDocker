@@ -24,6 +24,7 @@ static/**
 !github_auth.py
 
 !host_metrics.py
+!gpu_metrics.py
 !resource_monitor.py
 !static/resources.js
 !static/resources.css
