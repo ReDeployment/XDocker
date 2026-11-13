@@ -34,9 +34,15 @@ def empty_storage(state='unavailable'):
 def _bounded(path, limit=1024*1024):
     fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
     try:
-        data=os.read(fd,limit+1)
-        if len(data)>limit: raise ValueError('storage input limit')
-        return data.decode('utf-8')
+        chunks=[];size=0
+        # procfs seq_file may return a short read before EOF. Keep reading within
+        # the cap so later mounts are not silently omitted from the report.
+        while size<=limit:
+            chunk=os.read(fd,min(65536,limit+1-size))
+            if not chunk:break
+            chunks.append(chunk);size+=len(chunk)
+        if size>limit: raise ValueError('storage input limit')
+        return b''.join(chunks).decode('utf-8')
     finally: os.close(fd)
 
 

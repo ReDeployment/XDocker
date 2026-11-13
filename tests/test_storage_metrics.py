@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from host_metrics import atomic_json, private_directory
 from resource_monitor import report_read
-from storage_metrics import storage_sample,public_storage,_sensors
+from storage_metrics import storage_sample,public_storage,_sensors,filesystem_sample
 from test_resource_monitor import sample_report
 
 
@@ -88,6 +88,17 @@ class StorageTests(unittest.TestCase):
         (self.proc/'sys/kernel/random/boot_id').write_text('boot-two');result,_=self.sample(new,30)
         self.assertEqual(result['devices'][0]['io']['state'],'sampling')
         self.assertIsNone(result['devices'][0]['io']['read_iops'])
+
+    def test_procfs_short_reads_include_later_mounts_and_keep_input_bounded(self):
+        self.device();report,_=self.sample();device=report['devices'][0]
+        path=self.proc/'self/mountinfo'
+        path.write_text('2 0 0:1 / /pseudo rw - tmpfs tmpfs rw\n'*200+'3 0 259:0 / /mnt/backup2 rw - ext4 /dev/nvme0n1 rw\n')
+        original=os.read
+        with patch('storage_metrics.os.read',side_effect=lambda fd,n:original(fd,min(n,17))):
+            filesystems,limit=filesystem_sample(self.proc,{'259:0':device},self.stats)
+        self.assertFalse(limit);self.assertEqual(filesystems[0]['mounts'][0]['path'],'/mnt/backup2')
+        path.write_text('x'*(1024*1024+1))
+        with self.assertRaises(ValueError):filesystem_sample(self.proc,{'259:0':device},self.stats)
 
     def test_discovery_limit_unreadable_mount_and_no_device_commands_without_permission(self):
         self.device();(self.proc/'self/mountinfo').write_text('1 0 259:0 / /data rw - ext4 /dev/nvme0n1 rw\n')
