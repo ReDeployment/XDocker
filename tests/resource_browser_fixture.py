@@ -12,6 +12,7 @@ from host_metrics import atomic_json, private_directory, write_history
 from test_admin import FakeDocker
 from test_resource_monitor import sample_report
 from test_gpu_metrics import gpu_fixture
+from test_storage_metrics import storage_fixture
 
 
 def main():
@@ -22,7 +23,7 @@ def main():
         (config/'root.env').write_text('ENABLED_SITES=""\nENABLED_SERVICES="admin"\n')
         (config/'certificates.json').write_text('{"certificates":[]}')
         token='fixture-resource-only-'+'x'*40;(state/'access-token').write_text(token);(state/'access-token').chmod(0o600)
-        metrics=private_directory(root/'metrics');report=sample_report();report['gpu']=gpu_fixture();atomic_json(metrics/'report.json',report);write_history(metrics,report)
+        metrics=private_directory(root/'metrics');report=sample_report();report['gpu']=gpu_fixture();report['storage']=storage_fixture();atomic_json(metrics/'report.json',report);write_history(metrics,report)
         docker=FakeDocker();app=create_app({'TESTING':True,'STATE':str(state),'CONFIG':str(config),
             'REPORTS':str(root/'reports'),'HOST_METRICS':str(metrics)},docker)
         server=make_server('127.0.0.1',0,app,threaded=True,request_handler=Quiet)

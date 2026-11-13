@@ -16,6 +16,7 @@ import time
 
 from docker_api import Docker, DockerError
 from gpu_metrics import gpu_sample
+from storage_metrics import storage_sample
 
 MAX_PROCESSES = 4096
 MAX_GROUPS = 128
@@ -233,6 +234,7 @@ def collect(output, proc=Path('/proc'), engine=None, include_docker=True, sys_ro
         except FileNotFoundError: previous = {}
         report, counters = proc_sample(proc, previous)
         report.update(schema=1, at=time.time(), errors=[], gpu=gpu_sample(sys_root))
+        report['storage'], counters['storage'] = storage_sample(sys_root, proc, previous.get('storage'))
         if include_docker:
             try:
                 targets, docker_counters, coverage = docker_sample(engine or Docker(), previous.get('docker', {}))

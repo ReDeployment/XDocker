@@ -40,6 +40,16 @@ async function main(){
  assert(await evaluate(`document.querySelector('#view-resources-panel').textContent.includes('不可用')&&document.querySelector('.resource-alert').textContent.includes('部分 GPU')`));
  await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('部分 GPU')`));
  await evaluate(`resourcesUI.data.report.gpu=originalGPU;renderResourcesPage()`);
+ await pane('overview');await click('[data-resource-storage-view]');await until(`document.querySelector('#view-resources-panel').textContent.includes('4 块物理硬盘')`);
+ assert.equal(await evaluate(`document.querySelectorAll('#view-resources-panel [data-resource-storage-detail]').length`),10);
+ assert.equal(await evaluate(`document.querySelector('.storage-logical').open`),false);await shot('desktop-storage');
+ await click('[data-resource-storage-detail]');await until(`document.querySelector('#storage-dialog')?.open`);
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('/data')&&document.querySelector('#storage-detail-panel').textContent.includes('GiB')`));
+ await shot('desktop-storage-capacity');await click('[data-resource-storage-tab="io"]');
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('1.00 MiB/s')&&document.querySelector('#storage-detail-panel').textContent.includes('健康数据不可用')`));
+ await loadRefresh();assert.equal(await evaluate(`document.querySelector('#storage-tab-io').getAttribute('aria-selected')`),'true');
+ await click('[data-resource-storage-close]');await pane('gpu');await pane('storage');await click('[data-resource-storage-detail]');
+ assert.equal(await evaluate(`document.querySelector('#storage-tab-io').getAttribute('aria-selected')`),'true');await click('[data-resource-storage-close]');
  await pane('discover');await click('[data-resource-bind]');await evaluate(`document.querySelector('[name=id]').value='browser-app';document.querySelector('[name=name]').value='浏览器应用'`);await click('[data-resource-close]');
  await pane('apps');await pane('discover');await click('[data-resource-bind]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-app');
  await form({id:'browser-app',name:'浏览器应用'});await until(`!document.querySelector('#resource-dialog').open&&resourcesUI.data.apps.length===1`);
@@ -48,20 +58,30 @@ async function main(){
  await pane('history');await until('!resourcesUI.historyLoading');await click('[data-resource-history]');await until(`document.querySelector('.resource-chart')`);await shot('desktop-history');
  await pane('apps');await click('[data-resource-edit="browser-app"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');await click('[data-resource-close]');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
- for(const name of ['overview','gpu','apps','discover','history']){
+ for(const name of ['overview','gpu','storage','apps','discover','history']){
   await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);
   assert(await evaluate(`document.querySelectorAll('.resource-workspace [role=tabpanel]').length===1`));
   assert(await evaluate(`(()=>{const list=document.querySelector('.resource-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.resource-workspace [role=tab][aria-selected=true]').getBoundingClientRect();return a.left>=list.left-1&&a.right<=list.right+1})()`),'Active tab outside navigation '+name);
  }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.resource-workspace [role=tab]');return Math.abs(b[1].getBoundingClientRect().top-b[0].getBoundingClientRect().top)<2})()`));
+ await pane('storage');await evaluate(`document.querySelector('#view-resources-panel').scrollIntoView({block:'start'})`);await shot('mobile-storage');
+ await click('[data-resource-storage-detail]');await click('[data-resource-storage-tab="capacity"]');
+ assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot('mobile-storage-capacity');
+ await click('[data-resource-storage-tab="io"]');await evaluate(`document.querySelector('#storage-dialog').scrollTop=0`);assert(await evaluate(`Array.from(document.querySelectorAll('#storage-detail-panel .kpi')).every(k=>{const a=k.getBoundingClientRect(),b=k.querySelector('strong').getBoundingClientRect();return b.left>=a.left&&b.right<=a.right})`));await shot('mobile-storage-io');await click('[data-resource-storage-close]');
+ await evaluate(`window.originalStorage=structuredClone(resourcesUI.data.report.storage);resourcesUI.data.report.storage.filesystems[1].available_bytes=1;renderResourcesPage()`);
+ await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('可用空间低于 10%：/data')`));
+ await pane('storage');await click('[data-resource-storage-detail]');assert(await evaluate(`document.querySelector('#storage-dialog [role=alert]').textContent.includes('/data')`));await click('[data-resource-storage-close]');
+ await evaluate(`resourcesUI.data.report.storage={state:'unavailable',devices:[],filesystems:[],limit_reached:false};renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('#view-resources-panel').textContent.includes('无法读取')`));
+ await evaluate(`resourcesUI.data.report.storage=originalStorage;renderResourcesPage()`);
  await pane('gpu');await shot('mobile-gpu-navigation');await evaluate(`document.querySelector('#view-resources-panel').scrollIntoView({block:'start'})`);await shot('mobile-gpu');
  for(const state of ['not-collected','not-detected','unavailable']){await evaluate(`resourcesUI.data.report.gpu={state:${JSON.stringify(state)},devices:[],limit_reached:false};renderResourcesPage()`);assert(await evaluate(`!document.querySelector('#view-resources-panel').textContent.includes('0.0%')&&!!document.querySelector('.resource-alert')`));}
  await evaluate(`resourcesUI.data.report.gpu=originalGPU;renderResourcesPage()`);
  await pane('apps');await shot('mobile-apps');await click('[data-resource-edit="browser-app"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');await shot('mobile-editor');await click('[data-resource-close]');
  await evaluate(`resourcesUI.data.report.at-=200;resourcesUI.error='fixture-visible-error';renderResourcesPage()`);
- for(const name of ['overview','gpu','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
+ for(const name of ['overview','gpu','storage','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
  assert.equal(await evaluate(`resourcesUI.data.runtime_control`),false);assert.deepEqual(exceptions,[]);
- console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:5,gpu:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+ console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:6,gpu:true,storage:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
 }
 async function loadRefresh(){await evaluate('loadResources()');}
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof resourcesUI==='object'?resourcesUI.error:'not loaded',formError:document.querySelector('#resource-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});
