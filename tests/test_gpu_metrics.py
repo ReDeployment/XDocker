@@ -71,14 +71,14 @@ class GPUTests(unittest.TestCase):
         self.assertEqual(gpu_sample(self.root/'missing')['state'],'unavailable')
         d=self.device(driver='i915');row=gpu_sample(self.sys)['devices'][0]
         self.assertEqual(row['state'],'unsupported');self.assertTrue(all(row[k] is None for k in METRICS))
-        for i in range(1,10): self.device(i)
-        report=gpu_sample(self.sys);self.assertTrue(report['limit_reached']);self.assertEqual(len(report['devices']),8)
         self.put(d,'uevent','DRIVER=amdgpu\nPCI_ID=1002:1638\nPCI_SLOT_NAME=0000:05:00.0')
         (d/'gpu_busy_percent').unlink();outside=self.root/'private';outside.write_text('42')
         (d/'gpu_busy_percent').symlink_to(outside)
         self.assertIsNone(gpu_sample(self.sys)['devices'][0]['utilization_percent'])
         (d/'gpu_busy_percent').unlink();os.mkfifo(d/'gpu_busy_percent')
         self.assertIsNone(gpu_sample(self.sys)['devices'][0]['utilization_percent'])
+        for i in range(1,10): self.device(i)
+        report=gpu_sample(self.sys);self.assertTrue(report['limit_reached']);self.assertEqual(len(report['devices']),8)
 
     def test_public_report_allowlist_legacy_and_malformed_gpu_keep_cpu(self):
         root=private_directory(self.root/'reports');report=sample_report()
