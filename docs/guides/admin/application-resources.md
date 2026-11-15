@@ -88,3 +88,19 @@ GPU、CPU 与原有内存历史不依赖磁盘采集成功；可选 `storage` �
 采集器对配置输入限 64 KiB / 512 行，最多 128 条关联记录。报告仅新增 `mount_plans` 和 `mount_configuration_available`，不公开原始配置、设备 UUID、挂载参数或其中可能含有的凭据；旧报告保持兼容。不会 stat/open 等待挂载的目录，不执行 mount/systemctl 命令，不修改 fstab。刷新页面和采集指标均不会触发按需挂载。自定义 systemd unit 及网络文件系统不在本次配置发现范围。
 
 本次经用户授权，服务器已有的 `mnt-backup1.mount`、`mnt-backup2.mount` 已启动并核对设备 UUID、ext4 类型和容量；保留原有 fstab 按需挂载策略，未更改为开机立即挂载。部署按任务分支本地验证、推送、服务器精确 SHA 同步执行，仅重启 XDocker；两块盘上的业务文件不写入。
+
+## 独立 SMART 温度采集（2026-11-15）
+
+常规采集器和网页服务继续使用普通部署用户。对于已明确验证的 NVMe / ATA / USB SAT 设备，可另行安装 `xdocker-smart.service` 和每分钟运行的 `xdocker-smart.timer`。此服务只运行 `/usr/local/lib/xdocker-smart/<固定提交>/smart_sensors.py` 的 root-owned 独立副本，`/usr/bin/python3 -I` 不导入用户工作区。更新普通 checkout 不会改变提权服务运行的代码；升级必须重新审查并安装固定版本。
+
+管理员确认具体设备后，用 `scripts/smart-monitor-unit.py config --device nvme0n1:nvme --device sda:sat …` 生成私有暂存配置。生成器选择 `/dev/disk/by-id/` 稳定标识，拒绝分区、任意路径、自动类型探测和自定义 SMART 参数。设备别名可能含序列号，配置不得输出到聊天或提交 Git。安装配置到 root:root 的 `/etc/xdocker-smart/devices.json`（0600，父目录 0700）；用同脚本的 `service --config <暂存文件> --sha <已推送完整SHA> --group <部署组>` / `timer` 渲染并审查 unit 后，再由管理员安装、`systemd-analyze verify`、daemon-reload、启动服务并启用 timer。
+
+服务使用 `DevicePolicy=closed`，仅对批准的稳定设备路径配置 `DeviceAllow=… r`；`NoNewPrivileges`、严格只读系统、禁止网络地址族、限制内存/任务数、25 秒总超时，仅允许写 `/var/lib/xdocker-smart/`。不授予普通用户 disk 组、不修改 sudoers，也不把 Admin 改为 root。安装前必须核对程序及各级父目录均为 root 拥有且不可由非 root 写入；不能从用户可写 checkout 长期执行提权 Python。
+
+SMART 命令固定为 `-j -d <已批准类型> -H -A`。ATA/SAT 额外固定 `-n standby,3,5`，休眠或无法确认电源状态时跳过，不执行类型探测、写参数、自检或唤醒。每次最多 8 台设备，每台 2 秒；不支持的桥接器保留未知，不盲目尝试其他类型。NVMe 不使用 ATA 电源模式检查。参数和退出位定义见 [smartctl 手册](https://manpages.ubuntu.com/manpages/noble/man8/smartctl.8.html)。
+
+只发布清洗后的温度、SMART 状态、历史告警分类、读取时间和设备代际标识到 `/var/lib/xdocker-smart/report.json`（root:部署组 0640，父目录 0750 且不可由部署组写入）。不发布 SMART 原文、序列号或配置。普通采集器拒绝非 root 所有、可写、符号链接、过大或过期缓存，并核对本次启动 boot ID、当前 sysfs 设备身份和 diskseq；超过 180 秒、重启或设备替换后不冒充当前温度。
+
+页面区分休眠、权限不足、工具缺失、不支持、超时、读取失败、缓存过期及未采集。SMART 当前故障与历史阈值/日志记录分别显示；例如历史温度越阈值显示为历史告警，不能仅凭总体 `passed=true` 隐藏。现有挂载、I/O、GPU 和进程监控不依赖 SMART 成功。无数据库迁移。
+
+部署前备份 XDocker registry、部署回执及已有 unit/config（初次安装须确认路径尚不存在）。本地测试、桌面/窄屏浏览器验收并推送后，服务器同步精确 SHA，再安装 root-owned 副本、启动独立采集服务并核对权限与缓存；仅重启 XDocker 载入新解析。回退先停用 SMART timer/service，再回到部署前已推送的 XDocker 提交并重启自身服务；保留私有缓存及备份，不操作业务数据、挂载、Docker daemon 或其他服务。

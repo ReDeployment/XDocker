@@ -62,7 +62,7 @@ class StorageTests(unittest.TestCase):
         return SimpleNamespace(f_blocks=1000,f_frsize=4096,f_bfree=600,f_bavail=550)
 
     def sample(self,previous=None,clock=10,reader=None):
-        return storage_sample(self.sys,self.proc,previous,clock,stat_reader=reader or self.stats,fstab=self.fstab,dev_root=self.root/'dev')
+        return storage_sample(self.sys,self.proc,previous,clock,stat_reader=reader or self.stats,fstab=self.fstab,dev_root=self.root/'dev',smart_cache=self.root/'smart-cache.json')
 
     def test_configured_automount_waiting_then_mounted_without_accessing_directories(self):
         disk=self.device();self.device('nvme0n1p3','259:3',disk,'partition')
@@ -167,13 +167,24 @@ class StorageTests(unittest.TestCase):
         self.put(node,'hwmon/hwmon0/temp1_input',38000)
         result,_=self.sample();self.assertEqual(result['devices'][0]['temperature_celsius'],38)
 
+    def test_privileged_cache_merges_by_identity_and_rejects_replaced_devices(self):
+        node=self.device();raw,_=self.sample();identity=raw['devices'][0]['id']
+        cache={identity:{'generation':'10','temperature_celsius':42,'health':'warning','health_at':100,
+            'sensor':{'state':'ready','source':'smart','alerts':['past-temperature-threshold']}}}
+        with patch('storage_metrics.read_cache',return_value=(cache,'ready')),patch('storage_metrics.time.time',return_value=101),patch('storage_metrics.os.access',return_value=False):
+            safe=public_storage(self.sample()[0]);row=safe['devices'][0]
+            self.assertEqual(row['temperature_celsius'],42);self.assertEqual(row['health'],'warning')
+            self.assertEqual(row['sensor']['alerts'],['past-temperature-threshold'])
+            self.put(node,'diskseq',11);row=public_storage(self.sample()[0])['devices'][0]
+            self.assertIsNone(row['temperature_celsius']);self.assertEqual(row['sensor']['state'],'stale')
+
     def test_optional_smart_fixed_read_arguments_health_failure_cache_and_malformed_output(self):
         node=self.device()
         with patch('storage_metrics.shutil.which',return_value='/usr/sbin/smartctl'),patch('storage_metrics.stat.S_ISBLK',return_value=True),patch('storage_metrics.os.access',return_value=True),patch('storage_metrics.subprocess.run') as run:
             for status,passed,expected in ((0,True,'passed'),(8,False,'failed'),(2,True,'unavailable')):
                 run.return_value=SimpleNamespace(stdout=json.dumps({'smartctl':{'exit_status':status},'smart_status':{'passed':passed},'temperature':{'current':38}}).encode(),returncode=status)
                 value=_sensors('null',node,self.sys,None,100,[4]);self.assertEqual(value['health'],expected)
-                self.assertEqual(run.call_args[0][0],['/usr/sbin/smartctl','-j','-d','nvme','-n','standby,3,5','-H','-A','/dev/null'])
+                self.assertEqual(run.call_args[0][0],['/usr/sbin/smartctl','-j','-d','nvme','-H','-A','/dev/null'])
             run.reset_mock();_sensors('null',self.sys/'devices/usb2/block/sda',self.sys,None,100,[4]);run.assert_not_called()
             run.reset_mock();cached=_sensors('null',node,self.sys,value,110,[4]);run.assert_not_called();self.assertEqual(cached['health'],'unavailable')
             for output in (b'[]',b'{"smartctl":[]}',b'not JSON'):

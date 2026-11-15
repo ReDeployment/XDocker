@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from gpu_metrics import _text, _numeric
+from smart_sensors import CACHE,probe,read_cache,cached_sensor,public_sensor
 
 MAX_DEVICES = 64
 MAX_MOUNTS = 128
@@ -72,7 +73,8 @@ def _io(raw, old, elapsed, generation):
 
 
 def _sensors(name, node, root, previous, now, budget):
-    result={'temperature_celsius':None,'health':'unavailable','health_at':None}
+    result={'temperature_celsius':None,'health':'unavailable','health_at':None,
+            'sensor':{'state':'not-collected','source':'none','alerts':[]}}
     # hwmon reads do not open the drive. Never walk unrelated system sensors.
     for parent in (node,node.parent,node.parent.parent):
         for directory in (parent/'hwmon',parent/'device/hwmon'):
@@ -81,44 +83,34 @@ def _sensors(name, node, root, previous, now, budget):
             for monitor in monitors:
                 temperature=_numeric(monitor/'temp1_input',root,-40,200,1000)
                 if temperature is not None: result['temperature_celsius']=temperature;break
-            if result['temperature_celsius'] is not None:break
+            if result['temperature_celsius'] is not None:result['sensor']={'state':'ready','source':'hwmon','alerts':[]};break
         if result['temperature_celsius'] is not None:break
     # SMART is optional and cached. Use the existing user's device permissions,
     # at most four 1-second reads per pass. No sudo or SMART self-test commands.
     if isinstance(previous,dict) and type(previous.get('health_at')) in (int,float) and 0<=now-previous['health_at']<60:
         for key in ('health','health_at'): result[key]=previous[key]
+        result['sensor']=previous.get('sensor',result['sensor'])
         if result['temperature_celsius'] is None:result['temperature_celsius']=previous.get('temperature_celsius')
         return result
     # Avoid type autodetection (which may spin up USB bridges). Only known
     # direct NVMe/ATA devices are queried; unsupported power checks fail closed.
     device_type='nvme' if '/nvme/' in str(node) else 'ata' if re.search(r'/ata[0-9]+/',str(node)) else None
-    if device_type is None:return result
+    if device_type is None:
+        if result['temperature_celsius'] is None:result['sensor']['state']='unsupported'
+        return result
     device=Path('/dev')/name
     tool=shutil.which('smartctl')
     try: allowed=tool and stat.S_ISBLK(device.stat().st_mode) and os.access(device,os.R_OK)
     except OSError: allowed=False
-    if not allowed: return result
+    if not allowed:
+        if result['temperature_celsius'] is None:result['sensor']={'state':'permission-denied' if tool else 'tool-missing','source':'smart','alerts':[]}
+        return result
     if budget[0]<=0: return result
     budget[0]-=1
-    result['health_at']=now
-    try:
-        run=subprocess.run([tool,'-j','-d',device_type,'-n','standby,3,5','-H','-A',str(device)],capture_output=True,timeout=1,check=False)
-        if len(run.stdout)>128*1024: return result
-        raw=json.loads(run.stdout)
-        if not isinstance(raw,dict) or not isinstance(raw.get('smartctl'),dict):return result
-        # Bits 0-2 signal parse/open/command failure, not a healthy drive.
-        status=raw.get('smartctl',{}).get('exit_status',run.returncode)
-        if type(status) is not int or status&7: return result
-        status_data=raw.get('smart_status',{})
-        passed=status_data.get('passed') if isinstance(status_data,dict) else None
-        if type(passed) is bool:
-            result.update(health='passed' if passed else 'failed',health_at=now)
-        temperature_data=raw.get('temperature',{})
-        temperature=temperature_data.get('current') if isinstance(temperature_data,dict) else None
-        if type(temperature) in (int,float) and math.isfinite(temperature) and -40<=temperature<=200:
-            result['temperature_celsius']=temperature;result['health_at']=now
-    except (OSError,ValueError,TypeError,subprocess.TimeoutExpired): pass
-    return result
+    sampled=probe(device,device_type,now,tool)
+    if sampled['temperature_celsius'] is None and result['temperature_celsius'] is not None:
+        sampled['temperature_celsius']=result['temperature_celsius'];sampled['sensor']['source']='hwmon'
+    return sampled
 
 
 def _unescape(value):
@@ -218,7 +210,7 @@ def mount_configuration(fstab, proc, by_number, filesystems, dev_root=Path('/dev
 
 
 def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clock=None, stat_reader=None,
-                   fstab=Path('/etc/fstab'), dev_root=Path('/dev')):
+                   fstab=Path('/etc/fstab'), dev_root=Path('/dev'),smart_cache=CACHE):
     previous=previous or {};clock=time.monotonic() if clock is None else clock
     counters={'boot':'','clock':clock,'devices':{},'sensors':{}}
     result=empty_storage();budget=[4]
@@ -229,6 +221,7 @@ def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clo
         elapsed=clock-previous.get('clock',clock) if same_boot else 0
         old=previous.get('devices',{}) if same_boot else {}
         cached=previous.get('sensors',{}) if same_boot else {}
+        smart,smart_state=read_cache(boot,time.time(),smart_cache)
         nodes={};resolved={};by_number={}
         with os.scandir(root/'class/block') as entries:
             for index,entry in enumerate(entries):
@@ -251,7 +244,14 @@ def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clo
                     generation=_text(node/'diskseq',root) or str(node.stat().st_ino)
                     io,counts=_io(_text(node/'stat',root),old.get(identifier),elapsed,generation)
                     if counts:counters['devices'][identifier]=counts
-                    sensors=_sensors(entry.name,node,root,cached.get(identifier) if old.get(identifier,{}).get('generation')==generation else None,time.time(),budget) if kind=='disk' else {'temperature_celsius':None,'health':'unavailable','health_at':None}
+                    sensors=_sensors(entry.name,node,root,cached.get(identifier) if old.get(identifier,{}).get('generation')==generation else None,time.time(),budget) if kind=='disk' else {'temperature_celsius':None,'health':'unavailable','health_at':None,'sensor':{'state':'not-applicable','source':'none','alerts':[]}}
+                    if kind=='disk':
+                        privileged=cached_sensor(smart,identifier,generation,time.time())
+                        if privileged is not None:
+                            if privileged['temperature_celsius'] is None and sensors['sensor']['source']=='hwmon':
+                                privileged['temperature_celsius']=sensors['temperature_celsius'];privileged['sensor']['source']='hwmon'
+                            sensors=privileged
+                        elif smart_state=='stale' and sensors['sensor']['state']!='ready':sensors['sensor']={'state':'stale','source':'smart','alerts':[]}
                     if kind=='disk':counters['sensors'][identifier]=sensors
                     row={'id':identifier,'name':entry.name,'model':label,'kind':kind,'transport':transport,
                          'rotational':rota=='1' if rota in ('0','1') else None,'size_bytes':int(size)*512 if size is not None else None,
@@ -302,11 +302,12 @@ def public_storage(raw):
             safe_io={k:numeric(io.get(k),hi=100 if k=='busy_percent' else 2**70) for k in IO_FIELDS}
             safe_io.update(state=io['state'],interval_seconds=numeric(io.get('interval_seconds'),90))
             if io['state']!='ready':safe_io.update(dict.fromkeys(IO_FIELDS))
-            _require(row['health'] in ('passed','failed','unavailable'))
+            _require(row['health'] in ('passed','warning','failed','unavailable'))
+            sensor=public_sensor(row.get('sensor'));_require(sensor is not None)
             devices.append({'id':identifier,'name':text(row['name'],80),'model':text(row['model']),'kind':row['kind'],'transport':row['transport'],
                             'rotational':row['rotational'],'size_bytes':numeric(row['size_bytes']), 'parents':list(dict.fromkeys(row['parents'])),
                             'io':safe_io,'temperature_celsius':numeric(row.get('temperature_celsius'),200,-40),
-                            'health':row['health'],'health_at':numeric(row.get('health_at'))})
+                            'health':row['health'],'health_at':numeric(row.get('health_at')),'sensor':sensor})
         _require(all(p in seen and p!=d['id'] for d in devices for p in d['parents']))
         filesystems=[];fs_seen=set()
         for row in raw['filesystems']:

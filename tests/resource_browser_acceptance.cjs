@@ -44,6 +44,7 @@ async function main(){
  assert.equal(await evaluate(`document.querySelectorAll('#view-resources-panel [data-resource-storage-detail]').length`),10);
  assert.equal(await evaluate(`document.querySelector('.storage-logical').open`),false);await shot('desktop-storage');
  await checkIdleMounts('desktop');
+ await checkSmartStates('desktop');
  await click('[data-resource-storage-detail]');await until(`document.querySelector('#storage-dialog')?.open`);
  assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('/data')&&document.querySelector('#storage-detail-panel').textContent.includes('GiB')`));
  await shot('desktop-storage-capacity');await click('[data-resource-storage-tab="io"]');
@@ -67,6 +68,7 @@ async function main(){
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.resource-workspace [role=tab]');return Math.abs(b[1].getBoundingClientRect().top-b[0].getBoundingClientRect().top)<2})()`));
  await pane('storage');await evaluate(`document.querySelector('#view-resources-panel').scrollIntoView({block:'start'})`);await shot('mobile-storage');
  await checkIdleMounts('mobile');
+ await checkSmartStates('mobile');
  await click('[data-resource-storage-detail]');await click('[data-resource-storage-tab="capacity"]');
  assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot('mobile-storage-capacity');
  await click('[data-resource-storage-tab="io"]');await evaluate(`document.querySelector('#storage-dialog').scrollTop=0`);assert(await evaluate(`Array.from(document.querySelectorAll('#storage-detail-panel .kpi')).every(k=>{const a=k.getBoundingClientRect(),b=k.querySelector('strong').getBoundingClientRect();return b.left>=a.left&&b.right<=a.right})`));await shot('mobile-storage-io');await click('[data-resource-storage-close]');
@@ -83,7 +85,22 @@ async function main(){
  await evaluate(`resourcesUI.data.report.at-=200;resourcesUI.error='fixture-visible-error';renderResourcesPage()`);
  for(const name of ['overview','gpu','storage','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
  assert.equal(await evaluate(`resourcesUI.data.runtime_control`),false);assert.deepEqual(exceptions,[]);
- console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:6,gpu:true,storage:true,automountStates:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+ console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:6,gpu:true,storage:true,automountStates:true,smartSensorStates:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+}
+async function checkSmartStates(size){
+ await evaluate(`(()=>{window.savedSensorStorage=structuredClone(resourcesUI.data.report.storage);const s=resourcesUI.data.report.storage;s.devices.find(d=>d.name==='sdb').temperature_celsius=42;s.devices.find(d=>d.name==='sdb').health='warning';s.devices.find(d=>d.name==='sdb').sensor={state:'ready',source:'smart',alerts:['past-temperature-threshold']};s.devices.find(d=>d.name==='sdc').sensor={state:'sleeping',source:'smart',alerts:[]};renderResourcesPage()})()`);
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdb"]').textContent.includes('42.0 °C')&&document.querySelector('[data-storage-device="sdb"]').textContent.includes('SMART 历史告警')`));
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes('休眠，暂不读取')&&!document.querySelector('[data-storage-device="sdc"]').textContent.includes('0.0 °C')`));
+ await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('SMART 历史告警')`));await pane('storage');
+ await click('[data-storage-device="sdb"] [data-resource-storage-detail]');await click('[data-resource-storage-tab="io"]');
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('曾有温度越阈值记录')&&document.querySelector('#storage-detail-panel').textContent.includes('42.0 °C')`));
+ assert(await evaluate(`document.querySelector('#storage-detail-panel .stack-row').getBoundingClientRect().bottom<=innerHeight`),'Temperature is below the viewport');
+ assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot(size+'-smart-sensors');await click('[data-resource-storage-close]');
+ for(const [state,label] of [['permission-denied','SMART 读取权限不足'],['stale','SMART 采样已过期'],['timeout','SMART 读取超时']]){
+  await evaluate(`resourcesUI.data.report.storage.devices.find(d=>d.name==='sdc').sensor.state=${JSON.stringify(state)};renderResourcesPage()`);
+  assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes(${JSON.stringify(label)})`));
+ }
+ await evaluate(`resourcesUI.data.report.storage=savedSensorStorage;storageUI.detail='';storageUI.view='capacity';renderResourcesPage()`);
 }
 async function checkIdleMounts(size){
  await evaluate(`(()=>{window.savedMountStorage=structuredClone(resourcesUI.data.report.storage);const s=resourcesUI.data.report.storage;s.filesystems=s.filesystems.filter(f=>!f.mounts.some(m=>m.path.startsWith('/mnt/backup')));for(const p of s.mount_plans){if(p.path==='/mnt/backup1')p.state='waiting';if(p.path==='/mnt/backup2')p.state='unmounted';}renderResourcesPage()})()`);

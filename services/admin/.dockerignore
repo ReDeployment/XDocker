@@ -26,6 +26,7 @@ static/**
 !host_metrics.py
 !gpu_metrics.py
 !storage_metrics.py
+!smart_sensors.py
 !resource_monitor.py
 !static/resources.js
 !static/resources.css
