@@ -2,6 +2,7 @@
 const serviceHubUI={data:null,error:'',loading:false,view:'overview',drafts:{},editor:null,busy:false};
 const hubViews={overview:'接入概览',projects:'项目登记',services:'常驻服务',records:'操作记录'};
 const hubMessages={XD_SERVICE_BINDING_UNAVAILABLE:'接入地址或服务授权已变化，请重新选择。',XD_SERVICE_REVISION_CONFLICT:'项目已被修改，请重新读取登记。',XD_SERVICE_POLICY_REVISION_CONFLICT:'主机接入策略版本已变化。',XD_SERVICE_DOMAIN_CONFLICT:'域名已被其他入口使用。',XD_SERVICE_ACTION_NOT_GRANTED:'该服务尚未获准执行此操作。',XD_SERVICE_OPERATIONS_DISABLED:'运行操作尚未开启；登记和读取仍可使用。',XD_SERVICE_NOT_SUPERVISED:'该项目由自己的开发进程运行，尚未关联常驻服务。',XD_SERVICE_STATUS_UNAVAILABLE:'无法读取 systemd 状态，请检查主机权限与服务名称。',XD_SERVICE_DEFINITION_CHANGED:'服务定义或加载状态已变化，操作已阻断，请重新核对授权。',XD_SERVICE_OBSERVATION_CHANGED:'服务运行状态发生变化，请重新读取后确认。',XD_SERVICE_CONFIRMATION_REQUIRED:'请输入完整目标名称确认。',XD_SERVICE_COMMAND_TIMEOUT:'命令已超时，结果未确认；请先检查实际状态。',XD_SERVICE_ACTION_REJECTED:'系统拒绝了本次服务操作，请检查权限与服务日志。',XD_SERVICE_RUNTIME_UNCONFIRMED:'命令返回后实际服务状态仍未确认。',XD_GATEWAY_APPLY_DISABLED:'主机尚未启用 XDocker 网关。',XD_GATEWAY_PLAN_CHANGED:'项目或入口配置发生变化，请重新预览。',XD_GATEWAY_CONFIG_CHECK_FAILED:'Nginx 配置检查失败，原配置保持保留。',XD_GATEWAY_PORT_IN_USE:'网关端口已被占用，请检查主机接入策略。',XD_GATEWAY_BIND_PERMISSION_REQUIRED:'网关尚无绑定标准端口的权限，请按接入指南配置 XDocker 的标准端口授权。',XD_GATEWAY_OWNER_UNCONFIRMED:'无法确认网关进程归属，本次未接管已有 Nginx。',XD_GATEWAY_RUNTIME_UNCONFIRMED:'网关实际加载版本未确认，请检查回退记录与实际入口。',XD_SERVICE_PROXY_LOOP:'目标地址指向网关本身，请更换接入端口。',XD_SERVICE_MONITOR_UNAVAILABLE:'资源监控分组尚未登记或已被移除。'};
+Object.assign(hubMessages,{XD_GATEWAY_ADDRESS_UNAVAILABLE:'网关监听地址尚未就绪，正在等待网络或 VPN 恢复。',XD_GATEWAY_BIND_FAILED:'网关监听失败，请核对主机网络与运行日志。',XD_GATEWAY_PENDING_CONFIGURATION:'存在尚未应用的修改，自动恢复不会发布这些修改。',XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED:'已应用的网关文件发生变化，请先人工核对。',XD_GATEWAY_RELOAD_FAILED:'网关启动或重新加载失败，正在核对恢复结果。',XD_GATEWAY_RESTORE_UNCONFIRMED:'网关恢复结果尚未确认。'});
 const hubText=value=>hubMessages[value]||value;
 const hubButton=(text,data={},blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-hub-${k}="${esc(v)}"`).join(' ')} ${blocked||serviceHubUI.busy?'disabled':''}>${esc(text)}</button>`;
 function resetServiceHub(){serviceHubUI.data=null;serviceHubUI.error='';serviceHubUI.drafts={};serviceHubUI.editor=null;sitesUI.source='all';sitesUI.lastView='';$('hub-dialog')?.close();}
@@ -13,12 +14,26 @@ async function loadServiceHub(){
 }
 const hubEndpoint=(alias,d=serviceHubUI.data)=>{const e=d?.endpoints[alias];return e?`${e.scheme}://${e.host.includes(':')?'['+e.host+']':e.host}:${e.port}`:'接入地址待核对';};
 function hubEntry(project,data,applied){const port=project.tls?data.gateway?.https_port:data.gateway?.http_port,suffix=port===(project.tls?443:80)?'':':'+port;return applied&&project.enabled&&port?`<a href="${project.tls?'https':'http'}://${esc(project.domain)}${suffix}" target="_blank" rel="noreferrer">${esc(project.domain)} ↗</a>`:esc(project.domain);}
+function hubRecoveryNotice(gateway){
+ const r=gateway?.recovery;if(!r)return '';
+ if(r.state==='waiting-address')return '网关正在等待监听地址就绪，将自动重试。';
+ if(r.state==='retrying')return '网关尚未恢复，正在自动重试。'+(r.error?hubText(r.error):'');
+ if(r.state==='blocked')return '网关自动恢复已受保护条件阻止：'+hubText(r.error||'XD_GATEWAY_RESTORE_UNCONFIRMED');
+ if(r.state==='stale'||r.state==='unavailable')return '网关自动恢复检查未确认，请核对 XDocker 服务与运行日志。';
+ return '';
+}
+function hubRecoveryRows(gateway){
+ const r=gateway?.recovery;
+ const label={ready:'自动恢复检查正常','not-configured':'尚未应用网关配置','waiting-address':'等待监听地址就绪',retrying:'正在重试',blocked:'等待人工核对',stale:'检查已过期',unavailable:'检查状态不可用'}[r?.state]||'尚未报告';
+ return `<div class="stack-row"><span>自动恢复</span><strong>${esc(label)}</strong></div>${r?.next_check_at?`<div class="stack-row"><span>${r.state==='stale'?'原定检查':'下次检查'}</span><span>${date(r.next_check_at*1000)}</span></div>`:''}`;
+}
 function renderServiceHubPage(){
  if(location.hash==='#service-hub/gateway'){current='sites';moduleViews.sites='gateway';location.replace('#sites/gateway');render();if(loggedIn)loadServiceHub();return;}
  const route=location.hash.slice(1).split('/')[1];if(hubViews[route])serviceHubUI.view=route;
  const d=serviceHubUI.data,view=serviceHubUI.view,errors=[serviceHubUI.error,d?.gateway?.error].filter(Boolean);
  if(d?.projects.some(p=>!p.endpoint_available||!p.service_available||p.monitor_available===false))errors.push('部分项目的接入绑定已失效，请重新核对登记。');
  if(d?.operations.some(o=>o.state==='unconfirmed'))errors.push('有运行操作结果未确认，请在操作记录中核对实际状态，勿自动重复执行。');
+ if(hubRecoveryNotice(d?.gateway))errors.push(hubRecoveryNotice(d.gateway));
  if(d?.gateway?.last_error)errors.push(d.gateway.last_error.rollback_verified?'上次网关应用失败，已核对恢复结果；请重新预览后处理。':'上次网关应用或回退结果未确认，请先核对实际入口与网关进程。');
  let body='<div class="empty">正在读取独立服务接入…</div>';
  if(d){
@@ -93,6 +108,7 @@ function renderSitesPage(){
  if(serviceHubUI.error)alerts.push('独立项目入口读取失败：'+hubText(serviceHubUI.error));
  if(!snapshot)alerts.push('部署网站尚未读取，请检查管理连接。');
  if(d?.gateway?.error)alerts.push(hubText(d.gateway.error));
+ if(hubRecoveryNotice(d?.gateway))alerts.push(hubRecoveryNotice(d.gateway));
  if(d?.gateway?.last_error)alerts.push(d.gateway.last_error.rollback_verified?'上次网关应用失败，已恢复原配置。':'上次网关应用或回退结果尚未确认，请先核对实际入口。');
  for(const p of projects){
   if(!p.endpoint_available)alerts.push(p.domain+' 的目标地址已失效，请重新编辑入口。');
@@ -101,7 +117,7 @@ function renderSitesPage(){
  const nativeRows=projects.map(p=>{const h=p.health||p.last_health;return `<tr data-site-source="project" data-site-id="${esc(p.id)}"><td><strong>${hubEntry(p,d,fresh)}</strong><small>${esc(p.name)}</small></td><td>${esc(hubEndpoint(p.endpoint))}</td><td>${badge(p.enabled?(fresh?'配置已加载':'待应用网关'):'未纳入网关',p.enabled&&fresh?'good':'warn')}<small>${h?(h.state==='healthy'?'应用连接正常':h.status?'应用返回 HTTP '+h.status:'应用无法连接'):'应用尚未检查'}</small>${h?`<small>${p.health?'检查于':'上次检查于'} ${date(h.at*1000)}</small>`:''}</td><td>${badge('独立项目','blue')}</td><td><div class="actions">${hubButton('编辑入口',{entry:p.id},!d.configuration_writable)}${hubButton('检查连接',{health:p.id},!d.configuration_writable)}</div></td></tr>`;});
  const legacyRows=legacy.map(s=>`<tr data-site-source="deployment" data-site-id="${esc(s.key)}"><td><strong><a href="https://${esc(s.domain)}" target="_blank" rel="noreferrer">${esc(s.domain)} ↗</a></strong><small>${esc(s.key)}</small></td><td>${esc(s.service)}<small>${esc(s.kind==='frp_http'?'FRP 穿透':s.kind==='app'?'动态应用':'静态站点')}</small></td><td>${badge(s.enabled?'已启用':'未启用',s.enabled?'good':'')}<small>${esc(s.probe?.output||'尚未执行公网检查')}</small>${s.probe?`<small>${date(s.probe.at)}</small>`:''}</td><td>${badge('部署网站')}<small>配置由部署仓库维护</small></td><td>${btn('检查连接',{probe:s.key},!s.enabled||d?.native===true)}</td></tr>`);
  let body;
- if(view==='gateway')body=d?panel('网关配置','将独立项目的域名转发到已批准地址',`<div class="panel-body"><div class="stack-row"><span>监听地址</span><strong>${esc(d.gateway?.address||'尚未核对')}</strong></div><div class="stack-row"><span>配置状态</span>${badge(fresh?'当前配置已加载':'待应用或待核对',fresh?'good':'warn')}</div><div class="actions">${hubButton('预览完整配置',{preview:'yes'})}${hubButton('检查并应用网关',{gateway:'yes'},!d.operations_enabled||!d.gateway_enabled)}</div><p class="muted">先保存网站入口，再预览并应用。域名需解析到这台主机；应用仍使用自己的启动方式。部署网站继续通过其部署配置发布。</p></div>`):'<div class="empty">正在读取网关配置…</div>';
+ if(view==='gateway')body=d?panel('网关配置','将独立项目的域名转发到已批准地址',`<div class="panel-body"><div class="stack-row"><span>监听地址</span><strong>${esc(d.gateway?.address||'尚未核对')}</strong></div><div class="stack-row"><span>配置状态</span>${badge(fresh?'当前配置已加载':'待应用或待核对',fresh?'good':'warn')}</div>${hubRecoveryRows(d.gateway)}<div class="actions">${hubButton('预览完整配置',{preview:'yes'})}${hubButton('检查并应用网关',{gateway:'yes'},!d.operations_enabled||!d.gateway_enabled)}</div><p class="muted">先保存网站入口，再预览并应用。域名需解析到这台主机；应用仍使用自己的启动方式。部署网站继续通过其部署配置发布。</p></div>`):'<div class="empty">正在读取网关配置…</div>';
  else{
   const rows=sitesUI.source==='project'?nativeRows:sitesUI.source==='deployment'?legacyRows:[...nativeRows,...legacyRows];
   body=panel('网站列表',`${projects.length} 个独立项目入口 · ${legacy.length} 个部署网站`,table(['域名 / 项目','转发目标','配置 / 应用检查','管理方式','操作'],rows),d?hubButton('登记项目',{edit:'new'},!d.configuration_writable||!Object.keys(d.endpoints).length):'');

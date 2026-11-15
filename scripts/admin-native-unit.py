@@ -27,7 +27,8 @@ if __name__=='__main__':
     if args.admin_domain:command+=' --admin-domain '+args.admin_domain
     print(f'''[Unit]
 Description=XDocker native service administration
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple

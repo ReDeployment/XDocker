@@ -2,6 +2,7 @@
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import errno
 import os
 from pathlib import Path
 import shutil
@@ -16,7 +17,7 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'services/admin'),str(ROOT/'tests')]
-from gateway_runtime import GatewayRuntime, atomic_text
+from gateway_runtime import GatewayRuntime, GatewayRecovery, atomic_text
 from host_metrics import atomic_json, read_json
 from native_services import ServiceHub, ServiceError, probe_endpoint
 from test_native_services import policy, project
@@ -96,6 +97,64 @@ class GatewayTests(unittest.TestCase):
             occupied.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);occupied.bind(('127.0.0.1',port));occupied.listen(1)
             with self.assertRaisesRegex(ServiceError,'PORT_IN_USE'):self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
         self.assertEqual(len(self.calls),before)
+
+    def test_bind_failures_distinguish_address_port_permission_and_other_errors(self):
+        self.enable();plan=self.gateway.preview()
+        for failure,code in ((OSError(errno.EADDRNOTAVAIL,'not ready'),'ADDRESS_UNAVAILABLE'),
+                             (OSError(errno.EADDRINUSE,'in use'),'PORT_IN_USE'),
+                             (PermissionError(errno.EACCES,'denied'),'BIND_PERMISSION_REQUIRED'),
+                             (OSError(errno.ENETDOWN,'down'),'BIND_FAILED')):
+            with patch('gateway_runtime.socket.socket') as sock:
+                sock.return_value.__enter__.return_value.bind.side_effect=failure
+                with self.assertRaisesRegex(ServiceError,'XD_GATEWAY_'+code):
+                    self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
+        self.assertEqual(self.calls,[])
+
+    def test_recovery_survives_long_address_delay_then_recovers_and_resets_backoff(self):
+        now=time.time();messages=[];worker=GatewayRecovery(self.gateway,clock=lambda:now,log=messages.append)
+        results=[ServiceError('XD_GATEWAY_ADDRESS_UNAVAILABLE')]*7+[{'state':'applied'}]
+        with patch.object(self.gateway,'restore',side_effect=results) as restore:
+            delays=[worker.tick() for _ in results]
+        self.assertEqual(delays,[5,10,20,30,30,30,30,10]);self.assertEqual(restore.call_count,8)
+        status=self.gateway.recovery_status();self.assertEqual(status['state'],'ready');self.assertEqual(status['failures'],0)
+        self.assertEqual(len(messages),2);self.assertEqual((self.gateway.root/'recovery.json').stat().st_mode&0o777,0o600)
+
+    def test_recovery_restarts_only_saved_gateway_after_exit_and_rejects_pending_edits(self):
+        self.enable();plan=self.gateway.preview();self.gateway.apply({'fingerprint':plan['fingerprint'],'confirmation':'xdocker-gateway'})
+        worker=GatewayRecovery(self.gateway,log=lambda message:None)
+        before=len(self.calls);worker.tick();self.assertEqual(len(self.calls),before)
+        self.live=False;(self.gateway.root/'nginx.pid').unlink();worker.tick()
+        self.assertEqual(self.gateway.recovery_status()['state'],'ready');self.assertEqual(len(self.calls),before+2)
+        self.assertEqual(self.hub.store.read_gateway()['fingerprint'],plan['fingerprint'])
+        self.hub.save(project(revision=2,domain='pending.home.test'));before=len(self.calls)
+        self.live=False;(self.gateway.root/'nginx.pid').unlink()
+        worker.tick();worker.tick()
+        status=self.gateway.recovery_status();self.assertEqual(status['state'],'blocked');self.assertEqual(status['error'],'XD_GATEWAY_PENDING_CONFIGURATION')
+        self.assertEqual(len(self.calls),before);self.assertEqual(self.hub.store.read_gateway()['fingerprint'],plan['fingerprint'])
+
+    def test_recovery_loop_stops_promptly_and_does_not_enable_unconfigured_gateway(self):
+        worker=GatewayRecovery(self.gateway,log=lambda message:None)
+        worker.tick();self.assertEqual(self.gateway.recovery_status()['state'],'not-configured')
+        self.assertEqual(self.calls,[]);self.assertFalse(self.hub.policy()['gateway']['enabled'])
+        class Stop:
+            def __init__(self):self.delays=[]
+            def is_set(self):return len(self.delays)>=3
+            def wait(self,delay):self.delays.append(delay);return self.is_set()
+        stop=Stop()
+        with patch.object(self.gateway,'restore',side_effect=[ServiceError('XD_GATEWAY_ADDRESS_UNAVAILABLE')]*2+[{'state':'applied'}]) as restore:
+            worker.run(stop)
+        self.assertEqual(stop.delays,[5,10,10]);self.assertEqual(restore.call_count,3)
+
+    def test_recovery_status_staleness_allowlist_and_private_exception_redaction(self):
+        messages=[];worker=GatewayRecovery(self.gateway,clock=lambda:1,log=messages.append)
+        with patch.object(self.gateway,'restore',side_effect=RuntimeError('private-super-secret')):worker.tick()
+        self.assertNotIn('private-super-secret',' '.join(messages))
+        self.assertEqual(self.gateway.recovery_status()['state'],'stale')
+        snapshot=read_json(self.gateway.root/'recovery.json');snapshot.update(at=time.time(),private='never returned')
+        atomic_json(self.gateway.root/'recovery.json',snapshot)
+        self.assertNotIn('private',self.gateway.recovery_status())
+        snapshot['error']='private-super-secret';atomic_json(self.gateway.root/'recovery.json',snapshot)
+        self.assertEqual(self.gateway.recovery_status(),{'state':'unavailable'})
 
     def test_daemon_identity_is_polled_without_replaying_start(self):
         self.enable();reads=[]

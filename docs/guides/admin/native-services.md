@@ -128,3 +128,18 @@ XDocker 登记的目标是 `http://100.100.0.3:15173`，域名 `padelu-admin.hom
 如果应用返回「host is not allowed」，由 **PadelU 项目维护者**在 `/data/runtime/padelu/dev/conf/development.env` 的 `VITE_ALLOWED_HOSTS` 保留现有域名并追加 `padelu-admin.home.test`，再按该项目流程重启自己的 `padelu-home-web.service`。对应读取位置为 `/data/workspace/PadelU/PadelU/docker/backoffice/frontend/vite.config.*` 中的 `server.allowedHosts`。不要使用允许所有 Host 或代理改写 Host 来绕过检查。
 
 客户端还需将该域名解析到 `100.100.0.3`。完成后应分别检查目标携带 Host 返回 200、网关域名返回 200、登录及开发 WebSocket；应用放行与业务服务重启由 PadelU 项目负责。
+
+## 开机及网关自动恢复（2026-11-15）
+
+原生模式启用 `--operations` 后，XDocker 在独立后台循环中检查自己上次已应用的网关。管理 HTTP 后端和资源采集无需等待 VPN 地址就绪。systemd unit 请求 `network-online.target`；具体 VPN 地址仍由实际监听绑定结果判断，不依赖某种 VPN 软件或改成公开监听。
+
+- 正常每 10 秒核对一次；失败后按 5、10、20、30 秒退避，随后每 30 秒继续检查。VPN 启动耗时数分钟也会继续恢复，停止 XDocker 时循环随服务结束。
+- `EADDRNOTAVAIL` 显示为“监听地址尚未就绪”，`EADDRINUSE` 才表示“端口占用”；权限不足和其他绑定失败分别报告。
+- 每次恢复仍检查上次应用指纹、活动配置及进程归属。未应用修改、活动文件被更改、未知 PID 或未获网关授权都会阻止自动操作，不能通过重试绕过。只恢复 XDocker 自己的 Nginx，不启动、重启或发布业务项目。
+- `网站入口 → 网关配置` 显示自动恢复状态、下次检查时间；等待地址、重试、需要人工核对和状态过期在网站列表及独立服务各分区保持可见。状态单独写入私有 `service-hub/gateway/recovery.json`，不增加数据库 schema。超过 90 秒未更新时显示检查过期。
+
+验收包括地址长时间未就绪后恢复、网关退出后重新启动、未应用修改/未知进程不被接管、错误分类、状态与日志脱敏、真实 Gunicorn 在网关等待期间仍可登录，以及桌面/窄屏状态展示。实机验证可在确认进程归属后仅停止 XDocker 网关，观察后台拉起并核对入口；不需要重启整台服务器或切断实际 VPN。
+
+更新前备份 XDocker registry、活动网关配置及原生 systemd unit。同步固定提交后，重新渲染同一用户、路径、域名和端口授权的 unit，检查后安装、daemon-reload，再重启 XDocker。回退使用部署前固定提交和原 unit；保留业务项目及其数据库，不回滚或删除应用数据。
+
+按需挂载盘的 `.automount` 处于 waiting、对应 `.mount` 处于 inactive 时，表示等待首次目录访问，属于系统已有的挂载策略。存储监控只展示已激活的本地块设备文件系统；不会为了填充容量数据而触发这些挂载，也不会改变 `/etc/fstab`。这类情况不能仅凭“未发现挂载”判断为磁盘故障。

@@ -82,6 +82,7 @@ class HubTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run([*command,'--gateway-web-ports'],capture_output=True).returncode,0)
         unit=subprocess.check_output([*command,'--operations','--gateway-web-ports'],text=True)
         self.assertIn('User=michael\n',unit);self.assertIn('NoNewPrivileges=yes\n',unit)
+        self.assertIn('Wants=network-online.target\nAfter=network-online.target\n',unit)
         self.assertIn('AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n',unit)
         domain_unit=subprocess.check_output([*command,'--admin-domain','xdocker.home.test'],text=True)
         self.assertIn('--admin-domain xdocker.home.test\n',domain_unit)

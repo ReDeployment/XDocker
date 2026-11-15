@@ -35,14 +35,11 @@ def main():
     if args.collect and sys.platform!='linux':parser.error('--collect requires Linux; metrics are not simulated on this host')
     native_trusted_hosts(args.admin_domain)
     if read_json(state/'native-runtime.json')!={'schema':1,'checkout':str(ROOT)}:parser.error('Run init for this checkout first')
+    recovery=None
     if args.operations:
-        from native_services import ServiceHub,ServiceError
-        from gateway_runtime import GatewayRuntime
-        from registry_store import RegistryError
-        try:GatewayRuntime(ServiceHub(state)).restore()
-        except (OSError,ValueError) as exc:
-            code=str(exc) if isinstance(exc,(ServiceError,RegistryError)) else 'XD_GATEWAY_RESTORE_UNCONFIRMED'
-            print(code+': review the saved gateway plan in Admin',file=sys.stderr,flush=True)
+        from native_services import ServiceHub
+        from gateway_runtime import GatewayRuntime,GatewayRecovery
+        recovery=GatewayRecovery(GatewayRuntime(ServiceHub(state)))
     env={**os.environ,'ADMIN_NATIVE_STATE':str(state),'ADMIN_NATIVE_OPERATIONS':'true' if args.operations else 'false',
          'ADMIN_NATIVE_HOSTNAME':args.admin_domain,
          'ADMIN_NATIVE_WITHOUT_DOCKER':'true' if args.without_docker else 'false',
@@ -66,12 +63,15 @@ def main():
         sync_worker.stopping.set()
         if child.poll() is None:child.terminate()
     signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown)
+    gateway_worker=threading.Thread(target=recovery.run,args=(stopping,),daemon=True) if recovery else None
+    if gateway_worker:gateway_worker.start()
     print(f'XDocker native: http://127.0.0.1:{args.port}/#service-hub; metrics={args.collect}, operations={args.operations}',flush=True)
     try:code=child.wait()
     finally:
         shutdown()
         sync_worker.close()
         if worker:worker.join(timeout=2)
+        if gateway_worker:gateway_worker.join(timeout=2)
     raise SystemExit(code)
 
 

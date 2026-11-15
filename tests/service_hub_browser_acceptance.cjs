@@ -71,6 +71,17 @@ async function main(){
  assert.equal(await evaluate(`document.querySelectorAll('[data-site-source]').length`),1);await sitesPage('gateway');await sitesPage();assert.equal(await evaluate(`document.querySelector('#sites-source').value`),'deployment');await shot('mobile-unified-sites');
  await evaluate(`document.querySelector('#sites-source').value='all';document.querySelector('#sites-source').dispatchEvent(new Event('change',{bubbles:true}))`);
  await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});await shot('desktop-unified-sites');
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
+ for(const width of [1440,390]){
+  await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});await sitesPage('gateway');
+  for(const [state,error,label] of [['waiting-address','XD_GATEWAY_ADDRESS_UNAVAILABLE','等待监听地址'],['retrying','XD_GATEWAY_PORT_IN_USE','自动重试'],['blocked','XD_GATEWAY_PENDING_CONFIGURATION','不会发布这些修改'],['stale',null,'检查未确认']]){
+   await evaluate(`serviceHubUI.data.gateway.recovery={state:${JSON.stringify(state)},error:${JSON.stringify(error)},at:Date.now()/1000,next_check_at:Date.now()/1000+30,failures:1};renderSitesPage()`);
+   assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes(${JSON.stringify(label)})`));
+   await sitesPage('overview');assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes(${JSON.stringify(label)})`));await sitesPage('gateway');
+   assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`));
+  }
+  await shot(width===390?'mobile-gateway-recovery':'desktop-gateway-recovery');
+  await evaluate(`serviceHubUI.data.gateway.recovery=null;renderSitesPage()`);
+ }
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

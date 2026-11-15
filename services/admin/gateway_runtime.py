@@ -1,4 +1,5 @@
 """XDocker's own native Nginx prefix. Never adopts the machine's existing Nginx."""
+import errno
 import os
 from pathlib import Path
 import socket
@@ -7,7 +8,7 @@ import tempfile
 import time
 import urllib.request
 
-from host_metrics import private_directory
+from host_metrics import private_directory, atomic_json, read_json, number
 from native_services import ServiceError, fingerprint, require, run_fixed, proxy_loop
 
 
@@ -27,6 +28,20 @@ def quote(path):
 
 
 def listen(address,port):return ('['+address+']' if ':' in address else address)+':'+str(port)
+
+
+RECOVERY_ERRORS = {
+    'XD_GATEWAY_ADDRESS_UNAVAILABLE', 'XD_GATEWAY_PORT_IN_USE', 'XD_GATEWAY_BIND_FAILED',
+    'XD_GATEWAY_BIND_PERMISSION_REQUIRED', 'XD_GATEWAY_PENDING_CONFIGURATION',
+    'XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED', 'XD_GATEWAY_OWNER_UNCONFIRMED',
+    'XD_GATEWAY_APPLY_DISABLED', 'XD_GATEWAY_PLAN_CHANGED', 'XD_GATEWAY_CONFIG_CHECK_FAILED',
+    'XD_GATEWAY_RELOAD_FAILED', 'XD_GATEWAY_RUNTIME_UNCONFIRMED', 'XD_GATEWAY_RESTORE_UNCONFIRMED',
+}
+BLOCKED_ERRORS = {
+    'XD_GATEWAY_BIND_PERMISSION_REQUIRED', 'XD_GATEWAY_PENDING_CONFIGURATION',
+    'XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED', 'XD_GATEWAY_OWNER_UNCONFIRMED',
+    'XD_GATEWAY_APPLY_DISABLED', 'XD_GATEWAY_CONFIG_CHECK_FAILED',
+}
 
 
 class GatewayRuntime:
@@ -88,7 +103,20 @@ class GatewayRuntime:
             'enabled':gateway['enabled'],'applied_fingerprint':runtime.get('fingerprint') if runtime else None,
             'runtime_verified':bool(runtime and runtime.get('owner') and self.owner_reader(policy,runtime)==runtime.get('owner')),
             'last_error':last_error if last_error and (not runtime or last_error['at']>runtime['at']) else None,
+            'recovery':self.recovery_status(),
             'address':http,'http_port':gateway['http_port'],'https_port':gateway['https_port'],'policy_sha256':fingerprint(policy)}
+
+    def recovery_status(self):
+        try:
+            value=read_json(self.root/'recovery.json')
+            require(isinstance(value,dict) and value.get('schema')==1,'XD_GATEWAY_RECOVERY_INVALID')
+            require(value.get('state') in ('ready','not-configured','waiting-address','retrying','blocked'),'XD_GATEWAY_RECOVERY_INVALID')
+            require(all(number(value.get(k)) and value[k]>=0 for k in ('at','next_check_at','failures')),'XD_GATEWAY_RECOVERY_INVALID')
+            require(value.get('error') is None or value['error'] in RECOVERY_ERRORS,'XD_GATEWAY_RECOVERY_INVALID')
+            state=value['state'] if -5<=time.time()-value['at']<=90 else 'stale'
+            return {**{k:value[k] for k in ('at','next_check_at','failures','error')},'state':state}
+        except FileNotFoundError:return None
+        except (OSError,ValueError,TypeError):return {'state':'unavailable'}
 
     def owner(self,policy,runtime=None):
         try:
@@ -165,7 +193,10 @@ class GatewayRuntime:
                         sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
                         try:sock.bind((address,port));sock.listen(1)
                         except PermissionError:raise ServiceError('XD_GATEWAY_BIND_PERMISSION_REQUIRED') from None
-                        except OSError:raise ServiceError('XD_GATEWAY_PORT_IN_USE') from None
+                        except OSError as exc:
+                            code=('XD_GATEWAY_ADDRESS_UNAVAILABLE' if exc.errno==errno.EADDRNOTAVAIL else
+                                  'XD_GATEWAY_PORT_IN_USE' if exc.errno==errno.EADDRINUSE else 'XD_GATEWAY_BIND_FAILED')
+                            raise ServiceError(code) from None
             candidate=self.root/'candidate.conf';atomic_text(candidate,plan['configuration'])
             checked=self.runner([policy['gateway']['binary'],'-p',str(self.root)+'/', '-c',str(candidate),'-t'])
             require(checked['code']==0 and not checked['truncated'],'XD_GATEWAY_CONFIG_CHECK_FAILED')
@@ -201,3 +232,44 @@ class GatewayRuntime:
                 except (OSError,ValueError):rollback=False
                 self.hub.store.write_gateway_error({'at':time.time(),'fingerprint':plan['fingerprint'],'rollback_verified':rollback,'runtime_unconfirmed':True})
                 raise
+
+
+class GatewayRecovery:
+    """Watch only the last applied XDocker plan; never start business services.
+
+    Each attempt uses restore's fingerprint, config and process ownership guards.
+    Checks continue after slow VPN startup, with at most one attempt per 30 s on
+    persistent failures. The web listener and metrics do not wait for this loop.
+    """
+    def __init__(self, gateway, clock=time.time, log=None):
+        self.gateway=gateway;self.clock=clock;self.failures=0;self.previous=None
+        self.log=log or (lambda message:print(message,flush=True))
+
+    def tick(self):
+        error=None
+        try:
+            result=self.gateway.restore()
+            state='not-configured' if result['state']=='not-configured' else 'ready'
+            self.failures=0;delay=10
+        except Exception as exc:
+            # Keep unexpected exception details out of logs/API. A failed guard
+            # stays blocked, and every later attempt revalidates the saved plan.
+            error=str(exc) if isinstance(exc,ServiceError) and str(exc) in RECOVERY_ERRORS else 'XD_GATEWAY_RESTORE_UNCONFIRMED'
+            self.failures=min(self.failures+1,1000000)
+            state='waiting-address' if error=='XD_GATEWAY_ADDRESS_UNAVAILABLE' else 'blocked' if error in BLOCKED_ERRORS else 'retrying'
+            delay=min(30,5*2**min(self.failures-1,3))
+        snapshot={'schema':1,'state':state,'error':error,'at':self.clock(),
+                  'next_check_at':self.clock()+delay,'failures':self.failures}
+        try:atomic_json(self.gateway.root/'recovery.json',snapshot)
+        except (OSError,ValueError):
+            self.log('XD_GATEWAY_RECOVERY_STATUS_UNAVAILABLE')
+        transition=(state,error)
+        if transition!=self.previous:
+            self.log('XD_GATEWAY_RECOVERY '+state+((': '+error) if error else ''))
+            self.previous=transition
+        return delay
+
+    def run(self, stopping):
+        while not stopping.is_set():
+            delay=self.tick()
+            if stopping.wait(delay):break
