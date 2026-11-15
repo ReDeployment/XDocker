@@ -43,6 +43,7 @@ async function main(){
  await pane('overview');await click('[data-resource-storage-view]');await until(`document.querySelector('#view-resources-panel').textContent.includes('4 块物理硬盘')`);
  assert.equal(await evaluate(`document.querySelectorAll('#view-resources-panel [data-resource-storage-detail]').length`),10);
  assert.equal(await evaluate(`document.querySelector('.storage-logical').open`),false);await shot('desktop-storage');
+ await checkIdleMounts('desktop');
  await click('[data-resource-storage-detail]');await until(`document.querySelector('#storage-dialog')?.open`);
  assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('/data')&&document.querySelector('#storage-detail-panel').textContent.includes('GiB')`));
  await shot('desktop-storage-capacity');await click('[data-resource-storage-tab="io"]');
@@ -65,6 +66,7 @@ async function main(){
  }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.resource-workspace [role=tab]');return Math.abs(b[1].getBoundingClientRect().top-b[0].getBoundingClientRect().top)<2})()`));
  await pane('storage');await evaluate(`document.querySelector('#view-resources-panel').scrollIntoView({block:'start'})`);await shot('mobile-storage');
+ await checkIdleMounts('mobile');
  await click('[data-resource-storage-detail]');await click('[data-resource-storage-tab="capacity"]');
  assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot('mobile-storage-capacity');
  await click('[data-resource-storage-tab="io"]');await evaluate(`document.querySelector('#storage-dialog').scrollTop=0`);assert(await evaluate(`Array.from(document.querySelectorAll('#storage-detail-panel .kpi')).every(k=>{const a=k.getBoundingClientRect(),b=k.querySelector('strong').getBoundingClientRect();return b.left>=a.left&&b.right<=a.right})`));await shot('mobile-storage-io');await click('[data-resource-storage-close]');
@@ -81,7 +83,22 @@ async function main(){
  await evaluate(`resourcesUI.data.report.at-=200;resourcesUI.error='fixture-visible-error';renderResourcesPage()`);
  for(const name of ['overview','gpu','storage','apps','discover','history']){await pane(name);assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('采集数据已过期')&&document.querySelector('.resource-workspace').textContent.includes('fixture-visible-error')`));}
  assert.equal(await evaluate(`resourcesUI.data.runtime_control`),false);assert.deepEqual(exceptions,[]);
- console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:6,gpu:true,storage:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+ console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',panes:6,gpu:true,storage:true,automountStates:true,registration:true,history:true,drafts:true,staleVisible:true,runtimeMutation:false,consoleExceptions:0}));
+}
+async function checkIdleMounts(size){
+ await evaluate(`(()=>{window.savedMountStorage=structuredClone(resourcesUI.data.report.storage);const s=resourcesUI.data.report.storage;s.filesystems=s.filesystems.filter(f=>!f.mounts.some(m=>m.path.startsWith('/mnt/backup')));for(const p of s.mount_plans){if(p.path==='/mnt/backup1')p.state='waiting';if(p.path==='/mnt/backup2')p.state='unmounted';}renderResourcesPage()})()`);
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdb"]').textContent.includes('/mnt/backup1')&&document.querySelector('[data-storage-device="sdb"]').textContent.includes('按需挂载，等待访问')`));
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes('/mnt/backup2')&&document.querySelector('[data-storage-device="sdc"]').textContent.includes('未挂载')`));
+ await click('[data-storage-device="sdb"] [data-resource-storage-detail]');
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('/mnt/backup1')&&document.querySelector('#storage-detail-panel').textContent.includes('等待访问')&&document.querySelector('#storage-detail-panel').textContent.includes('挂载后可读取')&&!document.querySelector('#storage-detail-panel').textContent.includes('可用 0')`));
+ assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot(size+'-automount-detail');
+ await click('[data-resource-storage-tab="io"]');await click('[data-resource-storage-close]');await pane('apps');await pane('storage');await click('[data-storage-device="sdb"] [data-resource-storage-detail]');assert.equal(await evaluate(`document.querySelector('#storage-tab-io').getAttribute('aria-selected')`),'true');await click('[data-resource-storage-close]');
+ await evaluate(`resourcesUI.data.report.storage.mount_plans=resourcesUI.data.report.storage.mount_plans.filter(p=>p.path!=='/mnt/backup2');renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes('未配置挂载')`));
+ await evaluate(`resourcesUI.data.report.storage.mount_configuration_available=false;renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes('未发现已挂载文件系统')&&!document.querySelector('[data-storage-device="sdc"]').textContent.includes('未配置挂载')`));
+ await evaluate(`resourcesUI.data.report.storage=savedMountStorage;storageUI.detail='';storageUI.view='capacity';renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('[data-storage-device="sdb"]').textContent.includes('已挂载 · 按需挂载')`));
 }
 async function loadRefresh(){await evaluate('loadResources()');}
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof resourcesUI==='object'?resourcesUI.error:'not loaded',formError:document.querySelector('#resource-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

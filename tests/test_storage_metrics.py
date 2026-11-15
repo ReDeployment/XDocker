@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from host_metrics import atomic_json, private_directory
 from resource_monitor import report_read
-from storage_metrics import storage_sample,public_storage,_sensors,filesystem_sample
+from storage_metrics import storage_sample,public_storage,_sensors,filesystem_sample,_source_number
 from test_resource_monitor import sample_report
 
 
@@ -33,7 +33,9 @@ def storage_fixture():
         filesystems.append({'id':ids[name],'device':ids[name],'fstype':'exfat' if name=='sda2' else 'ext4',
             'mounts':[{'path':mount,'read_only':False}],'total_bytes':total,'used_bytes':used,'available_bytes':available,
             'reserved_bytes':reserved,'used_percent':25,'state':'ready'})
-    return {'state':'ready','devices':rows,'filesystems':filesystems,'limit_reached':False,'unreadable_devices':0}
+    return {'state':'ready','devices':rows,'filesystems':filesystems,'limit_reached':False,'unreadable_devices':0,
+            'mount_configuration_available':True,'mount_plans':[
+                {'device':f['device'],'path':f['mounts'][0]['path'],'fstype':f['fstype'],'mode':'on-demand' if f['device'] in (ids['sdb1'],ids['sdc1']) else 'on-boot','state':'mounted'} for f in filesystems]}
 
 
 class StorageTests(unittest.TestCase):
@@ -42,6 +44,7 @@ class StorageTests(unittest.TestCase):
         self.sys=self.root/'sys';(self.sys/'class/block').mkdir(parents=True)
         self.proc=self.root/'proc';(self.proc/'sys/kernel/random').mkdir(parents=True);(self.proc/'self').mkdir()
         (self.proc/'sys/kernel/random/boot_id').write_text('boot-one');(self.proc/'self/mountinfo').write_text('')
+        self.fstab=self.root/'fstab';self.fstab.write_text('')
 
     def device(self,name='nvme0n1',number='259:0',parent=None,kind='disk',size=4000000000):
         if parent:node=parent/name
@@ -59,7 +62,53 @@ class StorageTests(unittest.TestCase):
         return SimpleNamespace(f_blocks=1000,f_frsize=4096,f_bfree=600,f_bavail=550)
 
     def sample(self,previous=None,clock=10,reader=None):
-        return storage_sample(self.sys,self.proc,previous,clock,stat_reader=reader or self.stats)
+        return storage_sample(self.sys,self.proc,previous,clock,stat_reader=reader or self.stats,fstab=self.fstab,dev_root=self.root/'dev')
+
+    def test_configured_automount_waiting_then_mounted_without_accessing_directories(self):
+        disk=self.device();self.device('nvme0n1p3','259:3',disk,'partition')
+        self.fstab.write_text('# secret ignored\nUUID=private-id /mnt/backup\\040one ext4 nofail,x-systemd.automount,credential=secret 0 2\nUUID=private-id /manual ext4 noauto 0 2\nUUID=private-id /boot-time ext4 defaults 0 2\nserver:/share /net nfs password=secret 0 0\n')
+        self.proc.joinpath('self/mountinfo').write_text('1 0 0:40 / /mnt/backup\\040one rw - autofs systemd-1 rw\n')
+        with patch('storage_metrics._source_number',return_value='259:3'),patch('storage_metrics.subprocess.run') as command:
+            reader=unittest.mock.Mock(side_effect=self.stats)
+            waiting,_=self.sample(reader=reader);reader.assert_not_called();command.assert_not_called()
+            safe=public_storage(waiting);self.assertTrue(safe['mount_configuration_available'])
+            plans={p['path']:p for p in safe['mount_plans']}
+            self.assertEqual((plans['/mnt/backup one']['mode'],plans['/mnt/backup one']['state']),('on-demand','waiting'))
+            self.assertEqual((plans['/manual']['mode'],plans['/manual']['state']),('manual','unmounted'))
+            self.assertEqual(plans['/boot-time']['mode'],'on-boot')
+            self.assertNotIn('secret',str(safe));self.assertNotIn('private-id',str(safe))
+            self.proc.joinpath('self/mountinfo').write_text('1 0 0:40 / /mnt/backup\\040one rw - autofs systemd-1 rw\n2 0 259:3 / /mnt/backup\\040one rw - ext4 /dev/nvme0n1p3 rw\n')
+            mounted,_=self.sample(reader=reader);self.assertEqual(reader.call_args.args,('/mnt/backup one','259:3'))
+            safe=public_storage(mounted);self.assertEqual(next(p for p in safe['mount_plans'] if p['path']=='/mnt/backup one')['state'],'mounted')
+            self.assertEqual(len(safe['filesystems']),1);command.assert_not_called()
+
+    def test_mount_configuration_unavailable_limits_and_malformed_projection(self):
+        self.device();self.fstab.unlink();safe=public_storage(self.sample()[0])
+        self.assertEqual(safe['state'],'ready');self.assertFalse(safe['mount_configuration_available'])
+        self.fstab.write_text('UUID=id /configured ext4 x-systemd.automount 0 2\n')
+        with patch('storage_metrics._source_number',side_effect=PermissionError()):
+            safe=public_storage(self.sample()[0]);self.assertFalse(safe['mount_configuration_available']);self.assertEqual(safe['state'],'ready')
+        self.fstab.write_text('UUID=id /a ext4 defaults 0 2\nUUID=id /b ext4 defaults 0 2\n')
+        with patch('storage_metrics._source_number',return_value='259:0'),patch('storage_metrics.MAX_MOUNTS',1):
+            raw,_=self.sample();self.assertTrue(raw['limit_reached']);self.assertFalse(raw['mount_configuration_available'])
+        raw=storage_fixture();raw.pop('mount_plans');raw.pop('mount_configuration_available')
+        self.assertEqual(public_storage(raw)['state'],'ready');self.assertFalse(public_storage(raw)['mount_configuration_available'])
+        for mutation in ('unknown','duplicate','relative','traversal','inconsistent','waiting-on-boot'):
+            raw=storage_fixture();p=raw['mount_plans'][0]
+            if mutation=='unknown':p['device']='f'*64
+            if mutation=='duplicate':raw['mount_plans'].append(deepcopy(p))
+            if mutation=='relative':p['path']='relative'
+            if mutation=='traversal':p['path']='/mnt/../etc'
+            if mutation=='inconsistent':p['state']='unmounted'
+            if mutation=='waiting-on-boot':p.update(state='waiting',path='/idle')
+            self.assertEqual(public_storage(raw)['state'],'unavailable',mutation)
+
+    def test_local_source_resolution_does_not_open_device_or_follow_outside_dev(self):
+        dev=self.root/'dev';(dev/'disk/by-uuid').mkdir(parents=True);node=dev/'block';node.touch();(dev/'disk/by-uuid/id').symlink_to(node)
+        with patch('storage_metrics.stat.S_ISBLK',return_value=True),patch('storage_metrics.os.major',return_value=259),patch('storage_metrics.os.minor',return_value=0),patch('storage_metrics.os.open') as opened:
+            self.assertEqual(_source_number('UUID=id',dev),'259:0');self.assertEqual(_source_number('/dev/block',dev),'259:0');opened.assert_not_called()
+            self.assertIsNone(_source_number('/dev/../fstab',dev));self.assertIsNone(_source_number('UUID=../../fstab',dev));self.assertIsNone(_source_number('server:/net',dev))
+        self.assertIsNone(_source_number('/dev/block',dev))
 
     def test_topology_lvm_mount_escaping_bind_dedup_and_reserved_space(self):
         disk=self.device();part=self.device('nvme0n1p3','259:3',disk,'partition');lv=self.device('dm-1','252:1',kind='lvm')

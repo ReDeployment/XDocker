@@ -142,6 +142,7 @@ function storageNotice(s){
  const notes=[];
  if(s.limit_reached)notes.push('硬盘或挂载发现达到采集上限，当前列表可能不完整。');
  if(s.unreadable_devices||s.mounts_unavailable||s.filesystems.some(f=>f.state!=='ready'))notes.push('部分磁盘或挂载容量无法读取，缺失项显示“不可用”。');
+ if(s.mount_configuration_available===false)notes.push('挂载配置尚未确认；已挂载文件系统仍按实际采样展示。');
  if(s.devices.some(d=>d.health==='failed'))notes.push('有硬盘报告 SMART 告警，请查看硬盘详情。');
  const low=s.filesystems.filter(f=>f.state==='ready'&&f.available_bytes/f.total_bytes<.1).map(f=>f.mounts[0].path);
  if(low.length)notes.push('可用空间低于 10%：'+low.join('、'));
@@ -152,13 +153,26 @@ function storageFamily(s,id){
  for(let i=0;i<s.devices.length;i++){const old=selected.size;for(const d of s.devices)if(d.parents.some(p=>selected.has(p)))selected.add(d.id);if(old===selected.size)break;}
  return selected;
 }
+const storageMountMode=mode=>({'on-demand':'按需挂载','on-boot':'开机挂载',manual:'手动挂载'}[mode]||'');
+const storageMountState=row=>row.state==='mounted'?'已挂载'+(row.mode?' · '+storageMountMode(row.mode):''):row.state==='waiting'?'按需挂载，等待访问':'已配置'+storageMountMode(row.mode)+'，未挂载';
+function storageMountRows(s,family){
+ const plans=(s.mount_plans||[]).filter(p=>family.has(p.device));
+ const actual=s.filesystems.filter(f=>family.has(f.device)).flatMap(f=>f.mounts.map(m=>({device:f.device,path:m.path,state:'mounted',mode:plans.find(p=>p.device===f.device&&p.path===m.path)?.mode})));
+ return [...actual,...plans.filter(p=>!actual.some(a=>a.device===p.device&&a.path===p.path))];
+}
+function storageMountSummary(s,family){
+ const rows=storageMountRows(s,family);
+ if(!rows.length)return s.mount_configuration_available&&!s.limit_reached?'未配置挂载':'未发现已挂载文件系统';
+ const labels=[...new Set(rows.map(storageMountState))];
+ return labels.length===1?rows.map(m=>`<small class="resource-path">${esc(m.path)}</small>`).join('')+`<small>${esc(labels[0])}</small>`:rows.map(m=>`<small class="resource-path">${esc(m.path)}</small><small>${esc(storageMountState(m))}</small>`).join('');
+}
 function resourceStorage(s){
  if(!s?.devices.length)return `<div class="empty">${esc(storageNotice(s))}</div>`;
  const disks=s.devices.filter(d=>d.kind==='disk');
  return panel('硬盘与存储',`${disks.length} 块物理硬盘 · ${s.filesystems.length} 个已挂载文件系统；容量按层级展示，不重复相加（GiB / TiB）。`,
  table(['硬盘 / 接口','物理容量','挂载位置','读 / 写速率','健康','操作'],disks.map(d=>{
-  const family=storageFamily(s,d.id),mounts=s.filesystems.filter(f=>family.has(f.device)).flatMap(f=>f.mounts.map(m=>m.path));
-  return `<tr><td><strong>${esc(d.model)}</strong><small>${esc(d.name)} · ${esc(d.transport.toUpperCase())} · ${esc(storageKind(d))}</small></td><td>${storageBytes(d.size_bytes)}</td><td>${mounts.length?mounts.map(m=>`<small class="resource-path">${esc(m)}</small>`).join(''):'未发现挂载'}</td><td>${storageRate(d.io.read_bytes_per_second,d.io.state)}<small>${storageRate(d.io.write_bytes_per_second,d.io.state)}</small></td><td>${badge(storageHealth(d),d.health==='passed'?'good':d.health==='failed'?'warn':'')}<small>温度 ${gpuValue(d.temperature_celsius,' °C')}</small></td><td>${resourceButton('查看详情',{'storage-detail':d.id})}</td></tr>`;
+  const family=storageFamily(s,d.id);
+  return `<tr data-storage-device="${esc(d.name)}"><td><strong>${esc(d.model)}</strong><small>${esc(d.name)} · ${esc(d.transport.toUpperCase())} · ${esc(storageKind(d))}</small></td><td>${storageBytes(d.size_bytes)}</td><td>${storageMountSummary(s,family)}</td><td>${storageRate(d.io.read_bytes_per_second,d.io.state)}<small>${storageRate(d.io.write_bytes_per_second,d.io.state)}</small></td><td>${badge(storageHealth(d),d.health==='passed'?'good':d.health==='failed'?'warn':'')}<small>温度 ${gpuValue(d.temperature_celsius,' °C')}</small></td><td>${resourceButton('查看详情',{'storage-detail':d.id})}</td></tr>`;
  })))+`<p class="muted">温度和 SMART 按当前读取权限展示；未取得数据不代表硬盘健康。分区、LVM 卷及虚拟设备可在下方按需查看。</p><details class="storage-logical"><summary>分区与逻辑设备（${s.devices.length-disks.length} 个）</summary>${table(['设备','类型 / 上级','容量','操作'],s.devices.filter(d=>d.kind!=='disk').map(d=>`<tr><td>${esc(d.model)}<small>${esc(d.name)}</small></td><td>${esc(storageKind(d))}<small>${esc(d.parents.map(id=>s.devices.find(p=>p.id===id)?.name||'未知').join('、')||'未发现上级')}</small></td><td>${storageBytes(d.size_bytes)}</td><td>${resourceButton('查看详情',{'storage-detail':d.id})}</td></tr>`))}</details>`;
 }
 function renderStorageDialog(){
@@ -167,9 +181,9 @@ function renderStorageDialog(){
  const r=resourcesUI.data?.report,s=r?.storage,d=s?.devices.find(d=>d.id===storageUI.detail);
  if(!d){dialog.innerHTML='<h2>硬盘暂未发现</h2><p>设备可能已移除，请刷新服务器指标。</p>'+resourceButton('关闭',{'storage-close':'yes'});return;}
  const fresh=r.fresh&&Date.now()/1000-r.at<=90,notes=[!fresh?'采集数据已过期，当前资源占用未确认。':'',storageNotice(s)].filter(Boolean),family=storageFamily(s,d.id);
- const fs=s.filesystems.filter(f=>family.has(f.device));
+ const fs=s.filesystems.filter(f=>family.has(f.device)),pending=(s.mount_plans||[]).filter(p=>family.has(p.device)&&p.state!=='mounted');
  let body;
- if(storageUI.view==='capacity')body=`<div class="kpis resource-kpis"><article class="kpi"><div class="kpi-label">${d.kind==='disk'?'物理硬盘容量':'设备容量'}</div><strong>${storageBytes(d.size_bytes)}</strong><small>${esc(d.name)} · ${esc(storageKind(d))}</small></article><article class="kpi"><div class="kpi-label">关联文件系统</div><strong>${fs.length}</strong><small>同一文件系统的绑定挂载不重复计数</small></article></div>`+table(['挂载 / 文件系统','容量 / 可用','已用 / 使用率'],fs.map(f=>`<tr><td>${f.mounts.map(m=>`<small class="resource-path">${esc(m.path)}${m.read_only?'（只读）':''}</small>`).join('')}<small>${esc(s.devices.find(d=>d.id===f.device)?.name||'')} · ${esc(f.fstype)}</small></td><td>${storageBytes(f.total_bytes)}<small>可用 ${storageBytes(f.available_bytes)}</small></td><td>${storageBytes(f.used_bytes)}<small>${gpuValue(f.used_percent,'%')}</small>${f.state!=='ready'?badge('容量不可用','warn'):''}</td></tr>`))+`<p class="muted">文件系统容量与物理盘容量不同；“可用”扣除了文件系统保留空间。使用率按已用 /（已用 + 可用）计算，与 df 一致。未挂载分区不推测可用容量。</p>`;
+ if(storageUI.view==='capacity')body=`<div class="kpis resource-kpis"><article class="kpi"><div class="kpi-label">${d.kind==='disk'?'物理硬盘容量':'设备容量'}</div><strong>${storageBytes(d.size_bytes)}</strong><small>${esc(d.name)} · ${esc(storageKind(d))}</small></article><article class="kpi"><div class="kpi-label">已挂载文件系统</div><strong>${fs.length}</strong><small>${pending.length?`${pending.length} 个配置目录尚未挂载`:'同一文件系统的绑定挂载不重复计数'}</small></article></div>`+table(['挂载 / 文件系统','容量 / 可用','已用 / 使用率'],[...fs.map(f=>`<tr><td>${f.mounts.map(m=>`<small class="resource-path">${esc(m.path)}${m.read_only?'（只读）':''}</small><small>${esc(storageMountState({state:'mounted',mode:(s.mount_plans||[]).find(p=>p.device===f.device&&p.path===m.path)?.mode}))}</small>`).join('')}<small>${esc(s.devices.find(d=>d.id===f.device)?.name||'')} · ${esc(f.fstype)}</small></td><td>${storageBytes(f.total_bytes)}<small>可用 ${storageBytes(f.available_bytes)}</small></td><td>${storageBytes(f.used_bytes)}<small>${gpuValue(f.used_percent,'%')}</small>${f.state!=='ready'?badge('容量不可用','warn'):''}</td></tr>`),...pending.map(p=>`<tr><td><small class="resource-path">${esc(p.path)}</small><small>${esc(storageMountState(p))}</small><small>${esc(s.devices.find(d=>d.id===p.device)?.name||'')} · ${esc(p.fstype)}</small></td><td>挂载后可读取</td><td>尚未采集</td></tr>`)])+`<p class="muted">文件系统容量与物理盘容量不同；“可用”扣除了文件系统保留空间。使用率按已用 /（已用 + 可用）计算，与 df 一致。按需挂载等待访问时不推测可用容量；刷新指标不会触发挂载。</p>`;
  else body=`<div class="kpis resource-kpis">${[['读取速率',storageRate(d.io.read_bytes_per_second,d.io.state)],['写入速率',storageRate(d.io.write_bytes_per_second,d.io.state)],['读 / 写 IOPS',d.io.read_iops===null?(d.io.state==='unavailable'?'不可用':'待采样'):gpuValue(d.io.read_iops)+' / '+gpuValue(d.io.write_iops)],['I/O 忙碌时间比例',gpuValue(d.io.busy_percent,'%')]].map(([label,value])=>`<article class="kpi"><div class="kpi-label">${esc(label)}</div><strong>${esc(value)}</strong></article>`).join('')}</div><div class="stack-row"><span>温度</span><strong>${gpuValue(d.temperature_celsius,' °C')}</strong></div><div class="stack-row"><span>健康状态</span><strong>${esc(storageHealth(d))}</strong></div>${d.health_at?`<div class="stack-row"><span>健康检查采样</span><span>${date(d.health_at*1000)}</span></div>`:''}<p class="muted">${d.io.state==='ready'?`最近 ${d.io.interval_seconds} 秒的平均读写速率。`:d.io.state==='unavailable'?'无法读取这台设备的 I/O 指标。':'首次采样、设备重新接入或计数器重置后，需等待下一轮采样。'}忙碌时间比例不等同于硬盘带宽或性能上限。SMART 只读取已有状态，不启动自检。</p>`;
  dialog.innerHTML=`<div class="detail-head"><div><h2>${esc(d.model)}</h2><p class="muted">${esc(d.name)} · ${esc(d.transport.toUpperCase())} · ${date(r.at*1000)}</p></div>${resourceButton('关闭',{'storage-close':'yes'})}</div>${notes.map(n=>`<div class="resource-alert" role="alert">${esc(n)}</div>`).join('')}<div class="vertical-tabview storage-tabs"><div class="vertical-tab-list" role="tablist" aria-label="硬盘详情分区" aria-orientation="${matchMedia('(max-width:720px)').matches?'horizontal':'vertical'}">${[['capacity','容量与挂载'],['io','读写与健康']].map(([key,label])=>`<button id="storage-tab-${key}" type="button" role="tab" tabindex="${key===storageUI.view?0:-1}" aria-selected="${key===storageUI.view}" aria-controls="storage-detail-panel" class="${key===storageUI.view?'active':''}" data-resource-storage-tab="${key}">${label}</button>`).join('')}</div><section id="storage-detail-panel" role="tabpanel" aria-labelledby="storage-tab-${storageUI.view}">${body}</section></div>`;
  dialog.dataset.view=storageUI.view;if(changed){dialog.scrollTop=0;dialog.scrollLeft=0;}

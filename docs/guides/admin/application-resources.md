@@ -75,3 +75,16 @@ node tests/resource_browser_acceptance.cjs
 GPU、CPU 与原有内存历史不依赖磁盘采集成功；可选 `storage` 字段单独校验并使用字段白名单。没有 SQLite schema 迁移，也不增加分区、格式化、挂载、扩容或文件删除操作。设备当前 I/O 不写入原有 CPU/RSS 历史表。部署只更新并重启 XDocker，先备份自身 registry/同步配置和部署回执；回退到部署前固定提交后重启 XDocker 即可恢复旧页面。
 
 验收：`test_storage_metrics` 覆盖拓扑、LVM、绑定挂载去重、保留空间、扇区换算、重连/重启/计数重置、权限与 SMART 故障隔离、API 字段白名单和旧报告。`resource_browser_acceptance.cjs` 使用隔离 fixture 验证 6 个资源分区及硬盘详情的桌面/窄屏、选项保留、错误可见和无运行控制。真实部署需另行对照实机块设备与 `df`，并等待两轮采样核对 I/O；fixture 不代替真实设备验收。
+
+## 挂载配置与按需挂载（2026-11-15）
+
+物理盘列表和“容量与挂载”详情同时展示实际挂载点及 `/etc/fstab` 配置的本地块设备目录。通过 `/dev` 下的设备节点、UUID/PARTUUID/LABEL/PARTLABEL 链接关联已发现的设备，不依赖易变的 `sda` / `sdb` 名称。只读取节点元数据，不打开块设备。
+
+- “已挂载”：本次 `/proc/self/mountinfo` 已发现该设备和目录，可读取容量；按需或开机挂载方式另行显示。
+- “按需挂载，等待访问”：fstab 含 `x-systemd.automount`，对应目录存在实际 autofs 入口，但尚未发现块设备文件系统。配置语义见 [systemd.mount](https://www.freedesktop.org/software/systemd/man/latest/systemd.mount.html)。此状态不代表已经验证挂载成功，也不包含历史失败记录。
+- “已配置…，未挂载”：有配置目录，但没有匹配的实际挂载；不会把配置当成已挂载或伪造可用容量。
+- “未配置挂载”：只有配置读取完整且没有关联目录时才显示。读取失败、标识解析不完整、旧采集器或发现达到上限时保留“未发现已挂载文件系统”，同时提示配置尚未确认。
+
+采集器对配置输入限 64 KiB / 512 行，最多 128 条关联记录。报告仅新增 `mount_plans` 和 `mount_configuration_available`，不公开原始配置、设备 UUID、挂载参数或其中可能含有的凭据；旧报告保持兼容。不会 stat/open 等待挂载的目录，不执行 mount/systemctl 命令，不修改 fstab。刷新页面和采集指标均不会触发按需挂载。自定义 systemd unit 及网络文件系统不在本次配置发现范围。
+
+本次经用户授权，服务器已有的 `mnt-backup1.mount`、`mnt-backup2.mount` 已启动并核对设备 UUID、ext4 类型和容量；保留原有 fstab 按需挂载策略，未更改为开机立即挂载。部署按任务分支本地验证、推送、服务器精确 SHA 同步执行，仅重启 XDocker；两块盘上的业务文件不写入。

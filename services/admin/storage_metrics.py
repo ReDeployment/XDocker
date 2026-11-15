@@ -28,7 +28,8 @@ def _require(condition):
 
 
 def empty_storage(state='unavailable'):
-    return {'state':state,'devices':[],'filesystems':[],'limit_reached':False,'unreadable_devices':0}
+    return {'state':state,'devices':[],'filesystems':[],'mount_plans':[],
+            'mount_configuration_available':False,'limit_reached':False,'unreadable_devices':0}
 
 
 def _bounded(path, limit=1024*1024):
@@ -163,7 +164,61 @@ def filesystem_sample(proc, by_number, stat_reader=None):
     return sorted(grouped.values(),key=lambda f:f['mounts'][0]['path']),limit
 
 
-def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clock=None, stat_reader=None):
+def _source_number(source, dev_root):
+    """Resolve only local block identifiers; never open a mount directory/drive."""
+    root=Path(dev_root).resolve(strict=True)
+    if source.startswith('/dev/'):
+        path=root/source[5:]
+    else:
+        kind,separator,value=source.partition('=')
+        directory={'UUID':'by-uuid','PARTUUID':'by-partuuid','LABEL':'by-label','PARTLABEL':'by-partlabel'}.get(kind)
+        if not separator or not directory or not value or len(value)>128 or '/' in value or value in ('.','..'):return None
+        path=root/'disk'/directory/value
+    target=path.resolve(strict=True)
+    if not target.is_relative_to(root):return None
+    info=target.stat()
+    if not stat.S_ISBLK(info.st_mode):return None
+    return f'{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}'
+
+
+def mount_configuration(fstab, proc, by_number, filesystems, dev_root=Path('/dev')):
+    # fstab may contain credentials: publish neither source identifiers nor
+    # options. No stat/open on configured mountpoints (would trigger autofs).
+    text=_bounded(fstab,65536)
+    autofs=set()
+    for line in _bounded(proc/'self/mountinfo').splitlines()[:4096]:
+        fields=line.split()
+        if len(fields)<10 or '-' not in fields:continue
+        split=fields.index('-')
+        if len(fields)>split+1 and fields[split+1]=='autofs':autofs.add(_unescape(fields[4]))
+    mounted={(f['device'],m['path']) for f in filesystems for m in f['mounts']}
+    result=[];seen=set();limited=False;complete=True
+    for index,line in enumerate(text.splitlines()):
+        if index>=512:limited=True;break
+        fields=line.split()
+        if not fields or fields[0].startswith('#'):continue
+        if len(fields)<4:complete=False;continue
+        source,path,fstype=map(_unescape,fields[:3]);options=set(fields[3].split(','))
+        if fstype in ('swap','autofs') or not path.startswith('/') or not path.isprintable() or len(path)>512:continue
+        if any(part in ('.','..') for part in path.split('/')):continue
+        local=source.startswith(('/dev/','UUID=','PARTUUID=','LABEL=','PARTLABEL='))
+        if not local:continue
+        try:number=_source_number(source,dev_root)
+        except (OSError,ValueError,RuntimeError):complete=False;continue
+        if number is None:complete=False;continue
+        if number not in by_number:continue
+        device=by_number[number]['id']
+        if (device,path) in seen:continue
+        if len(result)>=MAX_MOUNTS:limited=True;break
+        seen.add((device,path))
+        mode='on-demand' if 'x-systemd.automount' in options else 'manual' if 'noauto' in options else 'on-boot'
+        state='mounted' if (device,path) in mounted else 'waiting' if mode=='on-demand' and path in autofs else 'unmounted'
+        result.append({'device':device,'path':path,'fstype':_clean(fstype,40),'mode':mode,'state':state})
+    return sorted(result,key=lambda r:(r['path'],r['device'])),limited,complete
+
+
+def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clock=None, stat_reader=None,
+                   fstab=Path('/etc/fstab'), dev_root=Path('/dev')):
     previous=previous or {};clock=time.monotonic() if clock is None else clock
     counters={'boot':'','clock':clock,'devices':{},'sensors':{}}
     result=empty_storage();budget=[4]
@@ -215,6 +270,11 @@ def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clo
         result['devices']=sorted([v[0] for v in nodes.values()],key=lambda d:(d['kind']!='disk',d['name']))
         try:result['filesystems'],limited=filesystem_sample(proc,by_number,stat_reader);result['limit_reached']|=limited
         except (OSError,ValueError,UnicodeError):result['mounts_unavailable']=True
+        try:
+            result['mount_plans'],limited,complete=mount_configuration(fstab,proc,by_number,result['filesystems'],dev_root)
+            result['mount_configuration_available']=complete and not limited and not result.get('mounts_unavailable')
+            result['limit_reached']|=limited
+        except (OSError,ValueError,UnicodeError):pass
         partial=(result['limit_reached'] or result['unreadable_devices'] or result.get('mounts_unavailable') or any(f['state']!='ready' for f in result['filesystems']) or any(d['size_bytes'] is None for d in result['devices']))
         result['state']='partial' if partial else 'ready' if nodes else 'not-detected'
         return result,counters
@@ -264,7 +324,20 @@ def public_storage(raw):
                 _require(abs(safe['used_percent']-expected)<.02)
             else:safe=dict.fromkeys(safe)
             filesystems.append({'id':row['id'],'device':row['device'],'fstype':text(row['fstype'],40),'mounts':mounts,'state':row['state'],**safe})
+        plans=[];plan_seen=set();raw_plans=raw.get('mount_plans',[])
+        _require(isinstance(raw_plans,list) and len(raw_plans)<=MAX_MOUNTS)
+        _require(type(raw.get('mount_configuration_available',False)) is bool)
+        mounted={(f['device'],m['path']) for f in filesystems for m in f['mounts']}
+        for row in raw_plans:
+            path=text(row['path'],512);device=row['device']
+            _require(device in seen and path.startswith('/') and not any(p in ('.','..') for p in path.split('/')) and (device,path) not in plan_seen)
+            _require(row['mode'] in ('on-demand','on-boot','manual') and row['state'] in ('mounted','waiting','unmounted'))
+            _require((row['state']=='mounted')==((device,path) in mounted))
+            _require(row['state']!='waiting' or row['mode']=='on-demand')
+            plan_seen.add((device,path))
+            plans.append({'device':device,'path':path,'fstype':text(row['fstype'],40),'mode':row['mode'],'state':row['state']})
         _require(raw['state'] in ('ready','partial','not-detected','unavailable','not-collected'))
         return {'state':raw['state'],'devices':devices,'filesystems':filesystems,'limit_reached':raw['limit_reached'],
+                'mount_plans':plans,'mount_configuration_available':raw.get('mount_configuration_available',False),
                 'unreadable_devices':numeric(raw.get('unreadable_devices',0)), 'mounts_unavailable':raw.get('mounts_unavailable') is True}
     except (AssertionError,KeyError,TypeError,ValueError,OverflowError):return empty_storage()
