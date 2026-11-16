@@ -72,7 +72,7 @@ def _io(raw, old, elapsed, generation):
             'busy_percent':round(min(100,delta[4]/(elapsed*1000)*100),2)},next_state
 
 
-def _sensors(name, node, root, previous, now, budget):
+def _sensors(name, node, root, previous, now, budget,allow_smart=True):
     result={'temperature_celsius':None,'health':'unavailable','health_at':None,
             'sensor':{'state':'not-collected','source':'none','alerts':[]}}
     # hwmon reads do not open the drive. Never walk unrelated system sensors.
@@ -85,6 +85,7 @@ def _sensors(name, node, root, previous, now, budget):
                 if temperature is not None: result['temperature_celsius']=temperature;break
             if result['temperature_celsius'] is not None:result['sensor']={'state':'ready','source':'hwmon','alerts':[]};break
         if result['temperature_celsius'] is not None:break
+    if not allow_smart:return result
     # SMART is optional and cached. Use the existing user's device permissions,
     # at most four 1-second reads per pass. No sudo or SMART self-test commands.
     if isinstance(previous,dict) and type(previous.get('health_at')) in (int,float) and 0<=now-previous['health_at']<60:
@@ -244,9 +245,9 @@ def storage_sample(sys_root=Path('/sys'), proc=Path('/proc'), previous=None, clo
                     generation=_text(node/'diskseq',root) or str(node.stat().st_ino)
                     io,counts=_io(_text(node/'stat',root),old.get(identifier),elapsed,generation)
                     if counts:counters['devices'][identifier]=counts
-                    sensors=_sensors(entry.name,node,root,cached.get(identifier) if old.get(identifier,{}).get('generation')==generation else None,time.time(),budget) if kind=='disk' else {'temperature_celsius':None,'health':'unavailable','health_at':None,'sensor':{'state':'not-applicable','source':'none','alerts':[]}}
+                    privileged=cached_sensor(smart,identifier,generation,time.time()) if kind=='disk' else None
+                    sensors=_sensors(entry.name,node,root,cached.get(identifier) if old.get(identifier,{}).get('generation')==generation else None,time.time(),budget,allow_smart=privileged is None) if kind=='disk' else {'temperature_celsius':None,'health':'unavailable','health_at':None,'sensor':{'state':'not-applicable','source':'none','alerts':[]}}
                     if kind=='disk':
-                        privileged=cached_sensor(smart,identifier,generation,time.time())
                         if privileged is not None:
                             if privileged['temperature_celsius'] is None and sensors['sensor']['source']=='hwmon':
                                 privileged['temperature_celsius']=sensors['temperature_celsius'];privileged['sensor']['source']='hwmon'

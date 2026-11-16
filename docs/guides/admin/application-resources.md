@@ -104,3 +104,13 @@ SMART 命令固定为 `-j -d <已批准类型> -H -A`。ATA/SAT 额外固定 `-n
 页面区分休眠、权限不足、工具缺失、不支持、超时、读取失败、缓存过期及未采集。SMART 当前故障与历史阈值/日志记录分别显示；例如历史温度越阈值显示为历史告警，不能仅凭总体 `passed=true` 隐藏。现有挂载、I/O、GPU 和进程监控不依赖 SMART 成功。无数据库迁移。
 
 部署前备份 XDocker registry、部署回执及已有 unit/config（初次安装须确认路径尚不存在）。本地测试、桌面/窄屏浏览器验收并推送后，服务器同步精确 SHA，再安装 root-owned 副本、启动独立采集服务并核对权限与缓存；仅重启 XDocker 载入新解析。回退先停用 SMART timer/service，再回到部署前已推送的 XDocker 提交并重启自身服务；保留私有缓存及备份，不操作业务数据、挂载、Docker daemon 或其他服务。
+
+## 两块备份盘的空闲停转（2026-11-16）
+
+此功能是主机的独立 systemd 策略，仅在管理员明确选择两块 SAT 备份盘并验证停转、正常访问唤醒后安装。主容器、业务项目和挂载配置无需修改。SMART 私有配置中仅给这两项增加 `idle_pause_seconds: 60`；`scripts/standby-unit.py --config <私有配置>` 渲染 `xdocker-standby.service`，使用稳定 by-id，默认其他盘停转时间为 0，两块选中盘各为 1800 秒。策略不运行备份、不卸载文件系统、不执行 ATA SLEEP；正常文件访问唤醒 standby，首次读取可能等待数秒。已有写入期间不得进行手动停转测试。
+
+该 unit 固定使用 [adelolmo/hd-idle v1.21](https://github.com/adelolmo/hd-idle/tree/v1.21) 的 ATA 模式。Ubuntu Noble 自带的 C 1.05 不支持 `-c ata`，不能混用参数；本次双盘 USB 盒的 SCSI STOP 测试不能可靠隔离目标盘，ATA STANDBY 测试已验证指定盘停转且另一块保持活动。部署须下载固定上游版本、记录源码提交及构建后二进制 SHA256，并把二进制安装为 root-owned `/usr/local/lib/xdocker-standby/hd-idle-1.21`；不得从用户可写目录以 root 长期执行。不要同时启动发行版的全盘 `hd-idle.service`。unit 只授权选中两台设备，绑定对应 device unit，设备消失时退出；重新插入后需核对别名并重新启动策略，开机由 multi-user.target 启动。
+
+SMART oneshot 只读取内核 `/sys/class/block/*/stat` 判断空闲，连续无 I/O 60 秒后暂停选中盘的 SMART 命令，包括电源状态查询；后续实际读写才恢复采集。活动盘仍使用固定 `-n standby,3,5`，不启动自检。原始计数、单调时间和设备代际仅保存在 root-owned 私有缓存，同一启动/同一代际才复用；计数变化、设备替换和重启重新判定。暂停状态每轮更新观测时间，页面明确显示“空闲，暂停 SMART 采集”和有时间戳的“上次温度”，不把上次读数冒充当前温度，也不凭无 I/O 宣称已休眠；上次 SMART 历史告警或故障继续可见。普通采集器读取此缓存时不再额外执行 SMART 回退查询。
+
+验收分别记录：手动停转后已有文件的直接读取、内容一致且文件未修改、另一盘保持活动；真实 30 分钟无 I/O 后 daemon 日志和一次电源状态核对；正常访问后的唤醒；systemd enabled/active 与设备权限。缩短超时测试不能代替真实 1800 秒验证，未实际重启机器时不得声称完成重启验收。回退先停用并禁用 `xdocker-standby.service`，恢复原 SMART 私有配置、固定版本 helper 和 unit，再恢复 timer；无需修改分区、fstab、业务目录或数据库。备份、设备别名及测试文件名不提交 Git。

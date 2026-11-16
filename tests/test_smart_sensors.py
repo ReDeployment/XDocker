@@ -81,6 +81,50 @@ class SmartTests(unittest.TestCase):
             with patch('smart_sensors.device_identity',side_effect=[(Path('/dev/sda'),'a'*64,'12'),(Path('/dev/sda'),'a'*64,'13')]),patch('smart_sensors.probe',return_value=sensor('sleeping',100)):
                 result=collect_smart(config,proc=proc);self.assertEqual(result['devices'],{});self.assertEqual(result['errors'],['device-unavailable'])
 
+    def test_idle_policy_uses_kernel_counters_and_resumes_only_after_io(self):
+        config={'schema':1,'devices':[{'path':'/dev/disk/by-id/usb-fixture','type':'sat','idle_pause_seconds':60}]}
+        identity='a'*64;device=Path('/dev/sda')
+        with tempfile.TemporaryDirectory() as tmp:
+            proc=Path(tmp);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'sys/kernel/random/boot_id').write_text('boot-one')
+            with patch('smart_sensors.device_identity',return_value=(device,identity,'12')),patch('smart_sensors.io_activity',return_value=([1,8,1,8,0,0,0],False)),patch('smart_sensors.time.time',return_value=100),patch('smart_sensors.probe',return_value=parse_smart(payload(32),32,100)) as run:
+                first=collect_smart(config,proc=proc,clock=1000);self.assertEqual(run.call_count,1)
+                idle=collect_smart(config,proc=proc,previous=first,clock=1061);self.assertEqual(run.call_count,1)
+                row=cached_sensor(idle['devices'],identity,'12',101);self.assertIsNone(row['temperature_celsius']);self.assertIsNone(row['health_at'])
+                self.assertEqual(row['sensor']['state'],'idle-paused');self.assertEqual(row['sensor']['last']['temperature_celsius'],42)
+                self.assertEqual(row['sensor']['last']['health'],'warning')
+                again=collect_smart(config,proc=proc,previous=idle,clock=3000);self.assertEqual(run.call_count,1);self.assertEqual(again['devices'][identity]['sensor']['last']['at'],100)
+                with patch('smart_sensors.io_activity',return_value=([2,16,1,8,0,0,0],False)):
+                    active=collect_smart(config,proc=proc,previous=again,clock=3010);self.assertEqual(run.call_count,2);self.assertEqual(active['devices'][identity]['sensor']['state'],'ready')
+                with patch('smart_sensors.io_activity',return_value=([1,8,1,8,0,0,0],True)):
+                    collect_smart(config,proc=proc,previous=first,clock=4000);self.assertEqual(run.call_count,3)
+                (proc/'sys/kernel/random/boot_id').write_text('boot-two');collect_smart(config,proc=proc,previous=idle,clock=4001);self.assertEqual(run.call_count,4)
+        for pause in (True,0,59,1801):
+            bad=deepcopy(config);bad['devices'][0]['idle_pause_seconds']=pause
+            with self.assertRaises(ValueError):validate_config(bad)
+
+    def test_selected_standby_unit_uses_stable_ids_and_defaults_others_off(self):
+        path=Path(__file__).resolve().parents[1]/'scripts/standby-unit.py';spec=importlib.util.spec_from_file_location('standby_unit',path);unit=importlib.util.module_from_spec(spec);spec.loader.exec_module(unit)
+        config={'schema':1,'devices':[{'path':'/dev/disk/by-id/usb-one','type':'sat','idle_pause_seconds':60},{'path':'/dev/disk/by-id/usb-two','type':'sat','idle_pause_seconds':60},{'path':'/dev/disk/by-id/usb-archive','type':'sat'}]}
+        text=unit.render(config)
+        self.assertIn('/usr/local/lib/xdocker-standby/hd-idle-1.21 -i 0 -c ata -s 0',text);self.assertEqual(text.count('-i 1800'),2);self.assertNotIn('usb-archive',text)
+        self.assertIn('BindsTo=dev-disk-by\\x2did-usb\\x2done.device',text);self.assertEqual(text.count('DeviceAllow='),2)
+        self.assertEqual(text.count('-c ata'),3);self.assertIn('ProtectSystem=strict',text)
+        with self.assertRaises(ValueError):unit.render(config,seconds=30)
+        config['devices'][2]['idle_pause_seconds']=60
+        with self.assertRaises(ValueError):unit.render(config)
+
+    def test_smart_counter_increments_do_not_keep_the_monitor_awake(self):
+        config={'schema':1,'devices':[{'path':'/dev/disk/by-id/usb-fixture','type':'sat','idle_pause_seconds':60}]}
+        identity='a'*64
+        with tempfile.TemporaryDirectory() as tmp:
+            proc=Path(tmp);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'sys/kernel/random/boot_id').write_text('boot-one')
+            with patch('smart_sensors.device_identity',return_value=(Path('/dev/sda'),identity,'12')),patch('smart_sensors.probe',return_value=parse_smart(payload(),0,100)) as probe_call:
+                with patch('smart_sensors.io_activity',side_effect=[([1,8,1,8,0,0,0],False),([2,16,1,8,0,0,0],False)]):
+                    active=collect_smart(config,proc=proc,clock=1000)
+                with patch('smart_sensors.io_activity',return_value=([2,16,1,8,0,0,0],False)):
+                    idle=collect_smart(config,proc=proc,previous=active,clock=1061)
+                self.assertEqual(probe_call.call_count,1);self.assertEqual(idle['devices'][identity]['sensor']['state'],'idle-paused')
+
     def test_public_sensor_whitelist_and_hardened_root_unit(self):
         raw=storage_fixture();raw['devices'][0].update(health='warning',temperature_celsius=42,sensor={'state':'ready','source':'smart','alerts':['past-temperature-threshold'],'raw_serial':'PRIVATE'})
         safe=public_storage(raw);self.assertEqual(safe['devices'][0]['sensor']['alerts'],['past-temperature-threshold']);self.assertNotIn('PRIVATE',str(safe))

@@ -6,6 +6,7 @@ on:
       - scripts/admin.sh
       - scripts/host-monitor*.py
       - scripts/smart-monitor*.py
+      - scripts/standby-unit.py
       - scripts/admin-native*.py
       - scripts/service-hub.py
       - scripts/repair-powerxdocs-loopback.py

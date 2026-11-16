@@ -96,6 +96,16 @@ async function checkSmartStates(size){
  assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('曾有温度越阈值记录')&&document.querySelector('#storage-detail-panel').textContent.includes('42.0 °C')`));
  assert(await evaluate(`document.querySelector('#storage-detail-panel .stack-row').getBoundingClientRect().bottom<=innerHeight`),'Temperature is below the viewport');
  assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot(size+'-smart-sensors');await click('[data-resource-storage-close]');
+ await evaluate(`(()=>{const d=resourcesUI.data.report.storage.devices.find(d=>d.name==='sdb');d.health='unavailable';d.temperature_celsius=null;d.health_at=null;d.sensor={state:'idle-paused',source:'smart',alerts:[],last:{at:Date.now()/1000-3600,temperature_celsius:42,health:'warning',alerts:['past-temperature-threshold']}};renderResourcesPage()})()`);
+ assert(await evaluate(`(()=>{const t=document.querySelector('[data-storage-device="sdb"]').textContent;return t.includes('空闲，暂停 SMART 采集')&&t.includes('上次温度 42.0 °C')&&!t.includes('0.0 °C')&&!t.includes('SMART 通过')})()`));
+ await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('SMART 历史告警')`));await pane('storage');
+ await click('[data-storage-device="sdb"] [data-resource-storage-detail]');
+ assert.equal(await evaluate(`document.querySelector('#storage-tab-io').getAttribute('aria-selected')`),'true');
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('上次温度 42.0 °C')&&document.querySelector('#storage-detail-panel').textContent.includes('空闲，暂停读取')`));
+ assert(await evaluate(`document.querySelector('#storage-detail-panel .stack-row').getBoundingClientRect().bottom<=innerHeight`));
+ await shot(size+'-smart-idle-paused');await click('[data-resource-storage-close]');
+ await evaluate(`resourcesUI.data.report.storage.devices.find(d=>d.name==='sdb').sensor.last.health='failed';renderResourcesPage()`);
+ assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('有硬盘报告 SMART 告警')`));
  for(const [state,label] of [['permission-denied','SMART 读取权限不足'],['stale','SMART 采样已过期'],['timeout','SMART 读取超时']]){
   await evaluate(`resourcesUI.data.report.storage.devices.find(d=>d.name==='sdc').sensor.state=${JSON.stringify(state)};renderResourcesPage()`);
   assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes(${JSON.stringify(label)})`));

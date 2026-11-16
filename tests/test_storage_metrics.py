@@ -191,6 +191,17 @@ class StorageTests(unittest.TestCase):
                 run.return_value=SimpleNamespace(stdout=output,returncode=0)
                 self.assertEqual(_sensors('null',node,self.sys,None,100,[4])['health'],'unavailable')
 
+    def test_idle_cache_retains_historical_reading_without_fallback_probe(self):
+        node=self.device();raw,_=self.sample();identity=raw['devices'][0]['id']
+        cache={identity:{'generation':'10','observed_at':1000,'health_at':None,'temperature_celsius':None,'health':'unavailable',
+            'sensor':{'state':'idle-paused','source':'smart','alerts':[],
+                'last':{'at':100,'temperature_celsius':42,'health':'warning','alerts':['past-temperature-threshold']}}}}
+        with patch('storage_metrics.read_cache',return_value=(cache,'ready')),patch('storage_metrics.time.time',return_value=1001),patch('storage_metrics.os.access',return_value=True),patch('storage_metrics.probe') as run:
+            row=public_storage(self.sample()[0])['devices'][0]
+            run.assert_not_called();self.assertIsNone(row['temperature_celsius']);self.assertIsNone(row['health_at'])
+            self.assertEqual(row['sensor']['state'],'idle-paused');self.assertEqual(row['sensor']['last']['at'],100)
+            self.assertEqual(row['sensor']['last']['health'],'warning')
+
     def test_public_projection_legacy_failures_do_not_suppress_other_resources(self):
         root=private_directory(self.root/'reports');report=sample_report()
         atomic_json(root/'report.json',report);self.assertEqual(report_read(root)['storage']['state'],'not-collected')
