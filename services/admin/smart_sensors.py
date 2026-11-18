@@ -130,14 +130,8 @@ def io_activity(device,sys_root):
     return [values[i] if i<len(values) else 0 for i in (0,2,4,6,11,13,15)],values[8]>0
 
 
-def transport_blocked(device,sys_root=Path('/sys')):
-    """Known Ultra Touch UAS ATA filter, detected without querying the disk.
-
-    Linux uas-detect.h sets US_FL_NO_ATA_1X for Seagate USB devices. Scope
-    this exception to the exact USB model validated on the deployed host.
-    An explicit matching module-parameter override defers to normal probing.
-    Never publish USB identifiers, driver paths, or the private configuration.
-    """
+def usb_transport(device,sys_root=Path('/sys')):
+    """Read cached kernel topology only; never open a physical disk."""
     root=Path(sys_root).resolve(strict=True)
     node=(root/'class/block'/device.name).resolve(strict=True)
     if not node.is_relative_to(root):raise ValueError('XD_SMART_DEVICE_INVALID')
@@ -151,6 +145,16 @@ def transport_blocked(device,sys_root=Path('/sys')):
         if (parent/'idVendor').exists() and (parent/'idProduct').exists():
             usb=((parent/'idVendor').read_text().strip().lower(),(parent/'idProduct').read_text().strip().lower())
             break
+    return uas,usb
+
+
+def transport_blocked(device,sys_root=Path('/sys'),metadata=None):
+    """Known Ultra Touch UAS ATA filter, without issuing disk commands.
+
+    Explicit matching module overrides defer to ordinary, power-guarded SAT.
+    Identifiers and configuration remain private to this root-owned helper.
+    """
+    root=Path(sys_root);uas,usb=usb_transport(device,sys_root) if metadata is None else metadata
     if not uas or usb!=('0bc2','2065'):return False
     try:quirks=(root/'module/usb_storage/parameters/quirks').read_text()
     except FileNotFoundError:quirks=''
@@ -172,7 +176,10 @@ def collect_smart(config,sys_root=Path('/sys'),dev_root=Path('/dev'),proc=Path('
     for row in config['devices']:
         try:
             device,identity,generation=device_identity(row['path'],row['type'],sys_root,dev_root)
-            now=time.time();pause=row.get('idle_pause_seconds');idle=False
+            metadata=usb_transport(device,sys_root) if row['type']=='sat' else (False,None)
+            # Ultra Touch has its own firmware standby policy. Stop SMART
+            # polling after kernel I/O is idle, without adding it to hd-idle.
+            now=time.time();pause=row.get('idle_pause_seconds',60 if metadata[1]==('0bc2','2065') else None);idle=False
             if pause is not None:
                 counts,busy=io_activity(device,sys_root);before=old.get(identity,{})
                 last_io=before.get('last_io') if isinstance(before,dict) else None
@@ -183,7 +190,7 @@ def collect_smart(config,sys_root=Path('/sys'),dev_root=Path('/dev'),proc=Path('
             # The affected UAS transport rejects ATA IDENTIFY and may make
             # CHECK POWER MODE look like SLEEP even after real reads. This is
             # not power-state evidence; do not query it or declare it healthy.
-            blocked=row['type']=='sat' and transport_blocked(device,sys_root)
+            blocked=row['type']=='sat' and transport_blocked(device,sys_root,metadata)
             value=sensor('transport-blocked') if blocked else sensor('idle-paused') if idle else probe(device,row['type'],now)
             if pause is not None and not idle:
                 # Exclude the SMART command's own block-counter increments.

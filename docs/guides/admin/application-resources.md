@@ -121,6 +121,8 @@ SMART oneshot 只读取内核 `/sys/class/block/*/stat` 判断空闲，连续无
 
 固定采集 helper 仅对这一已验证 USB ID、当前 `uas` 祖先驱动及未覆盖此保护的情况返回 `transport-blocked`，在发出 SMART 命令之前短路。识别只读 sysfs；不读取挂载目录、打开物理设备或修改内核参数。匹配的显式 `usb_storage.quirks` 参数按内核 `t` 标志判定；转换为 `usb-storage` 驱动后恢复原固定 SAT 读取路径。其他 USB ID、NVMe 和两块备份盘不受影响。缓存和 API 保留既有白名单、设备代际、上次读数及历史告警，不推断磁盘当前处于休眠或健康。页面列表与详情显示接口限制和电源状态未确认，在其他资源分区也保留提示。
 
-真实温度恢复需要单独维护窗口：先确认 `/mnt/archive` 的实际源、稳定 by-id、唯一 USB 接口、无占用进程和无进行中写入；备份原模块参数、modprobe 配置、挂载/自动挂载状态及部署回执。只针对 `0bc2:2065` 合并 `usb-storage.quirks=0bc2:2065:u`，临时停止该盘的 automount 并正常卸载，重绑该接口到 usb-storage，再恢复原挂载方式。禁止强制卸载、卸载整个 uas/usb_storage 模块、操作其他盘或自动重启主机。若任一步失败，恢复原参数/驱动和原挂载状态后停止；必须在真实 SAT 温度读取和缓存/API/UI 核对成功后才宣告温度恢复。切换有短暂离线和性能取舍，需获得明确的维护授权，本文和页面修正不代表该切换已经执行。
+真实温度恢复需要仅针对该盘的维护窗口：先确认 `/mnt/archive` 的实际源、稳定 by-id、唯一 USB 接口、无占用进程和无进行中写入，备份原模块参数、modprobe 配置、挂载状态及部署回执。实机的 BOT/usb-storage 模式未完成磁盘枚举并已回退，最终兼容路径保留 UAS，只为已验证的 `0bc2:2065` 配置匹配条目 `usb-storage.quirks=0bc2:2065:`，覆盖默认的 ATA 透传过滤。该覆盖是逐设备的，不卸载模块或改变其他 USB 设备。正常停止该盘 automount、卸载归档盘后，重新绑定其接口，核对同一设备的首块只读摘要、真实 SAT 温度与健康状态，再恢复原挂载。仅在验证成功后持久化 modprobe 配置；若 usb_storage 在 initramfs 内，还需先备份当前内核 initrd，再更新并确认新配置已包含其中。任何阶段失败均恢复原参数/驱动与挂载，禁止强制卸载、格式化、操作其他盘或自动重启主机。
+
+该型号恢复 SAT 后按内核 I/O 自动启用 60 秒空闲停采，保留温度历史及时间戳；此采集策略不把 Ultra Touch 加入两块备份盘的 hd-idle 停转策略。只有真实 SAT 读数、缓存、API、页面及原挂载核对成功，才宣告温度恢复。已有维护授权不等于完成主机重启验收，必须分别记录。
 
 依据：[Linux 6.8 uas-detect.h](https://github.com/torvalds/linux/blob/v6.8/drivers/usb/storage/uas-detect.h)、[uas.c](https://github.com/torvalds/linux/blob/v6.8/drivers/usb/storage/uas.c)、[Seagate USB compatibility](https://github.com/Seagate/openSeaChest/wiki/USB-Bridge-Limitations)。厂商诊断包固定为 v26.03.2 Linux x86_64 portable，归档 SHA256 `f6f97003e12059cc9176f8d6e56151180cc914475d3228fe51ed3c09c1eb4943`，Basics 二进制 SHA256 `03920bad347c4b52f64ebfe964ec204412fdc5e1c0a84528aed63bb79c4d6a1a`。仅安装 root-owned 诊断副本并使用已审核的只读选项，不加入定时器或给主服务增加设备权限。部署先备份自身数据，按精确已推送 SHA 更新 helper 和 XDocker；软件回退恢复上一 helper/unit/提交，不改变归档盘驱动。

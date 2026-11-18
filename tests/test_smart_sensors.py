@@ -78,7 +78,7 @@ class SmartTests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_config(r)
         with tempfile.TemporaryDirectory() as tmp:
             proc=Path(tmp);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'sys/kernel/random/boot_id').write_text('boot-one')
-            with patch('smart_sensors.device_identity',side_effect=[(Path('/dev/sda'),'a'*64,'12'),(Path('/dev/sda'),'a'*64,'13')]),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.probe',return_value=sensor('sleeping',100)):
+            with patch('smart_sensors.device_identity',side_effect=[(Path('/dev/sda'),'a'*64,'12'),(Path('/dev/sda'),'a'*64,'13')]),patch('smart_sensors.usb_transport',return_value=(False,None)),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.probe',return_value=sensor('sleeping',100)):
                 result=collect_smart(config,proc=proc);self.assertEqual(result['devices'],{});self.assertEqual(result['errors'],['device-unavailable'])
 
     def test_idle_policy_uses_kernel_counters_and_resumes_only_after_io(self):
@@ -86,7 +86,7 @@ class SmartTests(unittest.TestCase):
         identity='a'*64;device=Path('/dev/sda')
         with tempfile.TemporaryDirectory() as tmp:
             proc=Path(tmp);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'sys/kernel/random/boot_id').write_text('boot-one')
-            with patch('smart_sensors.device_identity',return_value=(device,identity,'12')),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.io_activity',return_value=([1,8,1,8,0,0,0],False)),patch('smart_sensors.time.time',return_value=100),patch('smart_sensors.probe',return_value=parse_smart(payload(32),32,100)) as run:
+            with patch('smart_sensors.device_identity',return_value=(device,identity,'12')),patch('smart_sensors.usb_transport',return_value=(False,None)),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.io_activity',return_value=([1,8,1,8,0,0,0],False)),patch('smart_sensors.time.time',return_value=100),patch('smart_sensors.probe',return_value=parse_smart(payload(32),32,100)) as run:
                 first=collect_smart(config,proc=proc,clock=1000);self.assertEqual(run.call_count,1)
                 idle=collect_smart(config,proc=proc,previous=first,clock=1061);self.assertEqual(run.call_count,1)
                 row=cached_sensor(idle['devices'],identity,'12',101);self.assertIsNone(row['temperature_celsius']);self.assertIsNone(row['health_at'])
@@ -118,7 +118,7 @@ class SmartTests(unittest.TestCase):
         identity='a'*64
         with tempfile.TemporaryDirectory() as tmp:
             proc=Path(tmp);(proc/'sys/kernel/random').mkdir(parents=True);(proc/'sys/kernel/random/boot_id').write_text('boot-one')
-            with patch('smart_sensors.device_identity',return_value=(Path('/dev/sda'),identity,'12')),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.probe',return_value=parse_smart(payload(),0,100)) as probe_call:
+            with patch('smart_sensors.device_identity',return_value=(Path('/dev/sda'),identity,'12')),patch('smart_sensors.usb_transport',return_value=(False,None)),patch('smart_sensors.transport_blocked',return_value=False),patch('smart_sensors.probe',return_value=parse_smart(payload(),0,100)) as probe_call:
                 with patch('smart_sensors.io_activity',side_effect=[([1,8,1,8,0,0,0],False),([2,16,1,8,0,0,0],False)]):
                     active=collect_smart(config,proc=proc,clock=1000)
                 with patch('smart_sensors.io_activity',return_value=([2,16,1,8,0,0,0],False)):
@@ -130,7 +130,7 @@ class SmartTests(unittest.TestCase):
             root=Path(tmp);sys=root/'sys';proc=root/'proc';usb=sys/'devices/usb2/2-2';interface=usb/'2-2:1.0';node=interface/'host1/block/sdc'
             node.mkdir(parents=True);(sys/'class/block').mkdir(parents=True);(sys/'class/block/sdc').symlink_to(node)
             for driver in ('uas','usb-storage'):(sys/'bus/usb/drivers'/driver).mkdir(parents=True)
-            (interface/'driver').symlink_to(sys/'bus/usb/drivers/uas');(usb/'idVendor').write_text('0bc2');(usb/'idProduct').write_text('2065')
+            (interface/'driver').symlink_to(sys/'bus/usb/drivers/uas');(node/'stat').write_text('1 0 8 0 0 0 0 0 0 0 0');(usb/'idVendor').write_text('0bc2');(usb/'idProduct').write_text('2065')
             quirks=sys/'module/usb_storage/parameters/quirks';quirks.parent.mkdir(parents=True);quirks.write_text('')
             device=Path('/dev/sdc');self.assertTrue(transport_blocked(device,sys))
             for text,blocked in [('174c:1356:u',True),('0bc2:2065:t',True),('0bc2:2065:u',False)]:
@@ -144,8 +144,10 @@ class SmartTests(unittest.TestCase):
                 self.assertEqual(row['sensor']['state'],'transport-blocked');self.assertIsNone(row['temperature_celsius']);self.assertIsNone(row['health_at']);self.assertEqual(row['health'],'unavailable')
                 self.assertEqual(row['sensor']['last']['temperature_celsius'],42)
                 (interface/'driver').unlink();(interface/'driver').symlink_to(sys/'bus/usb/drivers/usb-storage')
-                run.return_value=parse_smart(payload(),0,100);row=collect_smart(config,sys_root=sys,proc=proc)['devices'][identity]
+                run.return_value=parse_smart(payload(),0,100);active=collect_smart(config,sys_root=sys,proc=proc,clock=1000);row=active['devices'][identity]
                 self.assertEqual(run.call_count,1);self.assertEqual(row['temperature_celsius'],42)
+                paused=collect_smart(config,sys_root=sys,proc=proc,previous=active,clock=1061)['devices'][identity]
+                self.assertEqual(run.call_count,1);self.assertEqual(paused['sensor']['state'],'idle-paused');self.assertEqual(paused['sensor']['last']['temperature_celsius'],42)
             (interface/'driver').unlink();(interface/'driver').symlink_to(sys/'bus/usb/drivers/uas')
             (usb/'idVendor').write_text('174c');self.assertFalse(transport_blocked(device,sys))
             (usb/'idVendor').write_text('0bc2');(usb/'idProduct').write_text('9999');self.assertFalse(transport_blocked(device,sys))
