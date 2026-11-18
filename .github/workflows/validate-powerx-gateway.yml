@@ -1,0 +1,36 @@
+name: Validate PowerX gateway routing
+
+on:
+  pull_request:
+    paths:
+      - apps/powerx/gateway.conf
+      - nginx/powerx-http.conf.template
+      - nginx/powerx-https.conf.template
+      - tests/test_powerx_gateway.py
+      - .github/workflows/validate-powerx-gateway.yml
+  push:
+    paths:
+      - apps/powerx/gateway.conf
+      - nginx/powerx-http.conf.template
+      - nginx/powerx-https.conf.template
+      - tests/test_powerx_gateway.py
+      - .github/workflows/validate-powerx-gateway.yml
+
+permissions:
+  contents: read
+
+jobs:
+  routes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Verify HTTP and HTTPS upstream routing with Nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nginx
+          command -v nginx
+          command -v openssl
+          PYTHONPATH=tests python3 -B -m unittest -v test_powerx_gateway
