@@ -114,3 +114,13 @@ SMART 命令固定为 `-j -d <已批准类型> -H -A`。ATA/SAT 额外固定 `-n
 SMART oneshot 只读取内核 `/sys/class/block/*/stat` 判断空闲，连续无 I/O 60 秒后暂停选中盘的 SMART 命令，包括电源状态查询；后续实际读写才恢复采集。活动盘仍使用固定 `-n standby,3,5`，不启动自检。原始计数、单调时间和设备代际仅保存在 root-owned 私有缓存，同一启动/同一代际才复用；计数变化、设备替换和重启重新判定。暂停状态每轮更新观测时间，页面明确显示“空闲，暂停 SMART 采集”和有时间戳的“上次温度”，不把上次读数冒充当前温度，也不凭无 I/O 宣称已休眠；上次 SMART 历史告警或故障继续可见。普通采集器读取此缓存时不再额外执行 SMART 回退查询。
 
 验收分别记录：手动停转后已有文件的直接读取、内容一致且文件未修改、另一盘保持活动；真实 30 分钟无 I/O 后 daemon 日志和一次电源状态核对；正常访问后的唤醒；systemd enabled/active 与设备权限。缩短超时测试不能代替真实 1800 秒验证，未实际重启机器时不得声称完成重启验收。回退先停用并禁用 `xdocker-standby.service`，恢复原 SMART 私有配置、固定版本 helper 和 unit，再恢复 timer；无需修改分区、fstab、业务目录或数据库。备份、设备别名及测试文件名不提交 Git。
+
+## Ultra Touch 的 UAS 透传限制（2026-11-18）
+
+实机 Seagate Ultra Touch HDD（USB `0bc2:2065`）使用 Linux 6.8 的 `uas` 驱动。该内核在 `uas-detect.h` 为 Seagate USB 设置 `US_FL_NO_ATA_1X`，`uas.c` 拒绝 ATA 12/16 字节透传，返回 invalid CDB。这使 `smartctl -d sat` 的识别/属性读取失败，电源模式检查甚至可能在一次成功的数据读取后仍报告 SLEEP。Seagate 官方 openSeaChest v26.03.2 的只读 deviceInfo/SATInfo 在本机也未取得温度；它把温度标为 Not Reported，不能用通用 SCSI 返回的 0°C 代替真实温度。
+
+固定采集 helper 仅对这一已验证 USB ID、当前 `uas` 祖先驱动及未覆盖此保护的情况返回 `transport-blocked`，在发出 SMART 命令之前短路。识别只读 sysfs；不读取挂载目录、打开物理设备或修改内核参数。匹配的显式 `usb_storage.quirks` 参数按内核 `t` 标志判定；转换为 `usb-storage` 驱动后恢复原固定 SAT 读取路径。其他 USB ID、NVMe 和两块备份盘不受影响。缓存和 API 保留既有白名单、设备代际、上次读数及历史告警，不推断磁盘当前处于休眠或健康。页面列表与详情显示接口限制和电源状态未确认，在其他资源分区也保留提示。
+
+真实温度恢复需要单独维护窗口：先确认 `/mnt/archive` 的实际源、稳定 by-id、唯一 USB 接口、无占用进程和无进行中写入；备份原模块参数、modprobe 配置、挂载/自动挂载状态及部署回执。只针对 `0bc2:2065` 合并 `usb-storage.quirks=0bc2:2065:u`，临时停止该盘的 automount 并正常卸载，重绑该接口到 usb-storage，再恢复原挂载方式。禁止强制卸载、卸载整个 uas/usb_storage 模块、操作其他盘或自动重启主机。若任一步失败，恢复原参数/驱动和原挂载状态后停止；必须在真实 SAT 温度读取和缓存/API/UI 核对成功后才宣告温度恢复。切换有短暂离线和性能取舍，需获得明确的维护授权，本文和页面修正不代表该切换已经执行。
+
+依据：[Linux 6.8 uas-detect.h](https://github.com/torvalds/linux/blob/v6.8/drivers/usb/storage/uas-detect.h)、[uas.c](https://github.com/torvalds/linux/blob/v6.8/drivers/usb/storage/uas.c)、[Seagate USB compatibility](https://github.com/Seagate/openSeaChest/wiki/USB-Bridge-Limitations)。厂商诊断包固定为 v26.03.2 Linux x86_64 portable，归档 SHA256 `f6f97003e12059cc9176f8d6e56151180cc914475d3228fe51ed3c09c1eb4943`，Basics 二进制 SHA256 `03920bad347c4b52f64ebfe964ec204412fdc5e1c0a84528aed63bb79c4d6a1a`。仅安装 root-owned 诊断副本并使用已审核的只读选项，不加入定时器或给主服务增加设备权限。部署先备份自身数据，按精确已推送 SHA 更新 helper 和 XDocker；软件回退恢复上一 helper/unit/提交，不改变归档盘驱动。

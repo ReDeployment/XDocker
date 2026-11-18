@@ -110,6 +110,12 @@ async function checkSmartStates(size){
   await evaluate(`resourcesUI.data.report.storage.devices.find(d=>d.name==='sdc').sensor.state=${JSON.stringify(state)};renderResourcesPage()`);
   assert(await evaluate(`document.querySelector('[data-storage-device="sdc"]').textContent.includes(${JSON.stringify(label)})`));
  }
+ await evaluate(`(()=>{const d=resourcesUI.data.report.storage.devices.find(d=>d.name==='sdc');d.temperature_celsius=null;d.health='unavailable';d.sensor={state:'transport-blocked',source:'smart',alerts:[]};renderResourcesPage()})()`);
+ assert(await evaluate(`(()=>{const t=document.querySelector('[data-storage-device="sdc"]').textContent;return t.includes('USB 驱动限制')&&t.includes('电源状态未确认')&&!t.includes('休眠')&&!t.includes('0.0 °C')&&!t.includes('SMART 通过')})()`));
+ await pane('apps');assert(await evaluate(`document.querySelector('.resource-workspace').textContent.includes('温度与电源状态未确认')`));await pane('storage');
+ await click('[data-storage-device="sdc"] [data-resource-storage-detail]');await click('[data-resource-storage-tab="io"]');
+ assert(await evaluate(`document.querySelector('#storage-detail-panel').textContent.includes('电源状态未确认')&&document.querySelector('#storage-detail-panel .stack-row').getBoundingClientRect().bottom<=innerHeight`));
+ assert(await evaluate(`document.querySelector('#storage-dialog').scrollWidth<=document.querySelector('#storage-dialog').clientWidth+2`));await shot(size+'-smart-transport-blocked');await click('[data-resource-storage-close]');
  await evaluate(`resourcesUI.data.report.storage=savedSensorStorage;storageUI.detail='';storageUI.view='capacity';renderResourcesPage()`);
 }
 async function checkIdleMounts(size){

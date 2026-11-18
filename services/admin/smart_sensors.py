@@ -18,7 +18,7 @@ import time
 CACHE=Path('/var/lib/xdocker-smart/report.json')
 CONFIG=Path('/etc/xdocker-smart/devices.json')
 MAX_DEVICES=8
-STATES=('ready','sleeping','idle-paused','unsupported','permission-denied','timeout','read-error','tool-missing','stale','not-collected','not-applicable')
+STATES=('ready','sleeping','idle-paused','transport-blocked','unsupported','permission-denied','timeout','read-error','tool-missing','stale','not-collected','not-applicable')
 ALERTS=('past-temperature-threshold','past-attribute-threshold','error-log','self-test-log')
 
 
@@ -130,6 +130,37 @@ def io_activity(device,sys_root):
     return [values[i] if i<len(values) else 0 for i in (0,2,4,6,11,13,15)],values[8]>0
 
 
+def transport_blocked(device,sys_root=Path('/sys')):
+    """Known Ultra Touch UAS ATA filter, detected without querying the disk.
+
+    Linux uas-detect.h sets US_FL_NO_ATA_1X for Seagate USB devices. Scope
+    this exception to the exact USB model validated on the deployed host.
+    An explicit matching module-parameter override defers to normal probing.
+    Never publish USB identifiers, driver paths, or the private configuration.
+    """
+    root=Path(sys_root).resolve(strict=True)
+    node=(root/'class/block'/device.name).resolve(strict=True)
+    if not node.is_relative_to(root):raise ValueError('XD_SMART_DEVICE_INVALID')
+    uas=False;usb=None
+    for parent in (node,*node.parents):
+        if not parent.is_relative_to(root):break
+        driver=parent/'driver'
+        if driver.is_symlink():
+            target=driver.resolve(strict=True)
+            if target.is_relative_to(root) and target.name=='uas':uas=True
+        if (parent/'idVendor').exists() and (parent/'idProduct').exists():
+            usb=((parent/'idVendor').read_text().strip().lower(),(parent/'idProduct').read_text().strip().lower())
+            break
+    if not uas or usb!=('0bc2','2065'):return False
+    try:quirks=(root/'module/usb_storage/parameters/quirks').read_text()
+    except FileNotFoundError:quirks=''
+    for entry in quirks.strip().split(','):
+        fields=entry.split(':')
+        if len(fields)==3 and tuple(p.lower().zfill(4) for p in fields[:2])==usb:
+            return 't' in fields[2]
+    return True
+
+
 def collect_smart(config,sys_root=Path('/sys'),dev_root=Path('/dev'),proc=Path('/proc'),previous=None,clock=None):
     validate_config(config);devices={};errors=[];activity={}
     clock=time.monotonic() if clock is None else clock
@@ -149,7 +180,11 @@ def collect_smart(config,sys_root=Path('/sys'),dev_root=Path('/dev'),proc=Path('
                 last_io=last_io if same and not busy else clock
                 activity[identity]={'generation':generation,'counts':counts,'last_io':last_io}
                 idle=not busy and clock-last_io>=pause
-            value=sensor('idle-paused') if idle else probe(device,row['type'],now)
+            # The affected UAS transport rejects ATA IDENTIFY and may make
+            # CHECK POWER MODE look like SLEEP even after real reads. This is
+            # not power-state evidence; do not query it or declare it healthy.
+            blocked=row['type']=='sat' and transport_blocked(device,sys_root)
+            value=sensor('transport-blocked') if blocked else sensor('idle-paused') if idle else probe(device,row['type'],now)
             if pause is not None and not idle:
                 # Exclude the SMART command's own block-counter increments.
                 # Any application I/O during this read remains conservatively
@@ -186,7 +221,7 @@ def cached_sensor(devices,identity,generation,now):
     at=row.get('health_at');observed=row.get('observed_at',at);temp=row.get('temperature_celsius');health=row.get('health')
     if value is None or type(observed) not in (int,float) or not math.isfinite(observed) or not -5<=now-observed<=180:return sensor('stale')
     if at is None:
-        if value['state']!='idle-paused':return sensor('read-error')
+        if value['state'] not in ('idle-paused','transport-blocked'):return sensor('read-error')
     elif type(at) not in (int,float) or not math.isfinite(at) or not -5<=now-at<=180:return sensor('stale')
     if health not in ('passed','warning','failed','unavailable'):return sensor('read-error')
     if temp is not None and (type(temp) not in (int,float) or not math.isfinite(temp) or not -40<=temp<=200):return sensor('read-error')
