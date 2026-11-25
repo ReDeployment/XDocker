@@ -78,6 +78,7 @@ services:
     volumes:
       - ./config:/etc/powerx
       - ${POWERX_DATA_DIR:-./data}/runtime:/data
+      - ${POWERX_DATA_DIR:-./data}/system-snapshots:/app/storage/system-snapshots
     networks:
       private:
       ingress:
