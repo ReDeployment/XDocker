@@ -7,7 +7,7 @@ import re
 import tarfile
 import time
 from datetime import datetime, timezone
-from docker_api import DockerError, log_text
+from docker_api import DockerError, job_log_config
 
 INSTANCE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 IDENTIFIER = re.compile(r'^[a-f0-9]{32}$')
@@ -27,8 +27,9 @@ def digest(path):
 
 
 class InstanceBackups:
-    def __init__(self, engine, root, host_root, uid=None, gid=None):
+    def __init__(self, engine, root, host_root, uid=None, gid=None, log_settings=None):
         self.engine = engine
+        self.log_settings = log_settings or dict
         self.root = Path(root)
         self.host_root = PurePosixPath(host_root) if host_root else None
         self.uid = os.getuid() if uid is None else uid
@@ -77,6 +78,7 @@ class InstanceBackups:
         body = {'Image': image, 'Entrypoint': command, 'Cmd': [],
                 'Labels': {'io.xdocker.admin.job': job_id},
                 'Env': env or [], 'HostConfig': {'Mounts': mounts, 'NetworkMode': network,
+                    'LogConfig': job_log_config(self.log_settings()),
                     'CapDrop': ['ALL'], 'CapAdd': ['CHOWN', 'DAC_OVERRIDE', 'FOWNER'],
                     'SecurityOpt': ['no-new-privileges:true']}}
         # PostgreSQL's initialization entrypoint needs chown/setuid in the

@@ -1,5 +1,6 @@
 services:
   portainer:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${PORTAINER_IMAGE:?Initialize services/portainer/.env}
     pull_policy: ${PORTAINER_PULL_POLICY:-missing}
     restart: unless-stopped

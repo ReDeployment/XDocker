@@ -172,6 +172,40 @@ esac
         self.assertEqual(self.calls(), "")
 
     @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
+    def test_log_policy_across_hosting_instances_and_legacy_overrides(self):
+        def policies(script, *args):
+            result = subprocess.run(['sh', script, 'compose', *args, '--profile', '*', 'config', '--format', 'json'],
+                                    cwd=self.root, env=dict(self.env, PATH=os.environ['PATH']),
+                                    check=True, text=True, capture_output=True)
+            return {k: v['logging'] for k, v in json.loads(result.stdout)['services'].items()}
+
+        def check(rows, size, count):
+            for service, value in rows.items():
+                self.assertEqual(value, {'driver': 'json-file', 'options': {
+                    'max-size': size, 'max-file': count, 'compress': 'true'}}, service)
+
+        self.enable_three()
+        self.edit(self.root/'.env', 'ENABLED_SERVICES=""', 'ENABLED_SERVICES="admin frps portainer github-webhook"')
+        for name in ('admin', 'github-webhook'):
+            self.edit(self.root/f'services/{name}/.env', 'REPLACE_WITH_PUBLISHED_TAG', 'fixture')
+        self.edit(self.root/'services/admin/.env', 'ADMIN_HOST_ROOT=', 'ADMIN_HOST_ROOT=/fixture')
+        hosting = policies('scripts/hosting.sh')
+        self.assertEqual(set(hosting), {'nginx', 'certbot', 'certbot-renew', 'admin', 'frps', 'portainer',
+                                      'github-webhook', 'powerx-doc', 'powerwechat-docs', 'artisan-cloud-home'})
+        check(hosting, '20971520', '5')
+        subprocess.run(['sh','scripts/apps.sh','init','powerx-dev'], cwd=self.root, check=True, capture_output=True)
+        self.edit(self.root/'.env', 'XDOCKER_LOG_MAX_SIZE=20971520', 'XDOCKER_LOG_MAX_SIZE="1048576" # bytes')
+        self.edit(self.root/'.env', 'XDOCKER_LOG_MAX_FILE=5', 'XDOCKER_LOG_MAX_FILE=3')
+        check(policies('scripts/hosting.sh'), '1048576', '3')
+        instance = policies('scripts/apps.sh', 'powerx-dev')
+        self.assertEqual(set(instance), {'postgres','redis','init','backend','web-admin','gateway'})
+        check(instance, '1048576', '3')
+        with (self.root/'instances/powerx-dev/.env').open('a') as f:
+            f.write('\nPOWERX_LOG_MAX_SIZE=8388608\nPOWERX_LOG_MAX_FILE=4\n')
+        check(policies('scripts/apps.sh', 'powerx-dev'), '8388608', '4')
+        check(policies('scripts/hosting.sh'), '1048576', '3')
+
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose CLI required")
     def test_portainer_is_optional_loopback_only_and_separate_from_frps(self):
         def config():
             result = subprocess.run(["sh", "scripts/hosting.sh", "compose", "config", "--format", "json"],

@@ -82,6 +82,33 @@ async function main(){
   await shot(width===390?'mobile-gateway-recovery':'desktop-gateway-recovery');
   await evaluate(`serviceHubUI.data.gateway.recovery=null;renderSitesPage()`);
  }
+ for(const width of [1440,390]){
+  await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await evaluate("location.hash='services'");
+  await until("document.querySelector('#view-services-operations')?.getAttribute('aria-selected')==='true'");
+  await click('[data-view="services"][data-view-tab="logs"]');
+  await until("document.querySelector('.container-log-row')?.textContent.includes('demo / gateway')");
+  assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"),true);
+  await click('.container-log-row [data-container-log]');
+  await until("document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
+  assert(await evaluate("document.querySelector('#detail-content').textContent.includes('未设置大小上限')"));
+  assert(!await evaluate("document.querySelector('#detail-content').textContent.includes('private-fixture')"));
+  // Let Chrome deliver the previous dialog's queued close event during the next log read.
+  await evaluate(`(() => {
+    const dialog=document.querySelector('#detail-dialog');
+    const closed=new Promise(resolve=>dialog.addEventListener('close',resolve,{once:true}));
+    const fetchNow=window.fetch;
+    window.fetch=async (...args)=>{const response=await fetchNow(...args);await closed;return response;};
+    try{dialog.close();document.querySelector('.container-log-row [data-container-log]').click();}
+    finally{window.fetch=fetchNow;}
+  })()`);
+  await until("document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
+  await click('#detail-content [data-container-log]');
+  await until("document.querySelector('#detail-content pre')?.textContent.includes('fixture log')");
+  await click('#close-detail');
+  assert(await evaluate("document.querySelector('#view-services-logs').getAttribute('aria-selected')==='true'"));
+  await shot(width===390?'mobile-container-logs':'desktop-container-logs');
+ }
  assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

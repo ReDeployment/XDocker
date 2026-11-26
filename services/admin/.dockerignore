@@ -3,6 +3,7 @@
 !Dockerfile
 !requirements.txt
 !app.py
+!config_env.py
 !docker_api.py
 !backups.py
 !instances.py

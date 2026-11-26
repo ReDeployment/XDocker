@@ -1,5 +1,6 @@
 services:
   github-webhook:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${GITHUB_WEBHOOK_IMAGE:?Configure services/github-webhook/.env}
     pull_policy: ${GITHUB_WEBHOOK_PULL_POLICY:-missing}
     user: "${GITHUB_WEBHOOK_UID:-1000}:${GITHUB_WEBHOOK_GID:-1000}"

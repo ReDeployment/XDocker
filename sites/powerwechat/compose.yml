@@ -1,5 +1,6 @@
 services:
   powerwechat-docs:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${POWERWECHAT_IMAGE:?Initialize site configuration using scripts/hosting.sh}
     restart: unless-stopped
     healthcheck:

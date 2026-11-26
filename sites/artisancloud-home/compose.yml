@@ -1,5 +1,6 @@
 services:
   artisan-cloud-home:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${ARTISANCLOUD_HOME_IMAGE:?Initialize site configuration using scripts/hosting.sh}
     restart: unless-stopped
     healthcheck:

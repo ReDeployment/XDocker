@@ -16,3 +16,7 @@
 @media(max-width:720px){.sidebar{padding:15px}.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;overflow:visible;margin:15px 0 0}.nav-group summary{font-size:12px}.sidebar .nav-group button{font-size:11px;white-space:normal}.sidebar .nav-group button span{display:inline}.vertical-tabview{grid-template-columns:118px minmax(0,1fr);gap:10px}.vertical-tab-list{position:static;padding:5px}.vertical-tab-list button{padding:10px 7px;gap:4px;font-size:11px}.vertical-tab-list button small{min-width:16px;padding:2px;font-size:9px}.module-summary-grid{grid-template-columns:1fr;padding:12px}.compact-kpis .kpi{padding:12px}.compact-kpis .kpi strong{font-size:24px}.compact-kpis .kpi-label{font-size:10px}.vertical-tab-panel .panel-head{padding:16px}.vertical-tab-panel .panel-head h3{font-size:14px}.vertical-tab-panel .panel-body{padding:16px}.vertical-tab-panel table{min-width:520px}}
 
 .tunnel-manager-frame{display:block;width:100%;height:78vh;min-height:600px;border:0;border-radius:8px;background:#f5f7fc;margin-bottom:16px}
+
+.container-log-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);flex-wrap:wrap}
+.container-log-row>div{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+.container-log-row small{display:block;color:var(--muted)}

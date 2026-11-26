@@ -1,5 +1,6 @@
 services:
   admin:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${ADMIN_IMAGE:?Configure services/admin/.env}
     pull_policy: ${ADMIN_PULL_POLICY:-missing}
     user: "${ADMIN_UID:-1000}:${ADMIN_GID:-1000}"

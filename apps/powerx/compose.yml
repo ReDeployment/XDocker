@@ -3,8 +3,8 @@ name: ${COMPOSE_PROJECT_NAME:-powerx-dev}
 x-logging: &powerx-logging
   driver: json-file
   options:
-    max-size: "${POWERX_LOG_MAX_SIZE:-20971520}"
-    max-file: "${POWERX_LOG_MAX_FILE:-5}"
+    max-size: "${POWERX_LOG_MAX_SIZE:-${XDOCKER_LOG_MAX_SIZE:-20971520}}"
+    max-file: "${POWERX_LOG_MAX_FILE:-${XDOCKER_LOG_MAX_FILE:-5}}"
     compress: "true"
 
 services:
@@ -44,6 +44,7 @@ services:
       retries: 30
 
   init:
+    logging: *powerx-logging
     image: ${POWERX_BACKEND_IMAGE:?Set POWERX_BACKEND_IMAGE}
     pull_policy: ${PULL_POLICY:-missing}
     profiles: [tools]

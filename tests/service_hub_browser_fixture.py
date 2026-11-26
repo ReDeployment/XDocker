@@ -12,6 +12,7 @@ from docker_api import DockerError
 from host_metrics import atomic_json
 from native_runtime import initialize
 from native_services import SystemdServices
+from test_admin import container, ID
 from test_native_services import FakeSystemd, policy
 from test_resource_monitor import sample_report, FIRST
 from test_native_gateway import free_port
@@ -20,10 +21,24 @@ from test_native_gateway import free_port
 def main():
     class Quiet(WSGIRequestHandler):
         def log(self,*args,**kwargs):pass
-    class NoDocker:
+    class LogDocker:
         def __init__(self):self.calls=[]
         def request(self,method,path,*args,**kwargs):
-            self.calls.append(method);assert method=='GET';raise DockerError('Fixture has no Docker')
+            self.calls.append(method)
+            assert method == 'GET'
+            if path.startswith('/containers/json'):
+                c = container(ID, 'gateway', 'demo')
+                deployment = ROOT/'data/standalone/demo'
+                c['Labels'].update({'com.docker.compose.project.working_dir':str(deployment/'instances/demo'),
+                                    'com.docker.compose.project.config_files':str(deployment/'apps/powerx/compose.yml')})
+                return [c]
+            if path == '/version':
+                return {'Version':'fixture','Os':'linux'}
+            if path == '/containers/'+ID+'/json':
+                return {'HostConfig':{'LogConfig':{'Type':'json-file','Config':{}}}}
+            if path.startswith('/containers/'+ID+'/logs?'):
+                return b'fixture log password=private-fixture'
+            raise DockerError('Fixture has no other Docker resources')
     with tempfile.TemporaryDirectory(prefix='xdocker-hub-browser-') as raw:
         root=Path(raw).resolve();state=root/'state';initialize(state,ROOT)
         unit=root/'example.service';unit.write_text('[Service]\nExecStart=/usr/bin/example\n')
@@ -36,7 +51,7 @@ def main():
             if '-t' not in command:live['value']=True;(gateway_root/'nginx.pid').write_text('9000')
             return {'code':0,'stdout':'','truncated':False}
         (state/'native-config/sites/legacy').mkdir();(state/'native-config/sites/legacy/site.conf').write_text('SITE_DOMAIN=legacy.example.test\nSITE_SERVICE=legacy-web\nSITE_KIND=static\n');(state/'native-config/root.env').write_text('ENABLED_SITES=legacy\n')
-        docker=NoDocker()
+        docker=LogDocker()
         app=create_app({'TESTING':True,'STATE':str(state),'CONFIG':str(state/'native-config'),
             'REPORTS':str(state/'reports'),'BACKUPS':str(state/'backups'),'HOST_ROOT':str(ROOT),'HOST_METRICS':str(state/'host-metrics'),
             'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':True,'SERVICE_HUB_ADAPTER':adapter,

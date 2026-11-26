@@ -2,6 +2,7 @@ name: xdocker-web-hosting
 
 services:
   nginx:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${NGINX_IMAGE:-nginx:alpine}
     pull_policy: ${NGINX_PULL_POLICY:-missing}
     restart: unless-stopped
@@ -17,6 +18,7 @@ services:
       - ./data/events:/var/lib/certbot-events:ro
 
   certbot:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${CERTBOT_IMAGE:-certbot/certbot:latest}
     pull_policy: ${CERTBOT_PULL_POLICY:-missing}
     profiles: [tools]
@@ -29,6 +31,7 @@ services:
       - ${CERTIFICATES_INVENTORY:-./certbot/certificates.json}:/opt/xdocker/certbot/certificates.json:ro
 
   certbot-renew:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${CERTBOT_IMAGE:-certbot/certbot:latest}
     pull_policy: ${CERTBOT_PULL_POLICY:-missing}
     profiles: [tls]
