@@ -269,17 +269,21 @@ def create_app(settings=None, docker=None):
 
     def compose_containers():
         filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project']})})
-        try:containers = engine.request('GET', '/containers/json?' + filters)
-        except DockerError:
-            if not app.config['NATIVE_MODE']:raise
-            return []
+        containers = engine.request('GET', '/containers/json?' + filters)
         return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project')
                 and c['Labels'].get('com.docker.compose.service')
                 and c['Labels'].get('com.docker.compose.oneoff', 'False').lower() != 'true']
 
     def managed_containers(containers=None):
         projects = managed_projects()
-        return [c for c in (compose_containers() if containers is None else containers)
+        if containers is None:
+            try:
+                containers = compose_containers()
+            except DockerError:
+                if not app.config['NATIVE_MODE']:
+                    raise
+                return []
+        return [c for c in containers
                 if c['Labels']['com.docker.compose.service'] in projects.get(c['Labels']['com.docker.compose.project'], ())]
 
     def log_containers(containers):
@@ -367,7 +371,14 @@ def create_app(settings=None, docker=None):
     @app.get('/api/snapshot')
     def snapshot():
         sites, _ = configuration(config)
-        candidates = compose_containers()
+        inventory_available = True
+        try:
+            candidates = compose_containers()
+        except DockerError:
+            if not app.config['NATIVE_MODE']:
+                raise
+            candidates = []
+            inventory_available = False
         containers = managed_containers(candidates)
         log_services = [{'id': c['Id'], 'project': c['Labels']['com.docker.compose.project'],
                          'service': c['Labels']['com.docker.compose.service'], 'name': c['Names'][0].lstrip('/'),
@@ -394,7 +405,7 @@ def create_app(settings=None, docker=None):
         except DockerError:
             if not app.config['NATIVE_MODE']:raise
             version={'Version':'未连接','Os':platform.system().lower(),'Arch':platform.machine(),'available':False}
-        return jsonify(at=now(), services=services, log_services=log_services, sites=sites, certificates=certs, reports=report_history,
+        return jsonify(at=now(), services=services, log_services=log_services, container_inventory_available=inventory_available, sites=sites, certificates=certs, reports=report_history,
                        engine={k: version.get(k) for k in ('Version', 'ApiVersion', 'Os', 'Arch','available')},runtime_mode='native' if app.config['NATIVE_MODE'] else 'container',
                        revision=os.getenv('ADMIN_DEPLOY_REVISION', 'development'), image_revision=os.getenv('XDOCKER_REVISION', 'development'))
 

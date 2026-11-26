@@ -36,7 +36,7 @@ class FakeSystemd:
     def __call__(self,command,**kwargs):
         self.calls.append(command)
         if 'show' in command:
-            return {'code':0,'truncated':False,'stdout':f'Id=example.service\nLoadState=loaded\nActiveState={self.state}\nSubState=running\nMainPID=42\nExecMainStatus=0\nFragmentPath={self.unit_file}\nDropInPaths=\nNeedDaemonReload={"yes" if self.reload else "no"}\n'}
+            return {'code':0,'truncated':False,'stdout':f'Id={command[-1]}\nLoadState=loaded\nActiveState={self.state}\nSubState=running\nMainPID=42\nExecMainStatus=0\nFragmentPath={self.unit_file}\nDropInPaths=\nNeedDaemonReload={"yes" if self.reload else "no"}\n'}
         if command[0]=='journalctl':return {'code':0,'truncated':False,'stdout':'password=fixture-secret\nready'}
         if self.timeout:raise ServiceError('XD_SERVICE_COMMAND_TIMEOUT')
         self.state='inactive' if 'stop' in command else 'active'
@@ -134,6 +134,86 @@ class HubTests(unittest.TestCase):
         return {'action':action,'revision':status['revision'],'policy_sha256':status['policy_sha256'],
                 'observation':status['observation'],'confirmation':'示例项目','idempotency_key':os.urandom(16).hex()}
 
+    def batch_fixture(self):
+        _,runner,grant=self.setup_service()
+        value=self.hub.policy();value['revision']+=1
+        for alias in ('backend','worker'):
+            value['services'][alias]={**grant,'unit':alias+'.service','actions':['status','logs'],'definition_sha256':None}
+        self.hub.import_policy(value)
+        self.hub.save(project(id='other',domain='other.home.test'))
+        entries=[{'alias':a,'project':'example','revision':1} for a in ('backend','worker')]
+        return runner,{'policy_sha256':fingerprint(value),'bindings':entries}
+
+    def test_batch_is_atomic_idempotent_and_does_not_touch_runtime_or_gateway_inputs(self):
+        runner,body=self.batch_fixture()
+        original=self.hub.data();runner.calls.clear()
+        for override in ({'alias':'missing'},{'project':'missing'},{'revision':5},{'alias':'backend'}):
+            bad=copy.deepcopy(body);bad['bindings'][1].update(override)
+            with self.assertRaises(ServiceError):self.hub.bind_services(bad)
+            self.assertEqual(self.hub.store.additional_bindings(),{})
+        with self.assertRaises(ServiceError):self.hub.bind_services({**body,'policy_sha256':'changed'})
+        self.assertEqual(self.hub.bind_services(body),{'added':2,'already_bound':0})
+        self.assertEqual(self.hub.bind_services(body),{'added':0,'already_bound':2})
+        self.assertEqual(runner.calls,[])
+        reopened=ServiceHub(self.root/'state');self.assertEqual(reopened.data(),original)
+        self.assertEqual(reopened.listing()['projects'][0]['bound_services'],['example','backend','worker'])
+        with self.assertRaisesRegex(ServiceError,'ALREADY_BOUND'):
+            reopened.save(project(id='other',domain='other.home.test',revision=2,service='backend'))
+        with self.assertRaisesRegex(ServiceError,'ALREADY_BOUND'):
+            reopened.bind_services({**body,'bindings':[{**body['bindings'][0],'project':'other'}]})
+        reopened.save(project(service='example',revision=2))
+        self.assertEqual(len(reopened.store.additional_bindings()),2)
+        reopened.remove('example',{'revision':2,'confirmation':'示例项目'})
+        self.assertEqual(reopened.store.additional_bindings(),{})
+
+    def test_sql_error_rolls_back_every_addition(self):
+        from registry_store import RegistryError
+        _,body=self.batch_fixture()
+        self.hub.store.add_bindings([])
+        with self.hub.store.connection(write=True) as db:
+            db.execute("""CREATE TRIGGER reject_worker BEFORE INSERT ON project_service_bindings WHEN NEW.alias='worker'
+                        BEGIN SELECT RAISE(ABORT,'fixture failure'); END""")
+        with self.assertRaises(RegistryError):self.hub.bind_services(body)
+        self.assertEqual(self.hub.store.additional_bindings(),{})
+
+    def test_overlapping_batches_cannot_claim_the_same_grant(self):
+        runner,body=self.batch_fixture()
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        barrier=Barrier(2)
+        def claim(project_id):
+            hub=ServiceHub(self.root/'state')
+            barrier.wait(timeout=3)
+            try:
+                hub.bind_services({**body,'bindings':[{'alias':'backend','project':project_id,'revision':1}]})
+                return 'bound'
+            except ServiceError as exc:return str(exc)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(claim,['example','other']))
+        self.assertEqual(results.count('bound'),1)
+        self.assertTrue(set(results)<={'bound','XD_SERVICE_BUSY','XD_SERVICE_UNIT_ALREADY_BOUND'})
+        self.assertIn(self.hub.store.additional_bindings()['backend'],('example','other'))
+
+    def test_scoped_target_access_revocation_and_operation_identity(self):
+        runner,body=self.batch_fixture();self.hub.bind_services(body);runner.calls.clear()
+        with self.assertRaisesRegex(ServiceError,'BINDING_UNAVAILABLE'):self.hub.status('other','backend')
+        self.assertEqual(runner.calls,[])
+        status=self.hub.status('example','backend')
+        self.assertEqual(status['unit'],'backend.service')
+        self.assertEqual(runner.calls[-1][-1],'backend.service')
+        with self.assertRaisesRegex(ServiceError,'ACTION_NOT_GRANTED'):
+            self.hub.action('example',{**self.action_body(status),'confirmation':'backend.service'},'backend')
+        primary=self.hub.status('example','example')
+        action={**self.action_body(primary),'confirmation':'example.service'}
+        receipt=self.hub.action('example',action,'example')
+        self.assertEqual(receipt['result']['unit'],'example.service')
+        with self.assertRaisesRegex(ServiceError,'IDEMPOTENCY_CONFLICT'):
+            self.hub.action('example',action,'backend')
+        self.assertEqual(len([c for c in runner.calls if 'restart' in c]),1)
+        policy=self.hub.policy();policy['revision']+=1;del policy['services']['backend'];self.hub.import_policy(policy)
+        with self.assertRaisesRegex(ServiceError,'BINDING_UNAVAILABLE'):self.hub.status('example','backend')
+        self.assertEqual(self.hub.status('example')['unit'],'example.service')
+
     def test_exact_unit_grant_state_check_and_no_sudo(self):
         unit,runner,grant=self.setup_service();before=self.hub.status('example')
         result=self.hub.action('example',self.action_body(before,'stop'))
@@ -166,6 +246,49 @@ class HubAPITests(unittest.TestCase):
     setUp=test_admin.AdminTests.setUp
     post=test_admin.AdminTests.post
     login=test_admin.AdminTests.login
+
+    def test_batch_endpoint_requires_login_csrf_and_existing_grants(self):
+        hub=self.app.extensions['service_hub']
+        value=policy();value['services']['api']={'scope':'user','unit':'api.service','actions':['status'],'definition_sha256':None}
+        hub.import_policy(value);hub.save(project())
+        body={'policy_sha256':fingerprint(value),'bindings':[{'project':'example','revision':1,'alias':'api'}]}
+        self.assertEqual(self.post('/api/service-hub/bindings',body,csrf=False).status_code,401)
+        preview='/api/service-hub/bindings/preview'
+        self.assertEqual(self.client.get(preview).status_code,401)
+        self.login();self.assertEqual(self.post('/api/service-hub/bindings',body,csrf=False).status_code,403)
+        row,=self.client.get(preview).json['rows']
+        self.assertEqual((row['alias'],row['suggested']),('api',None))
+        self.assertFalse(hub.store.additional_bindings())
+        self.assertEqual(self.post('/api/service-hub/bindings',body).json['added'],1)
+        self.assertEqual(self.client.get(preview).json['rows'],[])
+        self.assertEqual(self.client.get('/api/service-hub/projects/example/services/api/logs').json['error'],'XD_SERVICE_ACTION_NOT_GRANTED')
+        self.assertEqual(self.client.get('/api/service-hub/projects/example/services/unknown/status').status_code,409)
+
+    def test_host_discovery_does_not_grant_binding_or_logs(self):
+        path = '/api/service-hub?project_services=1'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.login()
+        hub = self.app.extensions['service_hub']
+        value = policy()
+        hub.import_policy(value)
+        hub.save(project(directory='/work/example'))
+        def reader(command, **kwargs):
+            output = ''
+            if command[0] == 'systemctl' and '--user' in command:
+                output = 'Id=worker.service\nLoadState=loaded\nWorkingDirectory=/work/example/tasks'
+            return {'code': 0, 'stdout': output, 'truncated': False}
+        self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
+        self.assertNotIn('project_services', self.client.get('/api/service-hub').json)
+        result = self.client.get(path).json
+        candidate, = result['project_services']['candidates']['example']
+        self.assertEqual((candidate['unit'], candidate['scope'], candidate['alias']), ('worker.service', 'user', None))
+        self.assertTrue(candidate['suggested'])
+        self.assertFalse(result['services'])
+        body = {'policy_sha256': fingerprint(value), 'bindings': [{'project': 'example', 'revision': 1, 'alias': 'worker'}]}
+        self.assertEqual(self.post('/api/service-hub/bindings', body).status_code, 409)
+        for action in ('status', 'logs'):
+            self.assertEqual(self.client.get('/api/service-hub/projects/example/services/worker/' + action).status_code, 409)
+        self.assertFalse(hub.store.additional_bindings())
 
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()

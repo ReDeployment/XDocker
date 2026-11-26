@@ -46,7 +46,7 @@ def main():
          'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str(ROOT/'services/admin')}
     from code_sync import CodeSync,CodeSyncWorker
     sync_worker=CodeSyncWorker(CodeSync(state,operations=args.operations));sync_worker.start()
-    command=[sys.executable,'-m','gunicorn','--config','python:native_runtime','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']
+    command=[sys.executable,'-m','gunicorn','--config','python:native_gunicorn','--bind',f'127.0.0.1:{args.port}','--workers','1','--threads','4','--timeout','30']
     if args.reload:command+=['--reload']
     command+=['native_runtime:create_native_app()']
     child=subprocess.Popen(command,cwd=ROOT/'services/admin',env=env)

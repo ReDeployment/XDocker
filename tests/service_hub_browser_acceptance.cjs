@@ -29,15 +29,17 @@ async function main(){
  await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});await rpc('Page.navigate',{url:info.url});
  await until(`document.querySelector('#login-form')&&typeof renderServiceHubPage==='function'`);
  await evaluate(`document.querySelector('#token').value=${JSON.stringify(info.fixture_token)};document.querySelector('#login-form').requestSubmit(document.querySelector('#login-form button[type=submit]'))`);
- await until(`serviceHubUI.data&&document.querySelector('.hub-kpis')`);
+ await until(`serviceHubUI.data&&location.hash==='#service-hub/projects'&&document.querySelector('#view-service-hub-projects[aria-selected=true]')`);
  for(const [tls,port,url] of [[null,80,'http://example.home.test'],['fixture',443,'https://example.home.test'],[null,8088,'http://example.home.test:8088'],['fixture',8443,'https://example.home.test:8443']]){
   assert(await evaluate(`hubEntry({domain:'example.home.test',tls:${JSON.stringify(tls)},enabled:true},{gateway:{http_port:${port},https_port:${port}}},true).includes('href="'+${JSON.stringify(url)}+'"')`),'Incorrect public entry port');
  }
- assert(await evaluate(`(()=>{const b=document.querySelectorAll('.hub-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));await shot('desktop-overview');
+ assert(await evaluate(`(()=>{const b=document.querySelectorAll('.hub-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));await shot('desktop-projects-empty');
+ await pane('services');assert(await evaluate("document.querySelector('#view-service-hub-panel').textContent.includes('尚未登记项目。')"));
  await pane('projects');await click('[data-hub-edit="new"]');await evaluate(`document.querySelector('[name=id]').value='browser-project';document.querySelector('[name=name]').value='浏览器项目'`);await click('[data-hub-close]');
  await sitesPage();await hubPage('projects');await click('[data-hub-edit="new"]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-project');
  await form({id:'browser-project',name:'浏览器项目',endpoint:'example',domain:'browser.home.test',service:'example',monitor:'example-resources',enabled:true});
  await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===1`);
+ assert(await evaluate("document.querySelector('#view-service-hub-panel tbody tr').textContent.includes('尚未检查')"));
  await click('[data-hub-health="browser-project"]');await until(`serviceHubUI.data.projects[0].health?.state==='healthy'`);
  await click('[data-hub-edit="browser-project"]');await evaluate(`document.querySelector('[name=name]').value='保留中的草稿'`);await click('[data-hub-close]');await evaluate('loadServiceHub()');
  await sitesPage();
@@ -49,10 +51,10 @@ async function main(){
  await click('[data-hub-preview]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('proxy_pass http://127.0.0.1:3000;')`));await click('#close-detail');
  await click('[data-hub-gateway]');await until(`document.querySelector('#hub-operation-form')`);await form({confirmation:'xdocker-gateway'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.gateway.runtime_verified`);
  await hubPage('services');await click('[data-hub-logs="browser-project"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`!document.querySelector('#detail-content').textContent.includes('fixture-secret')`));await click('#close-detail');
- await click('[data-hub-action="browser-project"]');await until(`document.querySelector('#hub-dialog').open&&serviceHubUI.editor?.kind==='action'`);await form({confirmation:'浏览器项目',action:'restart'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.operations.length===1`);
+ await click('[data-hub-action="browser-project"]');await until(`document.querySelector('#hub-dialog').open&&serviceHubUI.editor?.kind==='action'`);await form({confirmation:'example.service',action:'restart'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.operations.length===1`);
  await pane('records');assert(await evaluate(`document.querySelector('#view-service-hub-panel').textContent.includes('状态已核对')`));await shot('desktop-records');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
- for(const name of ['overview','projects','services','records']){
+ for(const name of ['projects','services','records']){
   await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);
   assert.equal(await evaluate(`document.querySelectorAll('.hub-workspace [role=tabpanel]').length`),1);
   assert(await evaluate(`(()=>{const n=document.querySelector('.hub-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.hub-workspace [aria-selected=true]').getBoundingClientRect();return a.left>=n.left-1&&a.right<=n.right+1})()`),'Active task outside narrow nav '+name);
@@ -60,7 +62,7 @@ async function main(){
  await pane('projects');await click('[data-hub-edit="browser-project"]');assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'保留中的草稿');assert(await evaluate(`document.querySelector('#hub-form button[type=submit]').getBoundingClientRect().bottom<=innerHeight`),'Primary save action is outside narrow viewport');await shot('mobile-editor');await click('[data-hub-close]');
  await pane('services');await shot('mobile-services');
  await evaluate(`serviceHubUI.error='fixture-visible-error';serviceHubUI.data.operations[0].state='unconfirmed';renderServiceHubPage()`);
- for(const name of ['overview','projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
+ for(const name of ['projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
  await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
  await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
  for(const view of ['overview','gateway']){
@@ -84,6 +86,66 @@ async function main(){
  }
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  // Old bookmarks, direct entry and a second click in the sidebar all land on the list.
+  await evaluate("location.hash='service-hub/overview'");
+  await until("location.hash==='#service-hub/projects'&&document.querySelector('#view-service-hub-projects[aria-selected=true]')");
+  await pane('records');
+  await evaluate("window.scrollTo(0,0)");
+  await click('[data-tab="service-hub"]');
+  await until("location.hash==='#service-hub/projects'&&document.querySelector('#view-service-hub-projects[aria-selected=true]')");
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('.hub-workspace [role=tab]')].map(b=>b.textContent)"),['项目登记','系统服务','操作记录']);
+  assert(await evaluate("!document.querySelector('.hub-workspace .kpi,.hub-workspace .hub-status,.hub-workspace .intro')"));
+  assert(await evaluate(`(()=>{
+    const panel=document.querySelector('#view-service-hub-panel'),first=panel.querySelector('tbody tr');
+    const button=first.querySelector('[data-hub-health="padelu"]');
+    if(!button)return false;
+    return [panel.querySelector('[data-hub-edit="new"]'),first.querySelector('strong'),button].every(e=>{
+      const r=e.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1;
+    });
+  })()`),'Project, registration and connection check must be visible at '+width);
+  await shot(width===390?'mobile-project-list':'desktop-project-list');
+  assert.equal(await evaluate("document.querySelectorAll('#view-service-hub-panel tbody tr').length"),2);
+  assert(await evaluate(`(()=>{
+    const project=serviceHubUI.data.projects.find(p=>p.id==='padelu');
+    const row=document.querySelector('[data-hub-health="padelu"]').closest('tr').textContent;
+    return !project.health && row.includes('上次异常') && row.includes('HTTP 403') && row.includes(date(project.last_health.at*1000));
+  })()`));
+  await pane('services');
+  assert.equal(await evaluate("document.querySelector('#view-service-hub-services').textContent.trim()"),'系统服务');
+  await until("document.querySelector('[data-service-project=padelu]')?.textContent.includes('已发现 · 待授权')");
+  assert.equal(await evaluate("document.querySelectorAll('[data-service-project]').length"),2);
+  assert(await evaluate(`(()=>{
+    const panel=document.querySelector('#view-service-hub-panel');
+    return panel.textContent.includes('example.service') && panel.textContent.includes('可重启') &&
+      panel.textContent.includes('PadelU') && !panel.textContent.includes('unrelated.service') && !!panel.querySelector('[data-hub-action="browser-project"]');
+  })()`));
+  const showFilter=value=>evaluate(`(()=>{const f=document.querySelector('[data-project-service-filter]');f.value=${JSON.stringify(value)};f.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await showFilter('discovered');
+  assert(await evaluate("document.querySelectorAll('[data-service-project]').length===1&&!document.querySelector('[data-service-project=padelu] button')"));
+  await click('[data-service-project=padelu] summary');
+  assert(await evaluate("document.querySelector('[data-service-project=padelu] details').open"));
+  await pane('records');await pane('services');
+  assert.equal(await evaluate("document.querySelector('[data-project-service-filter]').value"),'discovered');
+  await showFilter('review');
+  assert(await evaluate("document.querySelector('.project-service-list').textContent.includes('browser-project-worker.service')&&!document.querySelector('.project-service-list').textContent.includes('browser-project-backend.service')"));
+  await showFilter('empty');
+  assert(await evaluate("document.querySelector('#view-service-hub-panel').textContent.includes('当前筛选没有项目')"));
+  await showFilter('all');
+  await shot(width===390?'mobile-project-services':'desktop-project-services');
+  await click('[data-hub-bind-alias="browser-project-backend"]');
+  await until("document.querySelectorAll('[data-bind-row]').length===1");
+  await click('#hub-dialog [data-hub-close]');
+  assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
+  await evaluate("location.hash='overview'");
+  await until("document.querySelector('[data-overview-check]:enabled')&&document.querySelector('.kpi strong')?.textContent==='1'");
+  assert(await evaluate("document.querySelector('#content').textContent.includes('demo / gateway')&&!document.querySelector('[data-probe=all]')"));
+  await click('[data-overview-check]');
+  await until("document.querySelector('[data-overview-progress]')?.textContent.includes('本轮完成 2/2 · 正常 1 · 异常 1')");
+  assert(await evaluate("document.querySelector('#content').textContent.includes('HTTP 403')"));
+  assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
+  await shot(width===390?'mobile-native-overview':'desktop-native-overview');
+  await click('a[href="#services/logs"]');
+  await until("document.querySelector('.container-log-row')?.textContent.includes('demo / gateway')");
   await evaluate("location.hash='services'");
   await until("document.querySelector('#view-services-operations')?.getAttribute('aria-selected')==='true'");
   await click('[data-view="services"][data-view-tab="logs"]');
@@ -109,6 +171,53 @@ async function main(){
   assert(await evaluate("document.querySelector('#view-services-logs').getAttribute('aria-selected')==='true'"));
   await shot(width===390?'mobile-container-logs':'desktop-container-logs');
  }
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
+ await hubPage('services');
+ for(const width of [1440,390]){
+   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+   await click('[data-hub-batch]');await until("document.querySelector('#hub-batch-form')");
+   const ready='[data-bind-row="browser-project-backend"]',pending='[data-bind-row="browser-project-worker"]';
+   assert(await evaluate("document.querySelector('#hub-batch-form').textContent.includes('127.0.0.1:3000')"));
+   assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 1 项');
+   assert(await evaluate("!document.querySelector('#hub-batch-form select')"));
+   await click(ready+' input');
+   assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').disabled"));
+   await click(ready+' input');
+   await click(pending+' [data-bind-edit]');
+   assert.equal(await evaluate("document.querySelectorAll('[data-bind-pick]').length"),1);
+   await evaluate("(()=>{const field=document.querySelector('[data-bind-search]');field.value='padelu';field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+   assert.equal(await evaluate("document.querySelector('[data-bind-pick]').dataset.bindPick"),'padelu');
+   await click('[data-bind-pick="padelu"]');
+   assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 2 项');
+   // Re-open only the manually chosen row. Keep the other selection, and restore its suggested candidate.
+   await click(pending+' [data-bind-edit]');
+   await click('[data-bind-pick="browser-project"]');
+   assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
+   assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').getBoundingClientRect().bottom<=innerHeight"));
+   await shot(width===390?'mobile-batch-bindings':'desktop-batch-bindings');
+   if(width===1440){await click('#hub-dialog [data-hub-close]');continue;}
+   await click('#hub-batch-form [type=submit]');
+   await until("!document.querySelector('#hub-dialog').open&&document.querySelectorAll('[data-service-project] [data-hub-status]').length===3");
+ }
+ await click('[data-hub-status][data-hub-alias="browser-project-backend"]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='browser-project-backend.service'");
+ await click('#close-detail');
+ assert(await evaluate("!document.querySelector('[data-hub-action][data-hub-alias=browser-project-backend]')&&document.querySelector('[data-hub-batch]').disabled"));
+ // Exercise restricted grants without entering any operation on the host.
+ const permissions=await evaluate(`(()=>{
+   const root=document.createElement('section');
+   const project={id:'sample',name:'示例',service:'bound',endpoint_available:true};
+   const data={projects:[project,{id:'revoked',service:'removed'}],services:{bound:{unit:'bound.service',scope:'user',actions:['status','logs']}}};
+   const bindings=boundSystemServices(data);
+   data.operations_enabled=true;root.innerHTML=projectServicePanel(data,'');
+   const readOnly=root.textContent.includes('仅查看')&&!!root.querySelector('[data-hub-status]')&&!!root.querySelector('[data-hub-logs]')&&!root.querySelector('[data-hub-action]');
+   data.services.bound.actions=['status','start','stop'];
+   data.operations_enabled=false;root.innerHTML=projectServicePanel(data,'');
+   const disabled=root.textContent.includes('运行操作未开启')&&!root.querySelector('[data-hub-action]')&&!root.querySelector('[data-hub-logs]');
+   project.endpoint_available=false;
+   data.operations_enabled=true;root.innerHTML=projectServicePanel(data,'');
+   return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
+ })()`);
+ assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

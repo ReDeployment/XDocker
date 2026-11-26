@@ -11,7 +11,7 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/admin'))
 from app import create_app, env_values, redact
-from docker_api import log_text
+from docker_api import DockerError, log_text
 
 ID = 'a'*64
 OTHER = 'b'*64
@@ -115,6 +115,22 @@ class AdminTests(unittest.TestCase):
     def test_wrong_login_rate_limited(self):
         for _ in range(10):self.assertEqual(self.post('/api/login',{'token':'wrong'}).status_code,401)
         self.assertEqual(self.post('/api/login',{'token':TOKEN}).status_code,429)
+
+    def test_native_overview_distinguishes_unreadable_container_list(self):
+        self.login()
+        self.app.config['NATIVE_MODE'] = True
+        original = self.docker.request
+
+        def request(method, path, *args, **kwargs):
+            if path.startswith('/containers/json'):
+                raise DockerError('Fixture inventory unavailable')
+            return original(method, path, *args, **kwargs)
+
+        self.docker.request = request
+        snapshot = self.client.get('/api/snapshot').json
+        self.assertTrue(snapshot['engine']['available'])
+        self.assertFalse(snapshot['container_inventory_available'])
+        self.assertEqual(snapshot['log_services'], [])
 
     def test_snapshot_filters_unrelated_containers_and_secrets(self):
         self.login()

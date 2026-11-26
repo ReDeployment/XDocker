@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'services/admin'),str(ROOT/'tests')]
@@ -46,16 +47,37 @@ def main():
         grant={'scope':'user','unit':'example.service','actions':['status','logs','restart'],'definition_sha256':None}
         grant['definition_sha256']=adapter.status(grant)['definition_sha256']
         value=policy();value['services']['example']=grant;value['endpoints']['padelu']={'scheme':'http','host':'127.0.0.1','port':15173,'health_path':'/','expected_status':200};value['gateway'].update(enabled=True,http_port=free_port(),https_port=free_port())
+        for alias in ('browser-project-backend','browser-project-worker'):
+            value['services'][alias]={'scope':'user','unit':alias+'.service','actions':['status','logs'],'definition_sha256':None}
+        def match_runner(command, **kwargs):
+            if command[0] == 'systemctl':
+                units = command[command.index('--') + 1:]
+                if units == ['*.service']:
+                    units = ['padelu-web.service', 'browser-project-backend.service', 'unrelated.service'] if '--user' in command else []
+                output = '\n\n'.join(f'Id={unit}\nLoadState=loaded\nControlGroup=/fixture/{unit}'
+                                      for unit in units)
+            elif command[0] == 'ss' and '-4' in command:
+                output = 'LISTEN 0 5 127.0.0.1:3000 0.0.0.0:* cgroup:/fixture/browser-project-backend.service'
+                output += '\nLISTEN 0 5 127.0.0.1:15173 0.0.0.0:* cgroup:/fixture/padelu-web.service'
+            elif command[0] == 'ip':
+                output = '[]'
+            else:
+                output = ''
+            return {'code': 0, 'stdout': output, 'truncated': False}
         live={'value':False};gateway_root=state/'service-hub/gateway'
         def nginx(command,**kwargs):
             if '-t' not in command:live['value']=True;(gateway_root/'nginx.pid').write_text('9000')
             return {'code':0,'stdout':'','truncated':False}
         (state/'native-config/sites/legacy').mkdir();(state/'native-config/sites/legacy/site.conf').write_text('SITE_DOMAIN=legacy.example.test\nSITE_SERVICE=legacy-web\nSITE_KIND=static\n');(state/'native-config/root.env').write_text('ENABLED_SITES=legacy\n')
         docker=LogDocker()
+        def probe(endpoint):
+            if endpoint.get('host_header')=='padelu-admin.home.test':
+                return {'state':'unexpected-status','at':time.time()-60,'status':403}
+            return {'state':'healthy','at':time.time(),'status':200}
         app=create_app({'TESTING':True,'STATE':str(state),'CONFIG':str(state/'native-config'),
             'REPORTS':str(state/'reports'),'BACKUPS':str(state/'backups'),'HOST_ROOT':str(ROOT),'HOST_METRICS':str(state/'host-metrics'),
             'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':True,'SERVICE_HUB_ADAPTER':adapter,
-            'SERVICE_HUB_PROBE':lambda endpoint:{'state':'unexpected-status' if endpoint.get('host_header')=='padelu-admin.home.test' else 'healthy','at':__import__('time').time(),'status':403 if endpoint.get('host_header')=='padelu-admin.home.test' else 200},
+            'SERVICE_HUB_MATCH_RUNNER':match_runner,'SERVICE_HUB_PROBE':probe,
             'SERVICE_HUB_GATEWAY_ADAPTER':{'runner':nginx,'owner_reader':lambda *args:{'pid':9000,'started':42} if live['value'] else None,'marker_reader':lambda *args:True}},docker)
         app.extensions['service_hub'].import_policy(value)
         atomic_json(state/'host-metrics/report.json',sample_report())

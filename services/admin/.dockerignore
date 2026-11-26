@@ -35,6 +35,7 @@ static/**
 !native_services.py
 !gateway_runtime.py
 !service_hub_api.py
+!service_binding_matches.py
 !native_runtime.py
 !static/service_hub.js
 !static/service_hub.css
