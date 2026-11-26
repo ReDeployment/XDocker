@@ -93,6 +93,16 @@ async function main(){
   await until("document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
   assert(await evaluate("document.querySelector('#detail-content').textContent.includes('未设置大小上限')"));
   assert(!await evaluate("document.querySelector('#detail-content').textContent.includes('private-fixture')"));
+  // Let Chrome deliver the previous dialog's queued close event during the next log read.
+  await evaluate(`(() => {
+    const dialog=document.querySelector('#detail-dialog');
+    const closed=new Promise(resolve=>dialog.addEventListener('close',resolve,{once:true}));
+    const fetchNow=window.fetch;
+    window.fetch=async (...args)=>{const response=await fetchNow(...args);await closed;return response;};
+    try{dialog.close();document.querySelector('.container-log-row [data-container-log]').click();}
+    finally{window.fetch=fetchNow;}
+  })()`);
+  await until("document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
   await click('#detail-content [data-container-log]');
   await until("document.querySelector('#detail-content pre')?.textContent.includes('fixture log')");
   await click('#close-detail');

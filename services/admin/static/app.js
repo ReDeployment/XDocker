@@ -174,24 +174,24 @@ function containerLogList(){
   const rows=entries.map(c=>`<div class="container-log-row"><div><strong>${esc(c.project)} / ${esc(c.service)}</strong><small>${esc(c.name)}</small></div>${stateBadge(c.state)}<button data-container-log="${esc(c.id)}">查看日志</button></div>`).join('');
   return panel('容器日志',`${entries.length} 个容器`,rows);
 }
-let logRequest=0;
-$('detail-dialog').addEventListener('close',()=>{logRequest++;});
 async function openContainerLog(id){
   const target=snapshot.log_services?.find(c=>c.id===id);
   if(!target)return;
-  const sequence=++logRequest, dialog=$('detail-dialog');
+  const dialog=$('detail-dialog'), content=$('detail-content');
+  const loading=document.createElement('p');
+  loading.textContent='正在读取容器日志…';
   $('detail-title').textContent=target.project+' / '+target.service;
-  $('detail-content').textContent='正在读取容器日志…';
+  content.replaceChildren(loading);
   if(!dialog.open)dialog.showModal();
   try{
     const result=await api('services/'+id+'/logs');
-    if(sequence!==logRequest||!dialog.open)return;
+    if(!dialog.open||loading.parentNode!==content)return;
     const p=result.rotation;
     const size=p.max_size&&p.max_size!=='-1'?('单文件 '+p.max_size+(/^\d+$/.test(p.max_size)?' 字节':'')):'未设置大小上限';
     const policy=[p.driver||'未知驱动',p.driver==='json-file'&&size,p.max_file&&('保留 '+p.max_file+' 个文件'),p.compress==='true'&&'轮转后压缩'].filter(Boolean).join(' · ');
-    $('detail-content').innerHTML=`<p class="muted">当前容器 · ${esc(policy)}</p><p>最近 200 行 <button data-container-log="${esc(id)}">刷新日志</button></p><pre>${esc(result.text||'暂无日志')}</pre>`;
+    content.innerHTML=`<p class="muted">当前容器 · ${esc(policy)}</p><p>最近 200 行 <button data-container-log="${esc(id)}">刷新日志</button></p><pre>${esc(result.text||'暂无日志')}</pre>`;
   }catch(error){
-    if(sequence===logRequest&&dialog.open)$('detail-content').textContent='读取失败，关闭后可重新选择容器。'+error.message;
+    if(dialog.open&&loading.parentNode===content)content.textContent='读取失败，关闭后可重新选择容器。'+error.message;
   }
 }
 async function detailService(id){const s=snapshot.services.find(s=>s.id===id);$('detail-title').textContent=s?.service||'服务详情';$('detail-content').innerHTML='<p class="muted">正在读取日志与资源…</p>';$('detail-dialog').showModal();const results=await Promise.allSettled([api('services/'+id+'/logs'),api('services/'+id+'/stats')]);const logs=results[0],stats=results[1];let html='';if(stats.status==='fulfilled'){const v=stats.value;html=`<div class="resource"><div><strong>${v.cpu_percent??'—'}%</strong><small>CPU 使用率（可超过单核 100%）</small></div><div><strong>${(v.memory_bytes/1048576).toFixed(1)} MB</strong><small>内存工作集</small></div><div><strong>${v.pids??'—'}</strong><small>进程数</small></div></div>`;}else html=`<p class="muted">${esc(stats.reason.message)}</p>`;html+=`<p class="muted">最近 200 行日志 · 已对常见凭据脱敏</p><pre>${esc(logs.status==='fulfilled'?logs.value.text:logs.reason.message)}</pre>`;$('detail-content').innerHTML=html;}
