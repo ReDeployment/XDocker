@@ -1,18 +1,9 @@
-"""Read-only systemd discovery for registered projects and authorized binding previews."""
+"""Match registered projects to observed systemd services and authorize confirmed read access."""
 from ipaddress import ip_address
 import json
-import os
 from pathlib import PurePosixPath
 
-from native_services import UNIT, ServiceError, run_fixed
-
-
-def read_host(command, **bounds):
-    # A system service can run as the unit owner without inheriting their login session.
-    if command[:2] == ['systemctl', '--user'] and not (
-            os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('DBUS_SESSION_BUS_ADDRESS')):
-        command = ['env', f'XDG_RUNTIME_DIR=/run/user/{os.geteuid()}', *command]
-    return run_fixed(command, **bounds)
+from native_services import UNIT, ServiceError, fingerprint, read_host, require, validate_policy
 
 
 def observation(runner, command, issues=None, source=None):
@@ -172,6 +163,34 @@ def project_services(listing, runner=read_host):
         for key, reasons in result['evidence'].items():
             if result['suggested'] and key != result['suggested']:
                 continue
+            # System-wide logs require a match to a host-approved listener. Only the
+            # running user's services can qualify through their working directory alone.
+            grantable = (not issues and not alias and key == result['suggested']
+                         and not unit.startswith(('xdocker-admin', 'xdocker-native', 'xdocker-host-monitor'))
+                         and ('listener' in reasons or (scope == 'user' and 'directory' in reasons)))
             candidates[key].append({'scope': scope, 'unit': unit, 'alias': alias,
+                                    'can_grant_read': bool(grantable),
                                     'suggested': key == result['suggested'], 'reasons': reasons})
     return {'candidates': candidates, 'unavailable': sorted(issues)}
+
+
+def grant_project_read(hub, project_id, body, runner):
+    require(isinstance(body, dict) and set(body) == {'scope', 'unit', 'revision', 'policy_sha256'},
+            'XD_SERVICE_GRANT_INVALID')
+    with hub.locked():
+        listing = hub.listing()
+        require(body['policy_sha256'] == listing['policy_sha256'], 'XD_SERVICE_CONFIGURATION_CHANGED')
+        project = next((p for p in listing['projects'] if p['id'] == project_id), None)
+        require(project and project['endpoint_available'], 'XD_SERVICE_BINDING_UNAVAILABLE')
+        require(type(body['revision']) is int and project['revision'] == body['revision'], 'XD_SERVICE_REVISION_CONFLICT')
+        candidates = project_services(listing, runner)['candidates'][project_id]
+        match = next((c for c in candidates if c['scope'] == body['scope'] and c['unit'] == body['unit']), None)
+        require(match and match['can_grant_read'], 'XD_SERVICE_READ_MATCH_REQUIRED')
+        alias = 'read-' + fingerprint([match['scope'], match['unit']])[:24]
+        policy = hub.policy()
+        require(alias not in policy['services'] and all(alias not in p['bound_services'] for p in listing['projects']),
+                'XD_SERVICE_BINDING_UNAVAILABLE')
+        grant = {'unit': match['unit'], 'scope': match['scope'], 'actions': ['status', 'logs'], 'definition_sha256': None}
+        validate_policy({**policy, 'services': {**policy['services'], alias: grant}})
+        hub.store.add_read_grant(alias, grant['scope'], grant['unit'], policy['revision'])
+        return {'alias': alias, 'unit': grant['unit'], 'scope': grant['scope'], 'actions': grant['actions']}

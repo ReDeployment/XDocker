@@ -50,7 +50,7 @@ class GatewayRuntime:
         self.owner_reader=owner_reader or self.owner;self.marker_reader=marker_reader or self.marker
 
     def preview(self):
-        policy=self.hub.policy();data=self.hub.data();projects=sorted(data['projects'].values(),key=lambda r:r['id'])
+        policy,imported=self.hub.policies();data=self.hub.data();projects=sorted(data['projects'].values(),key=lambda r:r['id'])
         require(len(projects)<=100,'XD_SERVICE_CAPACITY')
         certificate_pins={}
         for row in projects:
@@ -64,7 +64,7 @@ class GatewayRuntime:
                     path=Path(cert[kind]);require(path.is_file() and path.stat().st_size<=1024*1024,'XD_GATEWAY_CERTIFICATE_UNAVAILABLE')
                     import hashlib
                     certificate_pins[cert[kind]]=hashlib.sha256(path.read_bytes()).hexdigest()
-        plan=fingerprint({'policy':policy,'projects':projects,'certificates':certificate_pins})
+        plan=fingerprint({'policy':imported,'projects':projects,'certificates':certificate_pins})
         gateway=policy['gateway'];http=listen(gateway['listen'],gateway['http_port'])
         lines=['worker_processes 1;',f'pid {quote(self.root/"nginx.pid")};',f'error_log {quote(self.root/"error.log")} warn;',
             'events { worker_connections 512; }','http {',

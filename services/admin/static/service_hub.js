@@ -4,6 +4,8 @@ const hubViews={projects:'项目登记',services:'系统服务',records:'操作�
 const hubMessages={XD_SERVICE_BINDING_UNAVAILABLE:'接入地址或服务授权已变化，请重新选择。',XD_SERVICE_REVISION_CONFLICT:'项目已被修改，请重新读取登记。',XD_SERVICE_POLICY_REVISION_CONFLICT:'主机接入策略版本已变化。',XD_SERVICE_DOMAIN_CONFLICT:'域名已被其他入口使用。',XD_SERVICE_ACTION_NOT_GRANTED:'该服务尚未获准执行此操作。',XD_SERVICE_OPERATIONS_DISABLED:'运行操作尚未开启；登记和读取仍可使用。',XD_SERVICE_NOT_SUPERVISED:'该项目由自己的开发进程运行，尚未关联系统服务。',XD_SERVICE_STATUS_UNAVAILABLE:'无法读取 systemd 状态，请检查主机权限与服务名称。',XD_SERVICE_DEFINITION_CHANGED:'服务定义或加载状态已变化，操作已阻断，请重新核对授权。',XD_SERVICE_OBSERVATION_CHANGED:'服务运行状态发生变化，请重新读取后确认。',XD_SERVICE_CONFIRMATION_REQUIRED:'请输入完整目标名称确认。',XD_SERVICE_COMMAND_TIMEOUT:'命令已超时，结果未确认；请先检查实际状态。',XD_SERVICE_ACTION_REJECTED:'系统拒绝了本次服务操作，请检查权限与服务日志。',XD_SERVICE_RUNTIME_UNCONFIRMED:'命令返回后实际服务状态仍未确认。',XD_GATEWAY_APPLY_DISABLED:'主机尚未启用 XDocker 网关。',XD_GATEWAY_PLAN_CHANGED:'项目或入口配置发生变化，请重新预览。',XD_GATEWAY_CONFIG_CHECK_FAILED:'Nginx 配置检查失败，原配置保持保留。',XD_GATEWAY_PORT_IN_USE:'网关端口已被占用，请检查主机接入策略。',XD_GATEWAY_BIND_PERMISSION_REQUIRED:'网关尚无绑定标准端口的权限，请按接入指南配置 XDocker 的标准端口授权。',XD_GATEWAY_OWNER_UNCONFIRMED:'无法确认网关进程归属，本次未接管已有 Nginx。',XD_GATEWAY_RUNTIME_UNCONFIRMED:'网关实际加载版本未确认，请检查回退记录与实际入口。',XD_SERVICE_PROXY_LOOP:'目标地址指向网关本身，请更换接入端口。',XD_SERVICE_MONITOR_UNAVAILABLE:'资源监控分组尚未登记或已被移除。'};
 Object.assign(hubMessages,{XD_GATEWAY_ADDRESS_UNAVAILABLE:'网关监听地址尚未就绪，正在等待网络或 VPN 恢复。',XD_GATEWAY_BIND_FAILED:'网关监听失败，请核对主机网络与运行日志。',XD_GATEWAY_PENDING_CONFIGURATION:'存在尚未应用的修改，自动恢复不会发布这些修改。',XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED:'已应用的网关文件发生变化，请先人工核对。',XD_GATEWAY_RELOAD_FAILED:'网关启动或重新加载失败，正在核对恢复结果。',XD_GATEWAY_RESTORE_UNCONFIRMED:'网关恢复结果尚未确认。'});
 Object.assign(hubMessages,{
+ XD_SERVICE_READ_MATCH_REQUIRED:'服务归属已变化或证据不足，请刷新后重新核对。',
+ XD_SERVICE_GRANT_INVALID:'授权请求无效，请刷新后重试。',
  XD_SERVICE_BATCH_INVALID:'请选择要绑定的服务和关联项目。',
  XD_SERVICE_UNIT_ALREADY_BOUND:'有服务已绑定，请关闭窗口并刷新清单。',
  XD_SERVICE_CONFIGURATION_CHANGED:'主机授权或项目已变化，请刷新后重新核对。'
@@ -173,8 +175,17 @@ function projectServicePanel(data, bindButton){
      const {alias,scope,unit,reasons,suggested}=candidate;
      const state=suggested?(alias?'pending':'discovered'):'review';
      const access=suggested?(alias?'已授权 · 待绑定':'已发现 · 待授权'):'归属待核对';
-     const next=alias?hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available):
-       `<details><summary>如何接入</summary><p>主机管理员可在私有策略的 services 中为该单元设置别名，导入新版本策略后，刷新本页并核对绑定。只读授权示例：</p><code>${esc(JSON.stringify({scope,unit,actions:['status','logs'],definition_sha256:null}))}</code></details>`;
+     let next;
+     if(alias){
+       next=hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available);
+     }else if(candidate.can_grant_read&&project.endpoint_available&&data.operations_enabled){
+       next=hubButton('授权查看状态和日志',{grant:project.id,unit,scope});
+     }else{
+       const reason=!data.operations_enabled?'主机未开启管理操作。':issues.length?'请刷新并重新检查主机服务。':
+         !suggested?'请核对项目目录和登记端口后刷新。':!project.endpoint_available?'请先修复项目的接入地址。':
+         '此单元需要主机管理员核对私有服务策略。';
+       next=`<small>${esc(reason)}</small>`;
+     }
      add(state,`<li><strong>${esc(unit)}</strong> ${badge(access,alias?'blue':'warn')}
        <small>${scope==='user'?'用户级':'系统级'} · ${suggested?'匹配依据':alias?'已授权':'尚未授权'} · ${esc(bindingReasons(reasons))}</small>${next}</li>`);
    }
@@ -310,6 +321,23 @@ function bindingCount(form){
  submit.disabled=!count||serviceHubUI.busy;
 }
 
+function openReadGrant(projectId,scope,unit){
+ const data=serviceHubUI.data;
+ const project=data.projects.find(p=>p.id===projectId);
+ const match=data.project_services?.candidates[projectId]?.find(c=>c.unit===unit&&c.scope===scope&&c.can_grant_read);
+ if(!project||!match)return;
+ serviceHubUI.editor={kind:'read-grant',id:projectId,body:{scope,unit,revision:project.revision,policy_sha256:data.policy_sha256}};
+ const dialog=hubDialog();
+ dialog.innerHTML=`<form id="hub-read-grant-form"><div class="detail-head"><h2>授权查看状态和日志</h2></div>
+   <div class="hub-form-body"><p><strong>${esc(project.name)}</strong> · ${esc(project.domain)}</p>
+   <p>${esc(unit)}（${scope==='user'?'用户级':'系统级'}）</p>
+   <p>${esc(bindingReasons(match.reasons))}</p>
+   <p>允许 XDocker 读取这个服务的状态和最近 100 行日志。授权后可继续绑定到项目。</p>
+   <p id="hub-form-error" class="error" role="alert"></p></div>
+   <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary">确认授权</button></div></form>`;
+ dialog.showModal();
+}
+
 async function openBatchBindings(alias){
  const dialog=hubDialog();
  dialog.innerHTML=`<div class="detail-head"><h2>匹配系统服务</h2>${hubButton('关闭',{close:'yes'})}</div><p role="status" data-bind-loading>正在核对工作目录和监听地址…</p>`;
@@ -362,12 +390,17 @@ async function hubConfirm(kind,id,alias){
  serviceHubUI.editor=editor;dialog.innerHTML=`<form id="hub-operation-form"><div class="detail-head"><h2>确认${kind==='gateway'?'应用网关':kind==='action'?'服务操作':'移除登记'}</h2>${hubButton('关闭',{'close':'yes'})}</div>${extra}<label>输入完整名称 <strong>${esc(target)}</strong><input name="confirmation" required autocomplete="off"></label><p id="hub-form-error" class="error" role="alert"></p><div class="dialog-actions">${hubButton('取消',{'close':'yes'})}<button type="submit" class="primary">确认执行</button></div></form>`;if(!dialog.open)dialog.showModal();
 }
 document.addEventListener('submit',async event=>{
- const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form','hub-batch-form'].includes(id))return;event.preventDefault();const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
+ const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form','hub-batch-form','hub-read-grant-form'].includes(id))return;event.preventDefault();const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
  try{
   let message;
-  if(e.kind==='bindings'){
+  if(e.kind==='read-grant'){
+    await api('service-hub/projects/'+encodeURIComponent(e.id)+'/read-grants',e.body);
+    serviceHubUI.serviceFilter='pending';
+    message='已授权查看状态和日志。点击该服务的「核对绑定」即可关联项目。';
+  }else if(e.kind==='bindings'){
     const bindings=batchSelections().map(row=>({...row,revision:e.revisions.get(row.project)}));
     const result=await api('service-hub/bindings',{bindings,policy_sha256:e.policy});
+    if(serviceHubUI.serviceFilter==='pending')serviceHubUI.serviceFilter='bound';
     message=`新增 ${result.added} 个服务绑定，${result.already_bound} 个已绑定。`;
   }else if(e.kind==='project')await api('service-hub/projects',{...v,revision:e.revision+1,directory:v.directory||null,service:v.service||null,monitor:v.monitor||null,tls:v.tls||null,enabled:form.elements.enabled.checked});
   else if(e.kind==='gateway')await api('service-hub/gateway/apply',{fingerprint:e.plan.fingerprint,confirmation:v.confirmation});
@@ -385,8 +418,9 @@ document.addEventListener('change',event=>{
  }else if(event.target.closest('#hub-form'))hubCapture();
 });
 document.addEventListener('click',async event=>{
- const b=event.target.closest('[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
+ const b=event.target.closest('[data-hub-grant],[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
+  if(d.hubGrant){openReadGrant(d.hubGrant,d.hubScope,d.hubUnit);return;}
   if(d.hubBatch){await openBatchBindings(d.hubBindAlias);return;}
   if(d.hubDiscard){delete serviceHubUI.drafts[(d.hubEntryMode?'entry:':'')+d.hubDiscard];serviceHubUI.editor=null;await loadServiceHub();hubEdit(d.hubDiscard,!!d.hubEntryMode);return;}
   if(d.hubEntry){hubEdit(d.hubEntry,true);return;}

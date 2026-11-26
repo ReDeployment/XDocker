@@ -173,21 +173,41 @@ class RegistryStore:
         db.executemany('INSERT INTO certificates VALUES(?,?,?,?)',[(k,v['certificate'],v['key'],encoded(v['domains'])) for k,v in value['certificates'].items()])
         g=value['gateway'];db.execute('INSERT INTO gateway_settings VALUES(1,?,?,?,?,?,?)',(value['revision'],int(g['enabled']),g['listen'],g['http_port'],g['https_port'],g['binary']))
 
-    def read_policy(self):
+    def read_policies(self):
         with self.connection() as db:
             row=db.execute('SELECT * FROM gateway_settings WHERE singleton=1').fetchone()
             require(row is not None,'XD_REGISTRY_POLICY_MISSING')
             endpoints={r['alias']:{k:r[k] for k in ('scheme','host','port','health_path','expected_status')} for r in db.execute('SELECT * FROM endpoints ORDER BY alias')}
             services={r['alias']:{'scope':r['scope'],'unit':r['unit'],'actions':json.loads(r['actions']),'definition_sha256':r['definition_sha256']} for r in db.execute('SELECT * FROM service_grants ORDER BY alias')}
             certs={r['alias']:{'certificate':r['certificate'],'key':r['key_path'],'domains':json.loads(r['domains'])} for r in db.execute('SELECT * FROM certificates ORDER BY alias')}
-            return {'schema':1,'revision':row['revision'],'endpoints':endpoints,'services':services,'certificates':certs,
-                    'gateway':{'enabled':bool(row['enabled']),**{k:row[k] for k in ('listen','http_port','https_port','binary')}}}
+            policy = {'schema':1,'revision':row['revision'],'endpoints':endpoints,'services':services,'certificates':certs,
+                      'gateway':{'enabled':bool(row['enabled']),**{k:row[k] for k in ('listen','http_port','https_port','binary')}}}
+            # Gateway markers and endpoint health receipts predate web read grants and
+            # include the whole imported policy. Reconstruct that same snapshot.
+            added = {r['name'].removeprefix('web-read:') for r in db.execute(
+                "SELECT name FROM registry_meta WHERE name GLOB 'web-read:*'")}
+            if not added:
+                return policy, policy
+            imported = {**policy, 'revision': policy['revision'] - len(added),
+                        'services': {a: grant for a, grant in services.items() if a not in added}}
+            return policy, imported
+
+    def read_policy(self):
+        return self.read_policies()[0]
 
     def write_policy(self,value):
         with self.connection(write=True) as db:
             current=db.execute('SELECT revision FROM gateway_settings WHERE singleton=1').fetchone()[0]
             require(value['revision']==current+1,'XD_SERVICE_POLICY_REVISION_CONFLICT')
+            db.execute("DELETE FROM registry_meta WHERE name GLOB 'web-read:*'")
             self._save_policy(db,value)
+
+    def add_read_grant(self, alias, scope, unit, revision):
+        with self.connection(write=True) as db:
+            updated = db.execute('UPDATE gateway_settings SET revision=revision+1 WHERE singleton=1 AND revision=?', (revision,))
+            require(updated.rowcount == 1, 'XD_SERVICE_POLICY_REVISION_CONFLICT')
+            db.execute('INSERT INTO service_grants VALUES(?,?,?,?,NULL)', (alias, scope, unit, encoded(['status', 'logs'])))
+            db.execute('INSERT INTO registry_meta VALUES(?,?)', ('web-read:' + alias, str(revision + 1)))
 
     @staticmethod
     def _has_bindings(db):

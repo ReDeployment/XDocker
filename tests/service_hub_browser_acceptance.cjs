@@ -121,9 +121,14 @@ async function main(){
   })()`));
   const showFilter=value=>evaluate(`(()=>{const f=document.querySelector('[data-project-service-filter]');f.value=${JSON.stringify(value)};f.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await showFilter('discovered');
-  assert(await evaluate("document.querySelectorAll('[data-service-project]').length===1&&!document.querySelector('[data-service-project=padelu] button')"));
-  await click('[data-service-project=padelu] summary');
-  assert(await evaluate("document.querySelector('[data-service-project=padelu] details').open"));
+  assert.equal(await evaluate("document.querySelectorAll('[data-service-project]').length"),1);
+  await click('[data-hub-grant="padelu"]');
+  assert(await evaluate(`(()=>{const form=document.querySelector('#hub-read-grant-form');const box=form.querySelector('[type=submit]').getBoundingClientRect();
+    return form.textContent.includes('PadelU')&&form.textContent.includes('padelu-web.service')&&form.textContent.includes('127.0.0.1:15173')&&
+           box.right<=innerWidth&&box.bottom<=innerHeight;})()`));
+  await shot(width===390?'mobile-read-grant':'desktop-read-grant');
+  await click('#hub-read-grant-form [data-hub-close]');
+  assert(await evaluate("!!document.querySelector('[data-hub-grant=padelu]')"));
   await pane('records');await pane('services');
   assert.equal(await evaluate("document.querySelector('[data-project-service-filter]').value"),'discovered');
   await showFilter('review');
@@ -202,6 +207,22 @@ async function main(){
  await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='browser-project-backend.service'");
  await click('#close-detail');
  assert(await evaluate("!document.querySelector('[data-hub-action][data-hub-alias=browser-project-backend]')&&document.querySelector('[data-hub-batch]').disabled"));
+ await click('[data-hub-grant="padelu"]');
+ await click('#hub-read-grant-form [type=submit]');
+ await until("!serviceHubUI.busy&&document.querySelector('[data-project-service-filter]')?.value==='pending'&&document.querySelector('[data-service-project=padelu] [data-hub-bind-alias]')");
+ assert(await evaluate("!serviceHubUI.data.projects.find(p=>p.id==='padelu').bound_services.length"));
+ await click('[data-service-project=padelu] [data-hub-bind-alias]');
+ await until("document.querySelector('#hub-batch-form [type=submit]:enabled')");
+ await click('#hub-batch-form [type=submit]');
+ await until("!serviceHubUI.busy&&document.querySelector('[data-hub-status=padelu]')&&document.querySelector('[data-project-service-filter]').value==='bound'");
+ assert(!await evaluate("!!document.querySelector('[data-hub-action=padelu]')"));
+ await click('[data-hub-status=padelu]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='padelu-web.service'");
+ await click('#close-detail');
+ await click('[data-hub-logs=padelu]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
+ await click('#close-detail');
+ await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -218,6 +239,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

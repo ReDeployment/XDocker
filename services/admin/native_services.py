@@ -142,8 +142,16 @@ def probe_endpoint(endpoint):
             'status':status,'elapsed_ms':round((time.monotonic()-started)*1000)}
 
 
+def read_host(command, **bounds):
+    # A system service can run as the unit owner without inheriting their login session.
+    if command[:2] == ['systemctl', '--user'] and not (
+            os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('DBUS_SESSION_BUS_ADDRESS')):
+        command = ['env', f'XDG_RUNTIME_DIR=/run/user/{os.geteuid()}', *command]
+    return run_fixed(command, **bounds)
+
+
 class SystemdServices:
-    def __init__(self,runner=run_fixed):self.runner=runner
+    def __init__(self,runner=read_host):self.runner=runner
 
     def status(self,grant):
         args=['systemctl']+(['--user'] if grant['scope']=='user' else [])
@@ -202,8 +210,12 @@ class ServiceHub:
             yield
         finally:os.close(fd)
 
+    def policies(self):
+        effective, imported = self.store.read_policies()
+        return validate_policy(effective), imported
+
     def policy(self):
-        return validate_policy(self.store.read_policy())
+        return self.policies()[0]
 
     def import_policy(self,value):
         validate_policy(value)
@@ -284,9 +296,10 @@ class ServiceHub:
             require(body['confirmation']==row['name'],'XD_SERVICE_CONFIRMATION_REQUIRED')
             del data['projects'][identifier];self.store.write_hub(data)
 
-    def bound(self,identifier,alias=None):
+    def bound(self,identifier,alias=None,*,policy=None):
         data=self.data();require(identifier in data['projects'],'XD_SERVICE_PROJECT_NOT_FOUND')
-        row=data['projects'][identifier];policy=self.policy()
+        row=data['projects'][identifier]
+        if policy is None:policy=self.policy()
         if alias is not None:
             require(alias==row['service'] or self.store.additional_bindings().get(alias)==identifier,'XD_SERVICE_BINDING_UNAVAILABLE')
             row={**row,'service':alias}
@@ -294,9 +307,14 @@ class ServiceHub:
         return row,policy
 
     def health(self,identifier):
-        row,policy=self.bound(identifier);expected=fingerprint({'row':row,'policy':policy})
-        value=self.probe({**policy['endpoints'][row['endpoint']], 'host_header':row['domain']})
-        require(expected==fingerprint({'row':self.bound(identifier)[0],'policy':self.policy()}),'XD_SERVICE_CONFIGURATION_CHANGED')
+        def target():
+            effective, imported = self.policies()
+            row, _ = self.bound(identifier, policy=effective)
+            endpoint = {**effective['endpoints'][row['endpoint']], 'host_header': row['domain']}
+            return endpoint, fingerprint({'row': row, 'policy': imported})
+        endpoint, expected = target()
+        value = self.probe(endpoint)
+        require(expected == target()[1], 'XD_SERVICE_CONFIGURATION_CHANGED')
         self.observations[identifier]={'fingerprint':expected,**value}
         atomic_json(private_directory(self.root/'health')/(identifier+'.json'),self.observations[identifier])
         return value
@@ -342,7 +360,7 @@ class ServiceHub:
             return operation
 
     def listing(self):
-        policy=self.policy();data=self.data();rows=[];monitors=self.monitors()
+        policy,imported=self.policies();data=self.data();rows=[];monitors=self.monitors()
         additional={}
         for alias,project in self.store.additional_bindings().items():
             additional.setdefault(project,[]).append(alias)
@@ -351,7 +369,7 @@ class ServiceHub:
             snapshot=self.observations.get(row['id'])
             if snapshot is None and (self.root/'health'/(row['id']+'.json')).exists():
                 snapshot=read_json(self.root/'health'/(row['id']+'.json'))
-            matches=bool(snapshot and snapshot.get('fingerprint')==fingerprint({'row':row,'policy':policy}))
+            matches=bool(snapshot and snapshot.get('fingerprint')==fingerprint({'row':row,'policy':imported}))
             fresh=bool(matches and time.time()-snapshot['at']<=30)
             rows.append({**row,'bound_services':aliases,'health':snapshot if fresh else None,'last_health':snapshot if matches else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
                          'service_available':all(a in policy['services'] for a in aliases),
@@ -359,5 +377,5 @@ class ServiceHub:
         return {'projects':rows,'endpoints':policy['endpoints'],
             'services':{k:{'unit':v['unit'],'scope':v['scope'],'actions':v['actions']} for k,v in policy['services'].items()},
             'certificates':{k:{'domains':v['domains']} for k,v in policy['certificates'].items()},
-            'policy_sha256':fingerprint(policy),'gateway_enabled':policy['gateway']['enabled'],
+            'policy_sha256':fingerprint(policy),'policy_revision':policy['revision'],'gateway_enabled':policy['gateway']['enabled'],
             'operations':data['operations'],'configuration_writable':True,'batch_binding_available':True}

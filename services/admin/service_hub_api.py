@@ -4,7 +4,7 @@ from flask import jsonify, request
 from native_services import ServiceHub, ServiceError, probe_endpoint
 from gateway_runtime import GatewayRuntime
 from registry_store import RegistryError
-from service_binding_matches import binding_preview, project_services, read_host
+from service_binding_matches import binding_preview, grant_project_read, project_services, read_host
 
 
 def register_service_hub(app,state,audit,redactor,domains):
@@ -41,6 +41,17 @@ def register_service_hub(app,state,audit,redactor,domains):
         try:
             runner = app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host) if app.config.get('NATIVE_MODE') else None
             return jsonify(binding_preview(hub.listing(), runner))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return failure(exc)
+
+    @app.post('/api/service-hub/projects/<identifier>/read-grants')
+    def hub_grant_read(identifier):
+        try:
+            if not (app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED')):
+                raise ServiceError('XD_SERVICE_OPERATIONS_DISABLED')
+            grant = grant_project_read(hub, identifier, request.get_json(), app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host))
+            audit('service-read-grant', identifier + '/' + grant['scope'] + '/' + grant['unit'], 'success')
+            return jsonify(grant=grant), 201
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
 

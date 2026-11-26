@@ -45,3 +45,5 @@
  .project-service-list tr{border-bottom:1px solid var(--line);padding:12px 16px}
  .project-service-list td{padding:4px 0;border:0;white-space:normal}
 }
+
+#hub-read-grant-form .hub-form-body{overflow-wrap:anywhere}

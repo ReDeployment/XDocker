@@ -290,6 +290,60 @@ class HubAPITests(unittest.TestCase):
             self.assertEqual(self.client.get('/api/service-hub/projects/example/services/worker/' + action).status_code, 409)
         self.assertFalse(hub.store.additional_bindings())
 
+    def test_web_read_grant_rechecks_host_and_preserves_gateway(self):
+        hub = self.app.extensions['service_hub']
+        hub.import_policy(policy())
+        hub.save(project(directory='/work/example'))
+        def reader(command, **kwargs):
+            output = ''
+            if command[0] == 'systemctl':
+                units = ['worker.service', 'xdocker-native.service', 'example-name.service']
+                output = '\n\n'.join('Id=' + u + '\nLoadState=loaded\nWorkingDirectory=' +
+                                     ('/other' if 'name' in u else '/work/example/backend') for u in units)
+            return {'code': 0, 'stdout': output, 'truncated': False}
+        self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
+        path = '/api/service-hub/projects/example/read-grants'
+        body = {'revision': 1, 'policy_sha256': fingerprint(hub.policy()), 'unit': 'worker.service', 'scope': 'user'}
+        self.assertEqual(self.post(path, body, csrf=False).status_code, 401)
+        self.login()
+        self.assertEqual(self.post(path, body, csrf=False).status_code, 403)
+        self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_OPERATIONS_DISABLED')
+        self.app.config['NATIVE_OPERATIONS_ENABLED'] = True
+        hub.probe = lambda endpoint: {'state': 'healthy', 'status': 200, 'at': time.time()}
+        hub.health('example')
+        before = self.app.extensions['native_gateway'].preview()
+        for change, code in [
+                ({'actions': ['restart']}, 'XD_SERVICE_GRANT_INVALID'),
+                ({'scope': 'system'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                ({'unit': 'xdocker-native.service'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                ({'unit': 'absent.service'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                ({'unit': 'example-name.service'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                ({'revision': 2}, 'XD_SERVICE_REVISION_CONFLICT'),
+                ({'policy_sha256': 'stale'}, 'XD_SERVICE_CONFIGURATION_CHANGED')]:
+            self.assertEqual(self.post(path, {**body, **change}).json['error'], code)
+        self.assertFalse(hub.policy()['services'])
+        with patch.dict(self.app.config, SERVICE_HUB_MATCH_RUNNER=lambda *a, **kw: {'code': 1, 'truncated': False, 'stdout': ''}):
+            self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_READ_MATCH_REQUIRED')
+        result = self.post(path, body)
+        self.assertEqual(result.status_code, 201)
+        alias = result.json['grant']['alias']
+        self.assertEqual(hub.policy()['services'][alias], {'actions': ['status', 'logs'], 'scope': 'user',
+                         'unit': 'worker.service', 'definition_sha256': None})
+        self.assertFalse(hub.listing()['projects'][0]['bound_services'])
+        self.assertEqual(self.client.get('/api/service-hub/projects/example/services/' + alias + '/logs').status_code, 409)
+        self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
+        self.assertEqual(hub.policy()['revision'], 3)
+        from gateway_runtime import GatewayRuntime
+        reopened = ServiceHub(hub.root.parent)
+        self.assertEqual(reopened.listing()['projects'][0]['health']['state'], 'healthy')
+        after = GatewayRuntime(reopened).preview()
+        self.assertEqual(before['fingerprint'], after['fingerprint'])
+        self.assertEqual(before['configuration'], after['configuration'])
+        self.assertNotEqual(before['policy_sha256'], after['policy_sha256'])
+        reopened.import_policy(policy(revision=4))
+        self.assertFalse(hub.policy()['services'])
+        self.assertEqual(*hub.policies())
+
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()
         self.app.extensions['service_hub'].import_policy(policy())

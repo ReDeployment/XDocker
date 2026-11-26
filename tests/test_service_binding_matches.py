@@ -24,7 +24,7 @@ class BindingMatchTests(unittest.TestCase):
     def test_system_service_can_observe_its_own_login_manager(self):
         command = ['systemctl', '--user', 'show', '--', 'example.service']
         with patch.dict('os.environ', {}, clear=True), patch('os.geteuid', return_value=1234), \
-                patch('service_binding_matches.run_fixed') as run:
+                patch('native_services.run_fixed') as run:
             read_host(command, timeout=2)
             run.assert_called_once_with(['env', 'XDG_RUNTIME_DIR=/run/user/1234', *command], timeout=2)
             with patch.dict('os.environ', {'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/test/bus'}):
@@ -126,6 +126,15 @@ class BindingMatchTests(unittest.TestCase):
         self.assertEqual(candidates['api-worker.service']['alias'], 'api-worker')
         self.assertFalse(candidates['api-worker.service']['suggested'])
         self.assertNotIn('private.service', str(result))
+        self.assertTrue(candidates['unknown.service']['can_grant_read'])
+        self.assertFalse(candidates['api-worker.service']['can_grant_read'])
+        def system_only(command, **kwargs):
+            if '--user' in command:
+                return {'stdout': '', 'code': 0, 'truncated': False}
+            return runner([*command[:1], '--user', *command[1:]] if command[0] == 'systemctl' else command, **kwargs)
+        system = project_services(listing, system_only)
+        match = next(c for c in system['candidates']['api'] if c['unit'] == 'unknown.service')
+        self.assertEqual((match['scope'], match['can_grant_read']), ('system', True))
 
     def test_incomplete_host_observations_and_non_native_are_not_reported_as_no_match(self):
         listing = {'projects': self.projects, 'services': {}, 'endpoints': {}}
