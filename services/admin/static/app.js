@@ -150,7 +150,7 @@ function render(){
   }else if(current==='services'){
     const active=moduleViews.services;
     const content=active==='logs'?containerLogList():snapshot.runtime_mode==='native'
-      ?panel('服务操作','原生模式通过独立服务的授权入口管理启停。','<div class="panel-body"><a href="#services/logs">查看容器日志</a> · <a href="#service-hub/services">查看常驻服务</a></div>')
+      ?panel('服务操作','原生模式通过独立服务的授权入口管理启停。','<div class="panel-body"><a href="#services/logs">查看容器日志</a> · <a href="#service-hub/services">查看系统服务</a></div>')
       :panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
     html=verticalTabs('services','容器服务',[{key:'operations',label:'服务操作'},{key:'logs',label:'容器日志'}],active,content);
   }else if(current==='certificates'){

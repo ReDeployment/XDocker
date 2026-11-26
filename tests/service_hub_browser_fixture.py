@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'services/admin'),str(ROOT/'tests')]
@@ -52,10 +53,14 @@ def main():
             return {'code':0,'stdout':'','truncated':False}
         (state/'native-config/sites/legacy').mkdir();(state/'native-config/sites/legacy/site.conf').write_text('SITE_DOMAIN=legacy.example.test\nSITE_SERVICE=legacy-web\nSITE_KIND=static\n');(state/'native-config/root.env').write_text('ENABLED_SITES=legacy\n')
         docker=LogDocker()
+        def probe(endpoint):
+            if endpoint.get('host_header')=='padelu-admin.home.test':
+                return {'state':'unexpected-status','at':time.time()-60,'status':403}
+            return {'state':'healthy','at':time.time(),'status':200}
         app=create_app({'TESTING':True,'STATE':str(state),'CONFIG':str(state/'native-config'),
             'REPORTS':str(state/'reports'),'BACKUPS':str(state/'backups'),'HOST_ROOT':str(ROOT),'HOST_METRICS':str(state/'host-metrics'),
             'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':True,'SERVICE_HUB_ADAPTER':adapter,
-            'SERVICE_HUB_PROBE':lambda endpoint:{'state':'unexpected-status' if endpoint.get('host_header')=='padelu-admin.home.test' else 'healthy','at':__import__('time').time(),'status':403 if endpoint.get('host_header')=='padelu-admin.home.test' else 200},
+            'SERVICE_HUB_PROBE':probe,
             'SERVICE_HUB_GATEWAY_ADAPTER':{'runner':nginx,'owner_reader':lambda *args:{'pid':9000,'started':42} if live['value'] else None,'marker_reader':lambda *args:True}},docker)
         app.extensions['service_hub'].import_policy(value)
         atomic_json(state/'host-metrics/report.json',sample_report())

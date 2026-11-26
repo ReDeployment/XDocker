@@ -34,10 +34,12 @@ async function main(){
   assert(await evaluate(`hubEntry({domain:'example.home.test',tls:${JSON.stringify(tls)},enabled:true},{gateway:{http_port:${port},https_port:${port}}},true).includes('href="'+${JSON.stringify(url)}+'"')`),'Incorrect public entry port');
  }
  assert(await evaluate(`(()=>{const b=document.querySelectorAll('.hub-workspace [role=tab]');return b[1].getBoundingClientRect().top>b[0].getBoundingClientRect().bottom})()`));await shot('desktop-overview');
+ await pane('services');assert(await evaluate("document.querySelector('#view-service-hub-panel').textContent.includes('当前没有项目绑定')"));
  await pane('projects');await click('[data-hub-edit="new"]');await evaluate(`document.querySelector('[name=id]').value='browser-project';document.querySelector('[name=name]').value='浏览器项目'`);await click('[data-hub-close]');
  await sitesPage();await hubPage('projects');await click('[data-hub-edit="new"]');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'browser-project');
  await form({id:'browser-project',name:'浏览器项目',endpoint:'example',domain:'browser.home.test',service:'example',monitor:'example-resources',enabled:true});
  await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===1`);
+ assert(await evaluate("document.querySelector('#view-service-hub-panel tbody tr').textContent.includes('尚未检查')"));
  await click('[data-hub-health="browser-project"]');await until(`serviceHubUI.data.projects[0].health?.state==='healthy'`);
  await click('[data-hub-edit="browser-project"]');await evaluate(`document.querySelector('[name=name]').value='保留中的草稿'`);await click('[data-hub-close]');await evaluate('loadServiceHub()');
  await sitesPage();
@@ -84,6 +86,22 @@ async function main(){
  }
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await hubPage('projects');
+  assert.equal(await evaluate("document.querySelectorAll('#view-service-hub-panel tbody tr').length"),2);
+  assert(await evaluate(`(()=>{
+    const project=serviceHubUI.data.projects.find(p=>p.id==='padelu');
+    const row=document.querySelector('[data-hub-health="padelu"]').closest('tr').textContent;
+    return !project.health && row.includes('上次异常') && row.includes('HTTP 403') && row.includes(date(project.last_health.at*1000));
+  })()`));
+  await pane('services');
+  assert.equal(await evaluate("document.querySelector('#view-service-hub-services').textContent.trim()"),'系统服务');
+  assert.equal(await evaluate("document.querySelectorAll('#view-service-hub-panel tbody tr').length"),1);
+  assert(await evaluate(`(()=>{
+    const panel=document.querySelector('#view-service-hub-panel');
+    return panel.textContent.includes('example.service') && panel.textContent.includes('可重启') &&
+      !panel.textContent.includes('PadelU') && !!panel.querySelector('[data-hub-action="browser-project"]');
+  })()`));
+  assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
   await evaluate("location.hash='overview'");
   await until("document.querySelector('[data-overview-check]:enabled')&&document.querySelector('.kpi strong')?.textContent==='1'");
   assert(await evaluate("document.querySelector('#content').textContent.includes('demo / gateway')&&!document.querySelector('[data-probe=all]')"));
@@ -119,6 +137,22 @@ async function main(){
   assert(await evaluate("document.querySelector('#view-services-logs').getAttribute('aria-selected')==='true'"));
   await shot(width===390?'mobile-container-logs':'desktop-container-logs');
  }
+ // Exercise restricted grants without entering any operation on the host.
+ const permissions=await evaluate(`(()=>{
+   const root=document.createElement('section');
+   const project={id:'sample',name:'示例',service:'bound',endpoint_available:true};
+   const data={projects:[project,{id:'revoked',service:'removed'}],services:{bound:{unit:'bound.service',scope:'user',actions:['status','logs']}}};
+   const bindings=boundSystemServices(data);
+   root.innerHTML=systemServicesPanel(bindings,true);
+   const readOnly=root.textContent.includes('仅查看')&&!!root.querySelector('[data-hub-status]')&&!!root.querySelector('[data-hub-logs]')&&!root.querySelector('[data-hub-action]');
+   data.services.bound.actions=['status','start','stop'];
+   root.innerHTML=systemServicesPanel(bindings,false);
+   const disabled=root.textContent.includes('运行操作未开启')&&!root.querySelector('[data-hub-action]')&&!root.querySelector('[data-hub-logs]');
+   project.endpoint_available=false;
+   root.innerHTML=systemServicesPanel(bindings,true);
+   return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
+ })()`);
+ assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
  assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:4,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});
