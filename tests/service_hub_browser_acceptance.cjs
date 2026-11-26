@@ -90,6 +90,7 @@ async function main(){
   await evaluate("location.hash='service-hub/overview'");
   await until("location.hash==='#service-hub/projects'&&document.querySelector('#view-service-hub-projects[aria-selected=true]')");
   await pane('records');
+  await evaluate("window.scrollTo(0,0)");
   await click('[data-tab="service-hub"]');
   await until("location.hash==='#service-hub/projects'&&document.querySelector('#view-service-hub-projects[aria-selected=true]')");
   assert.deepEqual(await evaluate("[...document.querySelectorAll('.hub-workspace [role=tab]')].map(b=>b.textContent)"),['项目登记','系统服务','操作记录']);

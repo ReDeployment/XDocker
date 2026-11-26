@@ -146,7 +146,8 @@ function systemServicesPanel(bindings,operationsEnabled){
 
 function renderServiceHubPage(){
  if(location.hash==='#service-hub/gateway'){current='sites';moduleViews.sites='gateway';location.replace('#sites/gateway');render();if(loggedIn)loadServiceHub();return;}
- if(['#service-hub','#service-hub/overview'].includes(location.hash)){
+ const projectEntry=['#service-hub','#service-hub/overview'].includes(location.hash);
+ if(projectEntry){
    history.replaceState(history.state,'','#service-hub/projects');
    moduleViews['service-hub']='projects';
  }
@@ -164,7 +165,14 @@ function renderServiceHubPage(){
  }
  const alerts=errors.map(e=>`<div class="hub-alert" role="alert">${esc(hubText(e))}</div>`).join('');
  $('content').innerHTML='<div class="hub-workspace">'+alerts+verticalTabs('service-hub','独立服务分区',Object.entries(hubViews).map(([key,label])=>({key,label})),view,body)+'</div>';
- if(serviceHubUI.lastView!==view){$(`view-service-hub-${view}`)?.scrollIntoView({block:'nearest',inline:'nearest'});serviceHubUI.lastView=view;}
+ if(projectEntry||serviceHubUI.lastView!==view){
+   const tab=$(`view-service-hub-${view}`);
+   tab.scrollIntoView({block:'nearest',inline:'nearest'});
+   if(window.matchMedia('(max-width:720px)').matches){
+     tab.closest('.hub-workspace').scrollIntoView({block:'start'});
+   }
+   if(d||errors.length)serviceHubUI.lastView=view;
+ }
 }
 function hubCapture(){const f=$('hub-form'),e=serviceHubUI.editor;if(f&&e?.kind==='project')serviceHubUI.drafts[e.draftKey]={...Object.fromEntries(new FormData(f)),enabled:f.elements.enabled.checked,__revision:e.revision};}
 function hubDialog(){let dialog=$('hub-dialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='hub-dialog';dialog.className='hub-dialog';document.body.append(dialog);dialog.addEventListener('cancel',hubCapture);}return dialog;}
