@@ -133,6 +133,10 @@ function render(){
   const services=snapshot.services,sites=snapshot.sites,certs=snapshot.certificates;
   const enabled=sites.filter(s=>s.enabled), activeCerts=certs.filter(c=>c.enabled);
   let html='';
+  if(current==='overview'&&snapshot.runtime_mode==='native'){
+    $('content').innerHTML=renderNativeOverview();
+    return;
+  }
   if(current==='overview'){
     const kpis=[['运行容器',services.filter(s=>s.state==='running').length,`${services.length} 个已部署服务`],['网站入口',new Set([...enabled.map(s=>s.domain),...(typeof serviceHubUI!=='undefined'?serviceHubUI.data?.projects.filter(p=>p.enabled).map(p=>p.domain)||[]:[])]).size,`${enabled.filter(s=>s.kind==='frp_http').length} 条 FRP 链路`],['有效证书',activeCerts.filter(c=>c.status==='LOCAL_VALID').length,`${activeCerts.length} 组已启用证书`],['最近操作',jobs.filter(j=>j.state==='running').length,busy()?'正在执行，请稍候':'当前无运行任务']];
     html=`<div class="intro"><div><h2>你好，管理员</h2><p class="muted">查看实际运行状态，掌握服务与入口的健康情况。</p></div>${btn('检查所有站点 ↗',{probe:'all'},false,'primary')}</div><div class="kpis">${kpis.map(([a,b,c])=>`<article class="kpi"><div class="kpi-label">${a}</div><strong>${b}</strong><small>${c}</small></article>`).join('')}</div><div class="columns">`;
@@ -145,7 +149,9 @@ function render(){
     html=renderInstances(services);
   }else if(current==='services'){
     const active=moduleViews.services;
-    const content=active==='logs'?containerLogList():panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
+    const content=active==='logs'?containerLogList():snapshot.runtime_mode==='native'
+      ?panel('服务操作','原生模式通过独立服务的授权入口管理启停。','<div class="panel-body"><a href="#services/logs">查看容器日志</a> · <a href="#service-hub/services">查看常驻服务</a></div>')
+      :panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
     html=verticalTabs('services','容器服务',[{key:'operations',label:'服务操作'},{key:'logs',label:'容器日志'}],active,content);
   }else if(current==='certificates'){
     html=`<div class="intro"><div><h2>HTTPS 证书</h2><p class="muted">按证书组管理，共享 SAN 的域名一起续期。续期使用现有 Certbot 配置。</p></div></div>`+panel('证书清单','状态来自真实检查报告；检查时间显示数据是否新鲜',table(['证书 / 域名','状态','到期 / 剩余','最近证书检查','操作'],certs.map(c=>`<tr><td><strong>${esc(c.name)}</strong><small>${c.domains.map(esc).join('<br>')}</small></td><td>${certBadge(c)}</td><td>${c.expiry?date(c.expiry):'尚未签发 / 待检查'}<small>${c.days_remaining!==undefined?c.days_remaining+' 天':''}</small></td><td>${date(c.checked_at)}</td><td><div class="actions">${btn('检查',{certificate:c.name,action:'check'},!c.enabled)}${btn('续期测试',{certificate:c.name,action:'renew-test'},!c.enabled)}${btn('按需续期',{certificate:c.name,action:'renew'},!c.enabled)}</div></td></tr>`)))+`<p class="muted">续期测试使用 Let’s Encrypt 测试环境；按需续期遵守到期判断，不强制重复签发。尚未签发的证书请先按 Git 部署流程建立入口。</p>`;
@@ -169,7 +175,7 @@ function askOperation(path, body, target, title, impact){pending={path,body,targ
 async function submitOperation(path, body){const result=await api(path,body);trackedJob=result.id;notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();clearCredentials();current='audit';render();return result;}
 function containerLogList(){
   const entries=[...(snapshot.log_services||[])].sort((a,b)=>a.project.localeCompare(b.project)||a.name.localeCompare(b.name));
-  if(snapshot.engine.available===false)return panel('容器日志','','<p class="panel-body">无法连接 Docker，日志清单暂不可用。</p>');
+  if(snapshot.container_inventory_available===false||snapshot.engine.available===false)return panel('容器日志','','<p class="panel-body">无法连接 Docker，日志清单暂不可用。</p>');
   if(!entries.length)return panel('容器日志','','<p class="panel-body">当前没有可读取日志的 XDocker 服务容器。</p>');
   const rows=entries.map(c=>`<div class="container-log-row"><div><strong>${esc(c.project)} / ${esc(c.service)}</strong><small>${esc(c.name)}</small></div>${stateBadge(c.state)}<button data-container-log="${esc(c.id)}">查看日志</button></div>`).join('');
   return panel('容器日志',`${entries.length} 个容器`,rows);

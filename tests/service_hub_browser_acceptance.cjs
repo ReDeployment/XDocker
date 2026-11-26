@@ -84,6 +84,16 @@ async function main(){
  }
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await evaluate("location.hash='overview'");
+  await until("document.querySelector('[data-overview-check]:enabled')&&document.querySelector('.kpi strong')?.textContent==='1'");
+  assert(await evaluate("document.querySelector('#content').textContent.includes('demo / gateway')&&!document.querySelector('[data-probe=all]')"));
+  await click('[data-overview-check]');
+  await until("document.querySelector('[data-overview-progress]')?.textContent.includes('本轮完成 2/2 · 正常 1 · 异常 1')");
+  assert(await evaluate("document.querySelector('#content').textContent.includes('HTTP 403')"));
+  assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
+  await shot(width===390?'mobile-native-overview':'desktop-native-overview');
+  await click('a[href="#services/logs"]');
+  await until("document.querySelector('.container-log-row')?.textContent.includes('demo / gateway')");
   await evaluate("location.hash='services'");
   await until("document.querySelector('#view-services-operations')?.getAttribute('aria-selected')==='true'");
   await click('[data-view="services"][data-view-tab="logs"]');

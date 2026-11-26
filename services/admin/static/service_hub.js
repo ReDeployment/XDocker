@@ -5,7 +5,8 @@ const hubMessages={XD_SERVICE_BINDING_UNAVAILABLE:'接入地址或服务授权�
 Object.assign(hubMessages,{XD_GATEWAY_ADDRESS_UNAVAILABLE:'网关监听地址尚未就绪，正在等待网络或 VPN 恢复。',XD_GATEWAY_BIND_FAILED:'网关监听失败，请核对主机网络与运行日志。',XD_GATEWAY_PENDING_CONFIGURATION:'存在尚未应用的修改，自动恢复不会发布这些修改。',XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED:'已应用的网关文件发生变化，请先人工核对。',XD_GATEWAY_RELOAD_FAILED:'网关启动或重新加载失败，正在核对恢复结果。',XD_GATEWAY_RESTORE_UNCONFIRMED:'网关恢复结果尚未确认。'});
 const hubText=value=>hubMessages[value]||value;
 const hubButton=(text,data={},blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-hub-${k}="${esc(v)}"`).join(' ')} ${blocked||serviceHubUI.busy?'disabled':''}>${esc(text)}</button>`;
-function resetServiceHub(){serviceHubUI.data=null;serviceHubUI.error='';serviceHubUI.drafts={};serviceHubUI.editor=null;sitesUI.source='all';sitesUI.lastView='';$('hub-dialog')?.close();}
+let overviewCheck=null;
+function resetServiceHub(){overviewCheck=null;serviceHubUI.data=null;serviceHubUI.error='';serviceHubUI.drafts={};serviceHubUI.editor=null;sitesUI.source='all';sitesUI.lastView='';$('hub-dialog')?.close();}
 async function loadServiceHub(){
  if(!loggedIn||serviceHubUI.loading)return;serviceHubUI.loading=true;
  try{const data=await api('service-hub');if(loggedIn){serviceHubUI.data=data;serviceHubUI.error='';}}
@@ -27,6 +28,62 @@ function hubRecoveryRows(gateway){
  const label={ready:'自动恢复检查正常','not-configured':'尚未应用网关配置','waiting-address':'等待监听地址就绪',retrying:'正在重试',blocked:'等待人工核对',stale:'检查已过期',unavailable:'检查状态不可用'}[r?.state]||'尚未报告';
  return `<div class="stack-row"><span>自动恢复</span><strong>${esc(label)}</strong></div>${r?.next_check_at?`<div class="stack-row"><span>${r.state==='stale'?'原定检查':'下次检查'}</span><span>${date(r.next_check_at*1000)}</span></div>`:''}`;
 }
+function renderNativeOverview(){
+  const hub=serviceHubUI.data;
+  const projects=(hub?.projects||[]).filter(p=>p.enabled);
+  const haveProjects=!!hub&&!serviceHubUI.error;
+  const containers=[...(snapshot.log_services||[])].sort((a,b)=>a.project.localeCompare(b.project)||a.service.localeCompare(b.service));
+  const haveContainers=snapshot.container_inventory_available!==false&&snapshot.engine.available!==false;
+  const observations=projects.map(p=>({domain:p.domain,health:p.health||p.last_health}));
+  const failures=observations.filter(p=>p.health&&p.health.state!=='healthy');
+  const cards=[
+    ['运行容器',haveContainers?containers.filter(c=>c.state==='running').length:'—',haveContainers?`共 ${containers.length} 个托管容器`:'Docker 清单不可用'],
+    ['网站入口',haveProjects?projects.length:'—','已启用的独立项目'],
+    ['上次检查异常',haveProjects?failures.length:'—','按各入口最近一次结果统计'],
+    ['尚未检查',haveProjects?observations.filter(p=>!p.health).length:'—','尚无连接检查结果的入口'],
+  ];
+  const rows=containers.map(c=>`<div class="stack-row"><div><strong>${esc(c.project)} / ${esc(c.service)}</strong><small>${esc(c.name)}</small></div>${stateBadge(c.state)}</div>`).join('');
+  const run=overviewCheck;
+  const problems=run?run.failures:failures.map(p=>({domain:p.domain,message:p.health.status?'HTTP '+p.health.status:'目标不可达'}));
+  const summary=run?`${run.running?'正在检查':'本轮完成'} ${run.done}/${run.total} · 正常 ${run.done-run.failures.length} · 异常 ${run.failures.length}`:'各入口最近一次检查';
+  const error=serviceHubUI.error?esc(hubText(serviceHubUI.error)):!hub?'正在读取项目登记…':'';
+  const problemRows=problems.map(p=>`<div class="stack-row"><strong>${esc(p.domain)}</strong><span>${esc(p.message)}</span></div>`).join('');
+  const empty=run?.running?'检查中…':!projects.length?'暂无已启用入口。':observations.every(p=>!p.health)&&!run?'尚未检查入口。':'当前检查记录中没有异常入口。';
+  const button=`<button class="primary" data-overview-check ${!haveProjects||!projects.length||!hub.configuration_writable||run?.running||!connection.ready?'disabled':''}>${run?.running?'正在检查…':'检查所有站点'}</button>`;
+  return `<div class="intro"><h2>运行概览</h2>${button}</div><div class="kpis">${cards.map(([label,value,note])=>`<article class="kpi"><div class="kpi-label">${label}</div><strong>${value}</strong><small>${note}</small></article>`).join('')}</div><div class="columns">`+
+    panel('服务运行状态','XDocker 启动的容器',`<div class="panel-body">${haveContainers?(rows||'当前没有托管容器。'):'无法读取 Docker 容器清单，请重新检查连接。'}</div>`,'<a href="#services/logs">容器日志</a>')+
+    panel('站点连接检查','已登记的应用目标',`<div class="panel-body"><p role="status" data-overview-progress>${summary}</p>${error?`<p role="alert">${error}</p>`:''}${problemRows||(!error?`<p class="muted">${empty}</p>`:'')}</div>`,'<a href="#sites/overview">网站入口</a>')+'</div>';
+}
+
+async function checkNativeOverviewSites(){
+  const hub=serviceHubUI.data;
+  if(overviewCheck?.running||!loggedIn||snapshot?.runtime_mode!=='native'||!hub?.configuration_writable||serviceHubUI.error)return;
+  const projects=hub.projects.filter(p=>p.enabled);
+  if(!projects.length)return;
+  const run={running:true,total:projects.length,done:0,failures:[]};
+  overviewCheck=run;
+  const paint=()=>{if(current==='overview'&&loggedIn)render();};
+  paint();
+  for(const p of projects){
+    if(overviewCheck!==run||!loggedIn)return;
+    try{
+      const {result}=await api('service-hub/projects/'+encodeURIComponent(p.id)+'/health',{});
+      if(result.state!=='healthy')run.failures.push({domain:p.domain,message:result.status?'HTTP '+result.status:'目标不可达'});
+    }catch(error){
+      run.failures.push({domain:p.domain,message:hubText(error.message)});
+    }
+    run.done++;
+    if(overviewCheck===run)paint();
+  }
+  if(overviewCheck!==run)return;
+  run.running=false;
+  paint();
+  await loadServiceHub();
+}
+document.addEventListener('click',event=>{
+  if(event.target.closest('[data-overview-check]:enabled'))checkNativeOverviewSites();
+});
+
 function renderServiceHubPage(){
  if(location.hash==='#service-hub/gateway'){current='sites';moduleViews.sites='gateway';location.replace('#sites/gateway');render();if(loggedIn)loadServiceHub();return;}
  const route=location.hash.slice(1).split('/')[1];if(hubViews[route])serviceHubUI.view=route;
