@@ -82,6 +82,8 @@ TLS 可选引用主机 policy 中的既有 certificate/key 路径和准确域名
 
 保存只写本实例登记库，沿用现有服务授权。主机授权或项目版本已变化、服务已归属其他项目时，整批拒绝，请关闭窗口、刷新并重新选择。重复保存相同绑定不会增加记录。查看不到某个单元时，先由主机管理员核对私有 policy。旧项目与原单服务接口继续使用项目的主服务，具体单元使用带服务别名的接口。新增绑定不改变网关配置或连接检查记录。
 
+更新已有原生后台时，使用旧配置 `python:native_runtime` 启动的 Gunicorn 主进程已加载业务模块。首次切换到独立配置 `python:native_gunicorn` 需要安排管理服务维护窗口，同属该单元的 Nginx 网关可能短暂中断。后续仅更新 Web 业务模块时可平滑重载 Gunicorn 工作进程，并以批量绑定窗口能读取候选服务验收。
+
 项目自行维护已有 systemd system/user service。主机 policy 登记准确 unit 和 scope，默认只授予 status/logs。例如：
 
 ```json

@@ -4,6 +4,9 @@ import json
 import os
 from pathlib import Path
 import socket
+import signal
+import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -17,7 +20,18 @@ ROOT=Path(__file__).resolve().parents[1]
 def run_case(wait_for_address=False):
     with tempfile.TemporaryDirectory(prefix='xdocker-native-http-') as raw:
         root=Path(raw).resolve();state=root/'state'
-        init=subprocess.run([sys.executable,'-B',str(ROOT/'scripts/admin-native.py'),'init','--state',str(state)],capture_output=True,text=True,check=True)
+        checkout=ROOT
+        if not wait_for_address:
+            checkout=root/'checkout'
+            for folder in ('scripts','services/admin'):
+                shutil.copytree(ROOT/folder,checkout/folder,ignore=shutil.ignore_patterns('__pycache__','.venv'))
+            # A worker should import new application code after HUP, even on a stable master.
+            module=checkout/'services/admin/native_services.py'
+            source=module.read_text()
+            flag="'batch_binding_available':True"
+            assert flag in source
+            module.write_text(source.replace(flag,"'batch_binding_available':False"))
+        init=subprocess.run([sys.executable,'-B',str(checkout/'scripts/admin-native.py'),'init','--state',str(state)],capture_output=True,text=True,check=True)
         assert json.loads(init.stdout)['docker_required'] is False
         if wait_for_address:
             sys.path.insert(0,str(ROOT/'services/admin'))
@@ -30,9 +44,11 @@ def run_case(wait_for_address=False):
             hub.store.write_gateway({'fingerprint':plan['fingerprint'],'owner':{'pid':1073741824,'started':1},'at':time.time()})
         with socket.socket() as listener:listener.bind(('127.0.0.1',0));port=listener.getsockname()[1]
         with (root/'server.log').open('w+') as log:
-            command=[sys.executable,'-B',str(ROOT/'scripts/admin-native.py'),'serve','--state',str(state),'--port',str(port),'--without-docker','--admin-domain','xdocker.home.test']
+            command=[sys.executable,'-B',str(checkout/'scripts/admin-native.py'),'serve','--state',str(state),'--port',str(port),'--without-docker','--admin-domain','xdocker.home.test']
             if wait_for_address:command.append('--operations')
-            child=subprocess.Popen(command,stdout=log,stderr=log)
+            pidfile=root/'gunicorn.pid'
+            env={**os.environ,'GUNICORN_CMD_ARGS':'--pid '+shlex.quote(str(pidfile))}
+            child=subprocess.Popen(command,stdout=log,stderr=log,env=env)
             origin=f'http://127.0.0.1:{port}'
             client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),urllib.request.ProxyHandler({}))
             def read(path,body=None,csrf=None):
@@ -56,6 +72,16 @@ def run_case(wait_for_address=False):
                 session=read('/api/login',{'token':token})
                 snapshot=read('/api/snapshot');assert snapshot['runtime_mode']=='native' and snapshot['engine']['available'] is False
                 listing=read('/api/service-hub');assert listing['native'] and listing['operations_enabled']==wait_for_address and not listing['projects']
+                if not wait_for_address:
+                    assert listing['batch_binding_available'] is False
+                    master=int(pidfile.read_text())
+                    module.write_text(source)
+                    os.kill(master,signal.SIGHUP)
+                    for _ in range(100):
+                        if read('/api/service-hub')['batch_binding_available']:break
+                        time.sleep(.1)
+                    else:raise AssertionError('Reloaded worker still served old application code')
+                    assert int(pidfile.read_text())==master
                 if wait_for_address:
                     for _ in range(30):
                         listing=read('/api/service-hub')
