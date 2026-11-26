@@ -1,10 +1,10 @@
 'use strict';
-const codeSyncUI={data:null,error:'',loading:false,busy:false,view:'sources',selected:'',editor:null,drafts:{}};
+const codeSyncUI={data:null,error:'',loading:false,busy:false,view:'sources',selected:'',reviewOnly:false,editor:null,drafts:{}};
 const codeSyncViews={sources:'源码仓库',schedules:'推送计划',devices:'目标设备',targets:'分发策略',records:'执行记录'};
 const syncMessages={XD_SYNC_GRAFTED_SOURCE_UNSUPPORTED:'本地仓库存在历史替换配置，无法完整检查，请由项目核对后再同步。',XD_SYNC_SCAN_INVALID_TREE:'提交目录无法完整检查，已停止同步。',XD_SYNC_OUTPUT_LIMIT:'读取内容或对象传输超出上限，已停止同步。',XD_SYNC_EXECUTION_DISABLED:'执行尚未开启，请检查本机授权及项目开关。',XD_SYNC_REVISION_CONFLICT:'配置已被修改，请重新读取后保存。',XD_SYNC_SOURCE_NOT_DISCOVERED:'目录、仓库或当前分支与发现结果不一致，请刷新后选择。',XD_SYNC_PATH_NOT_GRANTED:'目录尚未在本机源码范围中授权。',XD_SYNC_CREDENTIAL_REQUIRED:'请选择已配置的 GitHub 凭据。',XD_SYNC_CONFIRMATION_REQUIRED:'启用或执行前请输入完整项目名称。',XD_SYNC_TARGET_DIRTY:'副本存在本地修改，本次没有覆盖。',XD_SYNC_TARGET_DIRTY_OR_RESTART_NOT_GRANTED:'副本有修改，或目标尚未授权服务重启。',XD_SYNC_TARGET_GRANT_MISMATCH:'设备端授权的目录、仓库或分支与本页不一致。',XD_SYNC_TARGET_GRANT_CHANGED:'设备端授权已变化，请核对并重新保存分发策略。',XD_SYNC_AGENT_VERSION_MISMATCH:'设备端 Agent 版本与本机不一致，请先更新设备上的 XDocker Agent。',XD_SYNC_HOST_KEY_REQUIRED:'请填写设备已核对的完整 SSH 公钥，例如 ssh-ed25519 AAAA…',XD_SYNC_IDENTITY_NOT_GRANTED:'本机尚未授权此 SSH 身份，请按连接指南登记密钥引用。',XD_SYNC_SOURCE_BRANCH_REQUIRED:'来源需要处于明确的开发分支；请由项目选择分支后刷新。',XD_SYNC_BRANCH_INVALID:'分支名称无效。',XD_SYNC_SENSITIVE_CONTENT:'待推送提交包含敏感信息、临时文件或无法检查的内容，已停止推送；请查看回执中的风险位置。',XD_SYNC_REMOTE_DIVERGED:'远端分支不是本地提交的祖先，请由项目核对分支；本次没有强推。',XD_SYNC_SHALLOW_SOURCE_UNSUPPORTED:'来源是浅克隆，无法完整检查待推送历史；请先由项目准备完整仓库。',XD_SYNC_SCAN_COMMIT_LIMIT:'待检查提交超过 500 个，已停止；请先人工审查并发布初始历史。',XD_SYNC_SCAN_FILE_LIMIT:'待检查文件数量或单文件大小超出检查范围，已停止推送。',XD_SYNC_SCAN_BYTE_LIMIT:'待检查内容超过 64 MiB，已停止推送。',XD_SYNC_POLICY_REVIEW_REQUIRED:'同步策略已升级，请重新核对来源分支和设备授权。',XD_SYNC_SOURCE_BUSY_OR_UNCONFIRMED:'该项目有进行中或待核对任务，请先处理执行记录。',XD_SYNC_SOURCE_CHANGED:'检查期间来源提交发生变化，本次已停止，请刷新后重新预览。',XD_SYNC_GIT_REJECTED:'Git 操作被拒绝，请检查仓库权限、分支状态和网络。',XD_SYNC_UPLOAD_UNCONFIRMED:'上传结果未确认，先核对 GitHub 提交，勿直接重放任务。',XD_SYNC_HISTORY_CAPACITY:'执行记录已满，请先归档已结束记录。',XD_SYNC_NO_CONFIRMED_UPLOAD:'尚无核对通过的上传提交，请先运行上传。',XD_SYNC_UNMANAGED_BACKUP_BRANCH:'远端备份分支已有其他来源历史，本次未写入。',XD_SYNC_TRANSPORT_REJECTED:'设备连接失败，请检查 VPN、SSH 身份、主机公钥和 Agent 安装。',XD_SYNC_AGENT_RESPONSE_INVALID:'Agent 未返回有效协议响应，请检查版本与设备授权。',XD_SYNC_FOLLOWUP_CLOSED_BY_OPERATOR:'已结束自动跟进，原操作结果仍未确认。'};
 const syncText=v=>syncMessages[v]||v;
 const syncButton=(label,data,disabled=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-sync-${k}="${esc(v)}"`).join(' ')} ${disabled||codeSyncUI.busy||(codeSyncUI.data?.configuration_writable===false&&!('refresh' in data||'job' in data||'dismiss' in data))?'disabled':''}>${esc(label)}</button>`;
-function resetCodeSync(){codeSyncUI.data=null;codeSyncUI.error='';codeSyncUI.drafts={};codeSyncUI.editor=null;$('sync-dialog')?.remove();}
+function resetCodeSync(){codeSyncUI.data=null;codeSyncUI.error='';codeSyncUI.selected='';codeSyncUI.reviewOnly=false;codeSyncUI.drafts={};codeSyncUI.editor=null;$('sync-status-toggle').setAttribute('aria-expanded','false');$('sync-nav-toggle').setAttribute('aria-expanded','false');$('sync-dialog')?.remove();}
 async function loadCodeSync(){
  if(!loggedIn||codeSyncUI.loading)return;codeSyncUI.loading=true;
  try{const d=await api('code-sync');if(loggedIn){codeSyncUI.data=d;codeSyncUI.error='';}}
@@ -12,14 +12,44 @@ async function loadCodeSync(){
  finally{codeSyncUI.loading=false;if(loggedIn&&current==='code-sync')renderCodeSync();}
 }
 function syncSource(id){return codeSyncUI.data?.sources.find(s=>s.id===id);}
+function syncSourceIssue(source,checkout){
+ if(!checkout)return '本轮未发现登记目录，请核对路径';
+ if(checkout.repository.toLowerCase()!==source.repository.toLowerCase())return '当前仓库：'+checkout.repository+'，请核对登记';
+ if(checkout.branch!==source.branch)return '登记分支：'+source.branch+' → 当前分支：'+checkout.branch;
+ if(!checkout.pushable)return '当前为固定提交，请在源码仓库中选择开发分支';
+ return '';
+}
+function syncProjectFilter(data){
+ return `<select id="sync-project" aria-label="筛选项目"><option value="">全部项目</option>${data.sources.map(r=>`<option value="${esc(r.id)}" ${codeSyncUI.selected===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select>`;
+}
+function syncSourcesPanel(data,issues,inventory){
+ const selected=data.sources.filter(r=>!codeSyncUI.selected||r.id===codeSyncUI.selected);
+ const review=selected.filter(r=>issues.has(r.id));
+ const shown=codeSyncUI.reviewOnly?review:[...review,...selected.filter(r=>!issues.has(r.id))];
+ const toolbar=`<div class="sync-toolbar"><div class="sync-filters">${syncProjectFilter(data)}<button type="button" data-sync-review aria-pressed="${codeSyncUI.reviewOnly}">待核对 ${review.length}</button></div><div class="actions">${syncButton('GitHub 凭据',{edit:'credentials',id:'new'})}${syncButton('添加源码',{edit:'sources',id:'new'},!data.inventory.length)}</div></div>`;
+ const rows=shown.map(r=>{
+  const issue=issues.get(r.id);
+  return `<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.directory)}</small>${syncPending(inventory.get(r.directory))}</td><td>${esc(r.repository)}<small class="${issue?'sync-source-issue':''}">${esc(issue||'同步分支：'+r.branch)}</small></td><td>${badge(r.enabled?'已开启':'未开启',r.enabled?'good':'')}</td><td><div class="actions">${syncButton(issue?'核对配置':'编辑',{edit:'sources',id:r.id})}${syncButton('推送预览',{preview:r.id})}${syncButton('推送并分发',{run:r.id,kind:'upload'},!r.enabled||!data.execution_enabled)}</div></td></tr>`;
+ });
+ if(!rows.length&&codeSyncUI.reviewOnly)rows.push('<tr><td class="empty" colspan="4">当前范围没有待核对的源码仓库</td></tr>');
+ return `<section class="panel sync-sources" aria-label="源码仓库">${toolbar}${table(['项目 / 目录','GitHub / 分支','推送开关','操作'],rows)}</section><p class="sync-help">已发现 ${data.inventory.length} 个主仓库 · <a href="/assets/code-sync-guide.html" target="_blank" rel="noreferrer">连接与授权指南 ↗</a></p>`;
+}
 function renderCodeSync(){
- const route=location.hash.slice(1).split('/')[1];if(codeSyncViews[route])codeSyncUI.view=route;
+ codeSyncUI.view=moduleViews['code-sync'];
  const d=codeSyncUI.data,v=codeSyncUI.view,s=codeSyncUI.selected,filtered=rows=>rows.filter(r=>!s||r.source===s||r.id===s),alerts=[];
+ const inventory=new Map((d?.inventory||[]).map(r=>[r.directory,r]));
+ const issues=new Map();
+ for(const source of d?.sources||[]){
+  const issue=syncSourceIssue(source,inventory.get(source.directory));
+  if(issue)issues.set(source.id,issue);
+ }
+ const workerWarning=d&&!d.worker.connected&&(d.execution_enabled||d.schedules.some(r=>r.enabled));
+ $('sync-status-toggle').textContent=workerWarning?'运行状态 · 调度器待连接':'运行状态';
+ $('sync-worker-state').textContent=d?[(d.execution_enabled?'执行授权已开启':'执行授权未开启'),(d.worker.connected?'调度器在线':'调度器待连接')].join(' · '):'同步状态待获取';
  if(codeSyncUI.error)alerts.push(syncText(codeSyncUI.error));
  if(d?.configuration_writable===false)alerts.push('当前为只读镜像；请在服务器管理入口配置代码同步。');
  if(d&&!d.policy.source_roots.length)alerts.push('本机尚未登记源码目录范围，请按代码同步指南授权后发现项目。');
  if(d?.jobs.some(j=>['interrupted','upload-unconfirmed','partial'].includes(j.state)))alerts.push('有上传或设备结果待核对，请到执行记录处理；不会自动重放未知结果。');
- if(d?.sources.some(s=>{const row=d.inventory.find(r=>r.directory===s.directory);return row&&row.branch!==s.branch;}))alerts.push('部分项目已切换分支，请重新编辑源码配置并核对。');
  if(d?.archive_error)alerts.push('历史归档受阻：'+syncText(d.archive_error));
  const latestJobs=new Map();for(const job of d?.jobs||[])if(!latestJobs.has(job.source))latestJobs.set(job.source,job);
  const failures=[...latestJobs.values()].filter(job=>job.state==='failed');
@@ -27,24 +57,35 @@ function renderCodeSync(){
  if(d?.schedules.some(r=>r.last_error))alerts.push('有定时任务被阻断，请在推送计划查看原因。');
  let body='<div class="empty">正在读取代码同步配置…</div>';
  if(d){
-  if(v==='sources')body=panel('源码仓库','推送选定分支中已有的提交，保留原描述与作者；未提交文件仅提示待处理',table(['项目 / 目录','GitHub / 分支','推送开关','操作'],filtered(d.sources).map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.directory)}</small>${syncPending(r.directory)}</td><td>${esc(r.repository)}<small>同步分支：${esc(r.branch)}</small></td><td>${badge(r.enabled?'已开启':'未开启',r.enabled?'good':'')}</td><td><div class="actions">${syncButton('编辑',{edit:'sources',id:r.id})}${syncButton('推送预览',{preview:r.id})}${syncButton('推送并分发',{run:r.id,kind:'upload'},!r.enabled||!d.execution_enabled)}</div></td></tr>`)),`<div class="actions">${syncButton('GitHub 凭据',{edit:'credentials',id:'new'})}${syncButton('添加源码',{edit:'sources',id:'new'},!d.inventory.length)}</div>`)+`<p class="sync-help">按 workspace 对齐发现 ${d.inventory.length} 个主仓库；自动备份工作树、嵌套文档副本不重复接入。仅推送已有提交，推送前检查待发送历史中的敏感内容；扫描命中或超限时停止。<a href="/assets/code-sync-guide.html" target="_blank" rel="noreferrer">连接与授权指南 ↗</a></p>`;
+  if(v==='sources')body=syncSourcesPanel(d,issues,inventory);
   if(v==='schedules')body=panel('每日推送与副本核对','推送任务成功后才分发；也可单独安排副本核对。启用时须确认项目名称',table(['项目 / 类型','时间','下次运行','状态 / 原因','操作'],filtered(d.schedules).map(r=>`<tr><td>${esc(syncSource(r.source)?.name||r.source)}<small>${r.mode==='upload'?'推送并分发':'仅同步已确认提交'}</small></td><td>${String(r.hour).padStart(2,'0')}:${String(r.minute).padStart(2,'0')}<small>${esc(r.timezone)}</small></td><td>${date(r.next_at*1000)}</td><td>${badge(r.enabled?'已启用':'未启用',r.enabled?'good':'')}<small>${esc(syncText(r.last_error||''))}</small></td><td>${syncButton('编辑',{edit:'schedules',id:r.id})}</td></tr>`)),syncButton('新增计划',{edit:'schedules',id:'new'},!d.sources.length));
   if(v==='devices')body=panel('目标设备','通过 VPN 与固定 Agent 通信，固定 SSH 身份和主机公钥；连接测试不更新副本',table(['设备','SSH 地址','状态','操作'],d.devices.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.id)}</small></td><td>${esc(r.username)}@${esc(r.host)}:${r.port}<small>身份：${esc(r.identity)}</small></td><td>${badge(r.enabled?'允许连接':'未启用',r.enabled?'good':'')}</td><td><div class="actions">${syncButton('编辑',{edit:'devices',id:r.id})}${syncButton('核对 Agent',{device:r.id},!r.enabled)}</div></td></tr>`)),syncButton('添加设备',{edit:'devices',id:'new'}))+`<p class="sync-help">本机可选身份：${esc(d.policy.identities.join('、')||'尚未授权')}。目标设备需安装同一版本 Agent，并在其私有策略中批准副本目录、仓库、同步分支及可选服务；网页不接受远程 Shell 命令。</p>`;
   if(v==='targets')body=panel('项目副本与服务策略','只快进到本次 GitHub 已确认的提交；有本地修改、分支分叉或授权漂移时停止',table(['项目 / 设备','目标目录','同步 / 重启','操作'],filtered(d.targets).map(r=>`<tr><td><strong>${esc(syncSource(r.source)?.name||r.source)}</strong><small>${esc(d.devices.find(x=>x.id===r.device)?.name||r.device)}</small></td><td>${esc(r.directory)}<small>Agent 授权：${esc(r.remote_target)}</small></td><td>${badge(r.enabled?'已启用':'未启用',r.enabled?'good':'')}<small>${r.restart?'更新后重启已授权服务':'只同步副本'}</small></td><td><div class="actions">${syncButton('编辑',{edit:'targets',id:r.id})}${syncButton('检查副本',{target:r.id})}${syncButton('立即同步',{run:r.source,kind:'distribute'},!d.execution_enabled||!syncSource(r.source)?.enabled)}</div></td></tr>`)),syncButton('添加副本',{edit:'targets',id:'new'},!d.sources.length||!d.devices.length));
   if(v==='records')body=panel('执行记录','记录 GitHub 的准确 SHA 和各设备回执；命令返回成功不替代目标 HEAD 与服务状态核对',table(['时间 / 项目','任务 / 提交','状态','操作'],filtered(d.jobs).map(r=>`<tr><td>${date(r.at*1000)}<small>${esc(syncSource(r.source)?.name||r.source)}</small></td><td>${r.kind==='upload'?'推送并分发':'副本同步'}<small class="code-line">${esc(r.sha||'尚无提交')}</small></td><td>${badge(({queued:'排队中',running:'执行中',success:'已核对',partial:'部分副本待核对','upload-unconfirmed':'上传待核对',interrupted:'执行中断','reconcile-queued':'核对排队',failed:'失败','closed-unconfirmed':'未确认 · 已结束跟进'})[r.state]||r.state,r.state==='success'?'good':['partial','upload-unconfirmed','interrupted'].includes(r.state)?'warn':r.state==='failed'?'bad':'')}<small>${esc(syncText(r.error||''))}</small></td><td><div class="actions">${syncButton('详情',{job:r.id})}${['upload-unconfirmed','interrupted'].includes(r.state)&&r.sha?syncButton('核对上传结果',{reconcile:r.id},!d.execution_enabled):''}${['upload-unconfirmed','interrupted','partial'].includes(r.state)?syncButton('结束跟进',{closeJob:r.id}):''}</div></td></tr>`)),syncButton('归档已结束记录',{archive:'yes'}))+`<div class="sync-help"><label>历史归档（${d.archives.length}）<select id="sync-archive-select"><option value="">选择一批归档回执</option>${d.archives.map(name=>`<option value="${esc(name)}">${esc(name.slice(0,16))}…</option>`).join('')}</select></label></div>`;
  }
- const top=`${d?.mode_migration?'<p class="sync-help">同步策略已升级为仅推送已有提交；原快照计划和设备策略已关闭，请核对分支与 Agent 后再启用。</p>':''}<div class="intro"><div><h2>代码同步</h2><p class="muted">已有开发提交 → GitHub 同一分支 → 目标设备副本。</p></div>${syncButton('刷新',{refresh:'yes'},codeSyncUI.loading)}</div>${d?`<div class="sync-context"><label>当前项目<select id="sync-project"><option value="">全部项目</option>${d.sources.map(r=>`<option value="${esc(r.id)}" ${s===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select></label><span>${badge(d.execution_enabled?'执行授权已开启':'执行授权未开启',d.execution_enabled?'good':'warn')} ${badge(d.worker.connected?'调度器在线':'调度器待连接',d.worker.connected?'good':'warn')}</span></div>`:''}${alerts.map(t=>`<div class="sync-alert" role="alert">${esc(t)}</div>`).join('')}`;
- $('content').innerHTML='<div class="sync-workspace">'+top+verticalTabs('code-sync','代码同步分区',Object.entries(codeSyncViews).map(([key,label])=>({key,label})),v,body)+'</div>';
- if(codeSyncUI.lastView!==v){$('view-code-sync-'+v)?.scrollIntoView({block:'nearest',inline:'nearest'});codeSyncUI.lastView=v;if(innerWidth<=720)document.querySelector('.sync-workspace .vertical-tab-list')?.scrollIntoView({block:'start'});}
+ if(d&&v!=='sources'){
+  const projectFilter=v==='devices'?'':syncProjectFilter(d);
+  const reviewLink=issues.size?`<button type="button" data-sync-open-review>${issues.size} 个源码仓库待核对</button>`:'';
+  if(projectFilter||reviewLink)body='<div class="sync-toolbar">'+projectFilter+reviewLink+'</div>'+body;
+ }
+ if(d?.mode_migration&&['schedules','targets'].includes(v))body+='<p class="sync-help">同步策略已升级为仅推送已有提交。重新启用原计划前，请核对分支与目标设备授权。</p>';
+ const tabs=Object.entries(codeSyncViews).map(([key,label])=>({key,label,count:key==='sources'&&issues.size?issues.size+' 待核对':undefined}));
+ const warnings=alerts.map(t=>`<div class="sync-alert" role="alert">${esc(t)}</div>`).join('');
+ $('content').innerHTML='<div class="sync-workspace">'+warnings+verticalTabs('code-sync','代码同步分区',tabs,v,body)+'</div>';
+ if(innerWidth<=720){
+  const tab=$('view-code-sync-'+v),list=tab.parentElement;
+  list.scrollLeft+=Math.min(0,tab.getBoundingClientRect().left-list.getBoundingClientRect().left)+Math.max(0,tab.getBoundingClientRect().right-list.getBoundingClientRect().right);
+ }
 }
 function syncDialog(){let dialog=$('sync-dialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='sync-dialog';dialog.className='sync-dialog';document.body.append(dialog);dialog.addEventListener('cancel',()=>{syncCapture();const token=$('sync-form')?.elements.token;if(token)token.value='';});}return dialog;}
 function syncCapture(){const f=$('sync-form'),e=codeSyncUI.editor;if(!f||!e||e.kind==='credentials')return;const value={...Object.fromEntries(new FormData(f)),__revision:e.revision};for(const box of f.querySelectorAll('input[type=checkbox]'))value[box.name]=box.checked;codeSyncUI.drafts[e.kind+':'+e.id]=value;}
 function syncEdit(kind,id='new'){
  const d=codeSyncUI.data,old=d[kind]?.find(x=>x.id===id),selected=codeSyncUI.selected||d.sources[0]?.id||'',defaults={sources:{id:'',name:'',directory:d.inventory[0]?.directory||'',repository:d.inventory[0]?.repository||'',branch:d.inventory[0]?.branch||'',project:d.inventory[0]?.project||'',credential:'',enabled:false},devices:{id:'',name:'',host:'',port:22,username:'',identity:d.policy.identities[0]||'',host_key:'',enabled:false},targets:{id:'',source:selected,device:d.devices[0]?.id||'',remote_target:selected,directory:'/data/workspace/',restart:false,enabled:false},schedules:{id:'',source:selected,mode:'upload',clock:'02:00',timezone:'Asia/Shanghai',enabled:false},credentials:{id:'',name:'',token:''}};
- const normalized=old?{...old,branch:d.inventory.find(r=>r.directory===old.directory)?.branch||old.branch,clock:String(old.hour).padStart(2,'0')+':'+String(old.minute).padStart(2,'0')}:defaults[kind];
+ const checkout=kind==='sources'&&old?d.inventory.find(r=>r.directory===old.directory):null;
+ const normalized=old?{...old,branch:checkout?.branch||old.branch,clock:String(old.hour).padStart(2,'0')+':'+String(old.minute).padStart(2,'0')}:defaults[kind];
  const value=codeSyncUI.drafts[kind+':'+id]||normalized;codeSyncUI.editor={kind,id,revision:value.__revision??old?.revision??0};
  const input=(key,label,attrs='')=>`<label>${label}<input name="${key}" value="${esc(value[key]??'')}" ${attrs}></label>`;
- const select=(key,label,items)=>`<label>${label}<select name="${key}">${items.map(([k,label])=>`<option value="${esc(k)}" ${String(value[key]??'')===String(k)?'selected':''}>${esc(label)}</option>`).join('')}</select></label>`;
+ const select=(key,label,items)=>`<label>${label}<select name="${key}" ${key==='directory'?'required':''}>${key==='directory'&&!items.some(([k])=>k===value[key])?'<option value="" selected>请选择实际使用的源码目录</option>':''}${items.map(([k,label])=>`<option value="${esc(k)}" ${String(value[key]??'')===String(k)?'selected':''}>${esc(label)}</option>`).join('')}</select></label>`;
  const area=(key,label)=>`<label class="sync-wide">${label}<textarea name="${key}" rows="3">${esc(value[key]??'')}</textarea></label>`;
  const check=(key,label)=>`<label class="sync-check"><input type="checkbox" name="${key}" ${value[key]?'checked':''}>${label}</label>`;
  let fields=input('id','标识','required pattern="[a-z0-9][a-z0-9-]{0,63}" '+(old?'readonly':''));
@@ -88,6 +129,18 @@ document.addEventListener('change',event=>{
  }
 });
 document.addEventListener('click',async event=>{
+ const toggle=event.target.closest('#sync-status-toggle,#sync-nav-toggle');
+ if(toggle){
+  toggle.setAttribute('aria-expanded',String(toggle.getAttribute('aria-expanded')!=='true'));
+  return;
+ }
+ if(event.target.closest('#workspace-navigation [data-tab]'))$('sync-nav-toggle').setAttribute('aria-expanded','false');
+ if(event.target.closest('[data-sync-open-review]')){
+  codeSyncUI.selected='';codeSyncUI.reviewOnly=true;selectViewModule('code-sync','sources');return;
+ }
+ if(event.target.closest('[data-sync-review]')){
+  codeSyncUI.reviewOnly=!codeSyncUI.reviewOnly;renderCodeSync();document.querySelector('[data-sync-review]').focus();return;
+ }
  const b=event.target.closest('[data-sync-refresh],[data-sync-edit],[data-sync-reload],[data-sync-dismiss],[data-sync-preview],[data-sync-device],[data-sync-target],[data-sync-run],[data-sync-job],[data-sync-reconcile],[data-sync-close-job],[data-sync-archive]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
   if(d.syncRefresh){await loadCodeSync();return;}if(d.syncEdit){syncEdit(d.syncEdit,d.syncId);return;}if(d.syncDismiss){syncCapture();if(codeSyncUI.editor?.kind==='credentials'&&$('sync-form')?.elements.token)$('sync-form').elements.token.value='';$('sync-dialog').close();return;}
@@ -104,10 +157,8 @@ document.addEventListener('click',async event=>{
  }catch(error){notice(syncText(error.message),true);}
 });
 
-function syncPending(directory){
- const row=codeSyncUI.data?.inventory.find(r=>r.directory===directory),p=row?.pending;
- if(!row)return '<small>来源状态待刷新</small>';
- if(!row.pushable)return '<small class="error">当前为固定提交，请项目选择分支后刷新</small>';
+function syncPending(row){
+ const p=row?.pending;
  if(!p)return '';
  return `<small>待处理：未暂存 ${p.modified.count} · 已暂存 ${p.staged.count} · 新文件 ${p.untracked.count}（均不上传）</small>`;
 }

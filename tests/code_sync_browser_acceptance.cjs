@@ -13,6 +13,31 @@ async function shot(name){if(process.env.SYNC_UI_ARTIFACTS){fs.mkdirSync(process
 async function stop(child){if(!child||child.exitCode!==null)return;try{process.kill(-child.pid,'SIGINT');}catch{}for(let i=0;i<30&&child.exitCode===null;i++)await sleep(100);if(child.exitCode===null){try{process.kill(-child.pid,'SIGKILL');}catch{}}}
 async function form(values,operation=false){await evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(operation?'#sync-operation':'#sync-form')});for(const [key,value] of Object.entries(${JSON.stringify(values)})){const e=f.elements.namedItem(key);if(e.type==='checkbox')e.checked=value;else e.value=value;}f.requestSubmit(f.querySelector('button[type=submit]'));})()`);}
 async function edit(kind,id='new'){await click(`[data-sync-edit="${kind}"][data-sync-id="${id}"]`);await until(`document.querySelector('#sync-form')`);}
+async function compactSourceLayout(width,height){
+ await rpc('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<720});
+ await pane('sources');
+ const layout=await evaluate(`(()=>{
+   window.scrollTo(0,0);
+   const row=document.querySelector('.sync-sources tbody tr');
+   const action=row.querySelector('button').getBoundingClientRect();
+   return {rowTop:Math.round(row.getBoundingClientRect().top),actionBottom:Math.round(action.bottom),
+     inView:action.left>=0&&action.right<=innerWidth&&action.bottom<=innerHeight,
+     statusHidden:!document.querySelector('#shell-runtime').getClientRects().length,
+     noDuplicate:!document.querySelector('.sync-workspace .intro,[data-sync-refresh]'),
+     fits:document.documentElement.scrollWidth<=innerWidth+1};
+ })()`);
+ assert(layout.statusHidden&&layout.noDuplicate&&layout.inView&&layout.fits,JSON.stringify({width,height,...layout}));
+ if(width<=720){
+  await click('#sync-nav-toggle');assert(await evaluate(`document.querySelector('#workspace-navigation [data-tab="code-sync"]').offsetHeight>0`));
+  await click('#sync-nav-toggle');assert(await evaluate(`!document.querySelector('#workspace-navigation').offsetHeight`));
+ }
+ await click('#sync-status-toggle');
+ assert(await evaluate(`document.querySelector('#shell-runtime').offsetHeight>0&&document.querySelector('#sync-worker-state').innerText.includes('调度器在线')`));
+ await click('#sync-status-toggle');
+ assert(await evaluate(`(()=>{connectionState('offline','离线测试');const retry=document.querySelector('#shell-recheck').offsetHeight>0;connectionState('connected','管理连接正常',true);return retry&&!document.querySelector('#shell-runtime').offsetHeight})()`));
+ await shot('compact-sources-'+width);
+ console.log(JSON.stringify({width,height,...layout}));
+}
 async function main(){
  assert(chromeBin);fixture=cp.spawn(process.env.PYTHON||'python3',['-B','tests/code_sync_browser_fixture.py'],{cwd:root,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
  let lines='',errors='';fixture.stdout.on('data',b=>lines+=b);fixture.stderr.on('data',b=>errors+=b);
@@ -30,6 +55,10 @@ async function main(){
  assert(await evaluate(`!location.search.includes('fixture_github_token_123456789')&&!JSON.stringify(codeSyncUI.data).includes('fixture_github_token_123456789')&&!document.querySelector('#sync-form input[name=token]').value`));
  await edit('sources');await form({id:'example',name:'Example',directory:info.directory,repository:'example/project',branch:'main',credential:'github',enabled:true,confirmation:'Example'});
  await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('新文件 1（均不上传）')`));await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
+ await rpc('Page.reload');
+ await until(`performance.getEntriesByType('navigation')[0]?.type==='reload'&&typeof codeSyncUI!=='undefined'&&codeSyncUI.data?.sources.length===1`);
+ for(const [width,height] of [[1440,900],[390,844],[320,700]])await compactSourceLayout(width,height);
+ await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
  await edit('sources');await evaluate(`document.querySelector('[name=id]').value='draft-project';document.querySelector('[name=name]').value='保留的草稿'`);await click('[data-sync-dismiss]');await pane('devices');await pane('sources');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');await click('[data-sync-dismiss]');
  await edit('sources','example');await evaluate(`document.querySelector('[name=name]').value='stale-draft'`);await click('[data-sync-dismiss]');
  await evaluate(`(async()=>{const {uid,...s}=codeSyncUI.data.sources[0];await api('code-sync/sources',{...s,revision:2,name:'Example',confirmation:'Example'});await loadCodeSync()})()`);
@@ -41,6 +70,26 @@ async function main(){
  await pane('sources');await click('[data-sync-run="example"][data-sync-kind="upload"]');await until(`document.querySelector('#sync-operation')`);await form({confirmation:'Example'},true);await until(`!document.querySelector('#sync-dialog').open`);
  await until(`(async()=>{await loadCodeSync();return codeSyncUI.data.jobs.some(j=>j.state==='success'&&j.result?.[0]?.state==='observed')})()`);
  await pane('records');await shot('desktop-records');assert.equal(await evaluate(`codeSyncUI.data.jobs[0].sha`),await evaluate(`codeSyncUI.data.jobs[0].result[0].sha`));
+ assert(await evaluate(`(()=>{
+   const data=codeSyncUI.data,source=data.sources[0];
+   const missing={...source,id:'unavailable',name:'Unavailable',directory:source.directory+'/gone'};
+   codeSyncUI.data={...data,sources:[{...source,branch:'previous-branch'},missing]};
+   try{
+     renderCodeSync();
+     document.querySelector('[data-sync-open-review]').click();
+     const row=document.querySelector('.sync-source-issue');
+     if(!row.textContent.includes('previous-branch → 当前分支：main'))return false;
+     const project=document.querySelector('#sync-project');project.value=missing.id;project.dispatchEvent(new Event('change',{bubbles:true}));
+     if(document.querySelectorAll('.sync-sources tbody tr').length!==1||!document.querySelector('.sync-source-issue').textContent.includes('未发现登记目录'))return false;
+     selectViewModule('code-sync','devices');selectViewModule('code-sync','sources');
+     if(document.querySelector('#sync-project').value!==missing.id||document.querySelector('[data-sync-review]').getAttribute('aria-pressed')!=='true')return false;
+     document.querySelector('[data-sync-edit="sources"][data-sync-id="unavailable"]').click();
+     const directory=document.querySelector('#sync-form [name=directory]');return directory.value===''&&!directory.checkValidity();
+   }finally{
+     if(document.querySelector('#sync-dialog')?.open)document.querySelector('[data-sync-dismiss]').click();
+     codeSyncUI.data=data;codeSyncUI.selected='';codeSyncUI.reviewOnly=false;renderCodeSync();
+   }
+ })()`),'Repository alerts, preserved filters and explicit directory selection');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
  for(const name of ['sources','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);assert.equal(await evaluate(`document.querySelectorAll('.sync-workspace [role=tabpanel]').length`),1);assert(await evaluate(`(()=>{const n=document.querySelector('.sync-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.sync-workspace [aria-selected=true]').getBoundingClientRect();return a.left>=n.left-1&&a.right<=n.right+1})()`));}
  await pane('sources');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');assert(await evaluate(`document.querySelector('#sync-form button[type=submit]').getBoundingClientRect().bottom<=innerHeight`));await shot('mobile-editor');await click('[data-sync-dismiss]');await pane('records');await shot('mobile-records');
