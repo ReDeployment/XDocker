@@ -148,39 +148,41 @@ function boundServiceControls(project,grant,alias,operationsEnabled){
    return {permission,reason,buttons};
 }
 
-const serviceFilters={all:'全部项目',discovered:'待授权',pending:'待绑定',bound:'已绑定',empty:'未发现匹配'};
+const serviceFilters={all:'全部项目',discovered:'待授权',pending:'待绑定',bound:'已绑定',review:'归属待核对',empty:'未发现匹配'};
 
 function projectServicePanel(data, bindButton){
  const scan=data.project_services,issues=scan?.unavailable||[];
  const sourceNames={native:'原生主机',user:'用户级 systemd',system:'系统级 systemd',listeners:'监听端口',addresses:'本机地址',unsupported:'主机发现接口'};
+ const filter=serviceHubUI.serviceFilter||'all';
  const rows=data.projects.map(project=>{
-   const entries=[];
-   const states=new Set();
+   const entries=[],states=new Set();
+   function add(state,html){
+     states.add(state);
+     if(filter==='all'||filter===state)entries.push(html);
+   }
    const aliases=project.bound_services||(project.service?[project.service]:[]);
    for(const alias of aliases){
-     states.add('bound');
      const grant=Object.hasOwn(data.services,alias)?data.services[alias]:null;
-     if(!grant){entries.push(`<li><strong>${esc(alias)}</strong> ${badge('绑定授权已失效','warn')}</li>`);continue;}
+     if(!grant){add('bound',`<li><strong>${esc(alias)}</strong> ${badge('绑定授权已失效','warn')}</li>`);continue;}
      const controls=boundServiceControls(project,grant,alias,data.operations_enabled);
-     entries.push(`<li><strong>${esc(grant.unit)}</strong> ${badge('已绑定','good')}
+     add('bound',`<li><strong>${esc(grant.unit)}</strong> ${badge('已绑定','good')}
        <small>${grant.scope==='user'?'用户级':'系统级'} · ${esc(controls.permission)} ${esc(controls.reason)}</small>
        <div class="actions">${controls.buttons.join('')}</div></li>`);
    }
    for(const candidate of scan?.candidates[project.id]||[]){
      const {alias,scope,unit,reasons,suggested}=candidate;
-     states.add(alias?'pending':'discovered');
-     const access=alias?'已授权 · 待绑定':'已发现 · 待授权';
+     const state=suggested?(alias?'pending':'discovered'):'review';
+     const access=suggested?(alias?'已授权 · 待绑定':'已发现 · 待授权'):'归属待核对';
      const next=alias?hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available):
        `<details><summary>如何接入</summary><p>主机管理员可在私有策略的 services 中为该单元设置别名，导入新版本策略后，刷新本页并核对绑定。只读授权示例：</p><code>${esc(JSON.stringify({scope,unit,actions:['status','logs'],definition_sha256:null}))}</code></details>`;
-     entries.push(`<li><strong>${esc(unit)}</strong> ${badge(access,alias?'blue':'warn')}
-       <small>${scope==='user'?'用户级':'系统级'} · ${suggested?'匹配依据':'归属待核对'} · ${esc(bindingReasons(reasons))}</small>${next}</li>`);
+     add(state,`<li><strong>${esc(unit)}</strong> ${badge(access,alias?'blue':'warn')}
+       <small>${scope==='user'?'用户级':'系统级'} · ${suggested?'匹配依据':alias?'已授权':'尚未授权'} · ${esc(bindingReasons(reasons))}</small>${next}</li>`);
    }
-   if(!entries.length&&scan&&!issues.length)states.add('empty');
+   if(!states.size&&scan&&!issues.length)states.add('empty');
    const emptyText=!scan?(serviceHubUI.error?'读取失败，请刷新重试':'正在检查服务…'):issues.length?'发现未完成':'未发现匹配的 systemd 服务';
    return {states,html:`<tr data-service-project="${esc(project.id)}"><td><strong>${esc(project.name)}</strong><small>${esc(project.domain)}</small></td>
      <td>${entries.length?`<ul>${entries.join('')}</ul>`:esc(emptyText)}</td></tr>`};
  });
- const filter=serviceHubUI.serviceFilter||'all';
  const visible=rows.filter(row=>filter==='all'||row.states.has(filter));
  const options=Object.entries(serviceFilters).map(([key,label])=>{
    const count=key==='all'?rows.length:rows.filter(row=>row.states.has(key)).length;

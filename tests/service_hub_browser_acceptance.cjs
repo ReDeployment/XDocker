@@ -126,6 +126,8 @@ async function main(){
   assert(await evaluate("document.querySelector('[data-service-project=padelu] details').open"));
   await pane('records');await pane('services');
   assert.equal(await evaluate("document.querySelector('[data-project-service-filter]').value"),'discovered');
+  await showFilter('review');
+  assert(await evaluate("document.querySelector('.project-service-list').textContent.includes('browser-project-worker.service')&&!document.querySelector('.project-service-list').textContent.includes('browser-project-backend.service')"));
   await showFilter('empty');
   assert(await evaluate("document.querySelector('#view-service-hub-panel').textContent.includes('当前筛选没有项目')"));
   await showFilter('all');
