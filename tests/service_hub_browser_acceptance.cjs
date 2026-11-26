@@ -158,12 +158,23 @@ async function main(){
  for(const width of [1440,390]){
    await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
    await click('[data-hub-batch]');await until("document.querySelector('#hub-batch-form')");
-   assert(await evaluate(`(()=>{
-     const rows=[...document.querySelectorAll('[data-bind-row]')];
-     return rows.length===2&&rows.every(r=>!r.querySelector('input').checked&&r.querySelector('select').value==='browser-project')
-       &&document.querySelector('#hub-batch-form [type=submit]').disabled;
-   })()`));
-   await click('[data-bind-row] input');await click('[data-bind-row]:last-child input');
+   const ready='[data-bind-row="browser-project-backend"]',pending='[data-bind-row="browser-project-worker"]';
+   assert(await evaluate("document.querySelector('#hub-batch-form').textContent.includes('127.0.0.1:3000')"));
+   assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 1 项');
+   assert(await evaluate("!document.querySelector('#hub-batch-form select')"));
+   await click(ready+' input');
+   assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').disabled"));
+   await click(ready+' input');
+   await click(pending+' [data-bind-edit]');
+   assert.equal(await evaluate("document.querySelectorAll('[data-bind-pick]').length"),1);
+   await evaluate("(()=>{const field=document.querySelector('[data-bind-search]');field.value='padelu';field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+   assert.equal(await evaluate("document.querySelector('[data-bind-pick]').dataset.bindPick"),'padelu');
+   await click('[data-bind-pick="padelu"]');
+   assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 2 项');
+   // Re-open only the manually chosen row. Keep the other selection, and restore its suggested candidate.
+   await click(pending+' [data-bind-edit]');
+   await click('[data-bind-pick="browser-project"]');
+   assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
    assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').getBoundingClientRect().bottom<=innerHeight"));
    await shot(width===390?'mobile-batch-bindings':'desktop-batch-bindings');
    if(width===1440){await click('#hub-dialog [data-hub-close]');continue;}

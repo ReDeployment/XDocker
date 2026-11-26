@@ -18,7 +18,7 @@ async function loadServiceHub(){
  catch(error){serviceHubUI.error=error.message;}
  finally{serviceHubUI.loading=false;if(loggedIn){if(current==='service-hub')renderServiceHubPage();if(current==='sites')renderSitesPage();if(current==='overview')render();}}
 }
-const hubEndpoint=(alias,d=serviceHubUI.data)=>{const e=d?.endpoints[alias];return e?`${e.scheme}://${e.host.includes(':')?'['+e.host+']':e.host}:${e.port}`:'接入地址待核对';};
+const hubEndpoint=(alias,d=serviceHubUI.data)=>{const e=d?.endpoints[alias];return e?`${e.scheme}://${hubEndpointAddress(e)}`:'接入地址待核对';};
 function hubEntry(project,data,applied){const port=project.tls?data.gateway?.https_port:data.gateway?.http_port,suffix=port===(project.tls?443:80)?'':':'+port;return applied&&project.enabled&&port?`<a href="${project.tls?'https':'http'}://${esc(project.domain)}${suffix}" target="_blank" rel="noreferrer">${esc(project.domain)} ↗</a>`:esc(project.domain);}
 function hubRecoveryNotice(gateway){
  const r=gateway?.recovery;if(!r)return '';
@@ -211,38 +211,100 @@ function serviceTarget(project,alias){
  return 'service-hub/projects/'+encodeURIComponent(project)+'/services/'+encodeURIComponent(alias);
 }
 
-function openBatchBindings(){
- const data=serviceHubUI.data,owners=new Set(boundSystemServices(data).map(b=>b.alias));
- const projects=data.projects.filter(p=>p.endpoint_available);
- const labels={status:'状态',logs:'日志',start:'启动',stop:'停止',restart:'重启'};
- const candidates=Object.entries(data.services).filter(([alias])=>!owners.has(alias));
- const rows=candidates.map(([alias,grant])=>{
-   const matches=projects.filter(p=>[alias,grant.unit].some(name=>name===p.id||name.startsWith(p.id+'-')||name.startsWith(p.id+'.')));
-   const suggested=matches.length===1?matches[0].id:null;
-   const options=projects.map(p=>`<option value="${esc(p.id)}" ${p.id===suggested?'selected':''}>${esc(p.name)}${p.id===suggested?'（建议）':''}</option>`).join('');
-   return `<div class="hub-binding-row" data-bind-row>
-     <label class="hub-check"><input type="checkbox" value="${esc(alias)}"><strong>${esc(grant.unit)}</strong></label>
-     <small>${grant.scope==='user'?'用户级':'系统级'} · ${grant.actions.map(a=>esc(labels[a])).join('、')}</small>
-     <label>关联项目<select><option value="">请选择项目</option>${options}</select></label></div>`;
- });
+function bindingReasons(facts){
+ const parts=[];
+ if(facts?.listener)parts.push('服务监听登记地址 '+hubEndpointAddress(facts.listener));
+ if(facts?.directory)parts.push('服务工作目录位于项目内：'+facts.directory);
+ if(facts?.name&&!parts.length)parts.push('仅名称相似');
+ return parts.join(' · ');
+}
+
+function hubEndpointAddress({host,port}){
+ return (host.includes(':')?'['+host+']':host)+':'+port;
+}
+
+function bindingOptions(editor, row, query){
+ const text=query.trim().toLowerCase();
+ const matches=editor.projects.filter(p=>text?[p.name,p.id,p.domain].some(s=>s.toLowerCase().includes(text)):Object.hasOwn(row.evidence,p.id));
+ if(!matches.length)return text?'未找到匹配的登记项目。':'输入项目名称、标识或域名查找。';
+ return matches.map(p=>`<button type="button" data-bind-pick="${esc(p.id)}"><strong>${esc(p.name)}</strong><small>${esc(p.domain)}${row.evidence[p.id]?' · '+esc(bindingReasons(row.evidence[p.id])):''}</small></button>`).join('');
+}
+
+function bindingRow(editor,row){
+ const grantActions={status:'查看状态',logs:'查看日志',start:'启动',stop:'停止',restart:'重启'};
+ const project=editor.projects.find(p=>p.id===row.project);
+ const candidateCount=Object.keys(row.evidence).length;
+ const hint=candidateCount>1?'多条线索指向不同项目，请核对候选项。':candidateCount?'只有名称线索，请核对项目。':
+   row.unit_observed?'未匹配到登记项目的目录或监听地址。':'未读到该服务的 systemd 信息。';
+ const candidates=editor.projects.filter(p=>Object.hasOwn(row.evidence,p.id));
+ const reason=project?bindingReasons(row.evidence[project.id]):hint;
+ const clues=!project&&!row.editing?candidates.slice(0,3).map(p=>`<p><b>${esc(p.name)}</b> · ${esc(bindingReasons(row.evidence[p.id]))}</p>`).join(''):'';
+ return `<article class="hub-binding-row" data-bind-row="${esc(row.alias)}">
+   <label class="hub-check"><input type="checkbox" aria-label="本次绑定 ${esc(row.unit)}" ${row.included?'checked':''} ${project&&!row.editing?'':'disabled'}><strong>${esc(row.unit)}</strong></label>
+   <small>${row.scope==='user'?'用户级':'系统级'} · ${esc(row.actions.map(a=>grantActions[a]).join('、'))}</small>
+   <div class="binding-owner"><strong>${project?'归属项目　'+esc(project.name):'待确认'}</strong>
+   <button type="button" data-bind-edit>${row.editing?'收起选择':project?'更改项目':'选择项目'}</button></div>
+   <p>${row.manual&&project?'已手动选择。':''}${esc(reason)}</p>${clues}
+   ${row.editing?`<label>查找登记项目<input type="search" data-bind-search autocomplete="off" placeholder="项目名称、标识或域名"></label>
+   <div class="binding-choices" data-bind-choices>${bindingOptions(editor,row,'')}</div>`:''}
+ </article>`;
+}
+
+function batchSelections(){
+ return serviceHubUI.editor.rows.filter(row=>row.included&&row.project&&!row.editing)
+   .map(({alias,project})=>({alias,project}));
+}
+
+function bindingCount(form){
+ const count=batchSelections().length;
+ const submit=form.querySelector('[type=submit]');
+ submit.textContent=count?'确认绑定 '+count+' 项':'确认绑定';
+ submit.disabled=!count||serviceHubUI.busy;
+}
+
+async function openBatchBindings(){
  const dialog=hubDialog();
- serviceHubUI.editor={kind:'bindings',policy:data.policy_sha256,revisions:new Map(projects.map(p=>[p.id,p.revision]))};
- dialog.innerHTML=`<form id="hub-batch-form"><div class="detail-head"><h2>批量绑定系统服务</h2></div>
-   <div class="hub-form-body">${rows.join('')}</div><p id="hub-form-error" class="error" role="alert"></p>
-   <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary" disabled>保存绑定</button></div></form>`;
+ dialog.innerHTML=`<div class="detail-head"><h2>匹配系统服务</h2>${hubButton('关闭',{close:'yes'})}</div><p role="status" data-bind-loading>正在核对工作目录和监听地址…</p>`;
+ const loading=dialog.querySelector('[data-bind-loading]');
  dialog.showModal();
+ let preview;
+ try{preview=await api('service-hub/bindings/preview');}
+ catch(error){if(dialog.open&&loading.isConnected)loading.textContent='匹配信息读取失败：'+hubText(error.message);return;}
+ if(!dialog.open||!loading.isConnected)return;
+ const editor={kind:'bindings',policy:preview.policy_sha256,projects:preview.projects,
+   revisions:new Map(preview.projects.map(p=>[p.id,p.revision])),
+   rows:preview.rows.map(row=>({...row,project:row.suggested,included:!!row.suggested,editing:false,manual:false}))};
+ serviceHubUI.editor=editor;
+ const groups=[[true,'可确认的匹配'],[false,'需要判断']];
+ const body=groups.map(([ready,title])=>{
+   const rows=editor.rows.filter(row=>!!row.suggested===ready);
+   return rows.length?`<section><h3>${title}（${rows.length}）</h3>${rows.map(row=>bindingRow(editor,row)).join('')}</section>`:'';
+ }).join('');
+ dialog.innerHTML=`<form id="hub-batch-form"><div class="detail-head"><h2>匹配系统服务</h2></div>
+   <div class="hub-form-body">${body||'<p>当前没有可绑定的服务与项目。</p>'}<p id="hub-form-error" class="error" role="alert"></p></div>
+   <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary" disabled>确认绑定</button></div></form>`;
+ const form=dialog.querySelector('form');
+ const rowOf=element=>editor.rows.find(row=>row.alias===element.closest('[data-bind-row]')?.dataset.bindRow);
+ form.addEventListener('change',event=>{
+   if(event.target.type==='checkbox'){rowOf(event.target).included=event.target.checked;bindingCount(form);}
+ });
+ form.addEventListener('input',event=>{
+   if(event.target.matches('[data-bind-search]'))event.target.closest('article').querySelector('[data-bind-choices]').innerHTML=bindingOptions(editor,rowOf(event.target),event.target.value);
+ });
+ form.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('[data-bind-search]'))event.preventDefault();});
+ form.addEventListener('click',event=>{
+   const button=event.target.closest('[data-bind-edit],[data-bind-pick]');
+   if(!button)return;
+   const row=rowOf(button),element=button.closest('article');
+   if(button.hasAttribute('data-bind-pick')){
+     row.project=button.dataset.bindPick;row.included=true;row.manual=true;row.editing=false;
+   }else{row.editing=!row.editing;}
+   element.outerHTML=bindingRow(editor,row);
+   form.querySelector(`[data-bind-row="${row.alias}"] ${row.editing?'[data-bind-search]':'[data-bind-edit]'}`).focus();
+   bindingCount(form);
+ });
+ bindingCount(form);
 }
-function batchSelections(form){
- return [...form.querySelectorAll('[data-bind-row]')].filter(row=>row.querySelector('input').checked)
-   .map(row=>({alias:row.querySelector('input').value,project:row.querySelector('select').value}));
-}
-document.addEventListener('change',event=>{
- const form=event.target.closest('#hub-batch-form');
- if(form){
-   const selected=batchSelections(form);
-   form.querySelector('[type=submit]').disabled=!selected.length||selected.some(row=>!row.project)||serviceHubUI.busy;
- }
-});
 
 async function hubConfirm(kind,id,alias){
  const dialog=hubDialog();let extra='',target,editor;
@@ -256,7 +318,7 @@ document.addEventListener('submit',async event=>{
  try{
   let message;
   if(e.kind==='bindings'){
-    const bindings=batchSelections(form).map(row=>({...row,revision:e.revisions.get(row.project)}));
+    const bindings=batchSelections().map(row=>({...row,revision:e.revisions.get(row.project)}));
     const result=await api('service-hub/bindings',{bindings,policy_sha256:e.policy});
     message=`新增 ${result.added} 个服务绑定，${result.already_bound} 个已绑定。`;
   }else if(e.kind==='project')await api('service-hub/projects',{...v,revision:e.revision+1,directory:v.directory||null,service:v.service||null,monitor:v.monitor||null,tls:v.tls||null,enabled:form.elements.enabled.checked});
@@ -272,7 +334,7 @@ document.addEventListener('change',event=>{if(event.target.closest('#hub-form'))
 document.addEventListener('click',async event=>{
  const b=event.target.closest('[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
-  if(d.hubBatch){openBatchBindings();return;}
+  if(d.hubBatch){await openBatchBindings();return;}
   if(d.hubDiscard){delete serviceHubUI.drafts[(d.hubEntryMode?'entry:':'')+d.hubDiscard];serviceHubUI.editor=null;await loadServiceHub();hubEdit(d.hubDiscard,!!d.hubEntryMode);return;}
   if(d.hubEntry){hubEdit(d.hubEntry,true);return;}
   if(d.hubRefresh){if(current==='sites')await refresh();else await loadServiceHub();return;}

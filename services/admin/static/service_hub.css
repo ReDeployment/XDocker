@@ -19,3 +19,12 @@
 .hub-binding-row{padding:8px 0;border-bottom:1px solid var(--line)}
 .hub-binding-row strong{overflow-wrap:anywhere}
 .hub-binding-row small{color:var(--muted)}
+
+#hub-batch-form h3{font-size:1rem;margin:16px 0 4px}
+.hub-binding-row{padding:12px 2px;overflow-wrap:anywhere}
+.hub-binding-row .hub-check{margin:0 0 4px}
+.hub-binding-row .binding-owner{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px}
+.hub-binding-row p{font-size:.875rem;color:var(--muted);margin:6px 0}
+.binding-choices{display:grid;gap:4px;max-height:200px;overflow:auto}
+.binding-choices button{text-align:left;white-space:normal}
+.binding-choices small{display:block;overflow-wrap:anywhere}

@@ -253,8 +253,14 @@ class HubAPITests(unittest.TestCase):
         hub.import_policy(value);hub.save(project())
         body={'policy_sha256':fingerprint(value),'bindings':[{'project':'example','revision':1,'alias':'api'}]}
         self.assertEqual(self.post('/api/service-hub/bindings',body,csrf=False).status_code,401)
+        preview='/api/service-hub/bindings/preview'
+        self.assertEqual(self.client.get(preview).status_code,401)
         self.login();self.assertEqual(self.post('/api/service-hub/bindings',body,csrf=False).status_code,403)
+        row,=self.client.get(preview).json['rows']
+        self.assertEqual((row['alias'],row['suggested']),('api',None))
+        self.assertFalse(hub.store.additional_bindings())
         self.assertEqual(self.post('/api/service-hub/bindings',body).json['added'],1)
+        self.assertEqual(self.client.get(preview).json['rows'],[])
         self.assertEqual(self.client.get('/api/service-hub/projects/example/services/api/logs').json['error'],'XD_SERVICE_ACTION_NOT_GRANTED')
         self.assertEqual(self.client.get('/api/service-hub/projects/example/services/unknown/status').status_code,409)
 

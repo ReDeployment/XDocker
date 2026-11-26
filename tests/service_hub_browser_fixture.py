@@ -49,6 +49,15 @@ def main():
         value=policy();value['services']['example']=grant;value['endpoints']['padelu']={'scheme':'http','host':'127.0.0.1','port':15173,'health_path':'/','expected_status':200};value['gateway'].update(enabled=True,http_port=free_port(),https_port=free_port())
         for alias in ('browser-project-backend','browser-project-worker'):
             value['services'][alias]={'scope':'user','unit':alias+'.service','actions':['status','logs'],'definition_sha256':None}
+        def match_runner(command, **kwargs):
+            if command[0] == 'systemctl':
+                output = '\n\n'.join(f'Id={unit}\nLoadState=loaded\nControlGroup=/fixture/{unit}'
+                                      for unit in command[command.index('--') + 1:])
+            elif command[0] == 'ss' and '-4' in command:
+                output = 'LISTEN 0 5 127.0.0.1:3000 0.0.0.0:* cgroup:/fixture/browser-project-backend.service'
+            else:
+                output = ''
+            return {'code': 0, 'stdout': output, 'truncated': False}
         live={'value':False};gateway_root=state/'service-hub/gateway'
         def nginx(command,**kwargs):
             if '-t' not in command:live['value']=True;(gateway_root/'nginx.pid').write_text('9000')
@@ -62,7 +71,7 @@ def main():
         app=create_app({'TESTING':True,'STATE':str(state),'CONFIG':str(state/'native-config'),
             'REPORTS':str(state/'reports'),'BACKUPS':str(state/'backups'),'HOST_ROOT':str(ROOT),'HOST_METRICS':str(state/'host-metrics'),
             'NATIVE_MODE':True,'NATIVE_OPERATIONS_ENABLED':True,'SERVICE_HUB_ADAPTER':adapter,
-            'SERVICE_HUB_PROBE':probe,
+            'SERVICE_HUB_MATCH_RUNNER':match_runner,'SERVICE_HUB_PROBE':probe,
             'SERVICE_HUB_GATEWAY_ADAPTER':{'runner':nginx,'owner_reader':lambda *args:{'pid':9000,'started':42} if live['value'] else None,'marker_reader':lambda *args:True}},docker)
         app.extensions['service_hub'].import_policy(value)
         atomic_json(state/'host-metrics/report.json',sample_report())
