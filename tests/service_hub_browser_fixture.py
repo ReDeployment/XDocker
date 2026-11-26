@@ -47,6 +47,8 @@ def main():
         grant={'scope':'user','unit':'example.service','actions':['status','logs','restart'],'definition_sha256':None}
         grant['definition_sha256']=adapter.status(grant)['definition_sha256']
         value=policy();value['services']['example']=grant;value['endpoints']['padelu']={'scheme':'http','host':'127.0.0.1','port':15173,'health_path':'/','expected_status':200};value['gateway'].update(enabled=True,http_port=free_port(),https_port=free_port())
+        for alias in ('browser-project-backend','browser-project-worker'):
+            value['services'][alias]={'scope':'user','unit':alias+'.service','actions':['status','logs'],'definition_sha256':None}
         live={'value':False};gateway_root=state/'service-hub/gateway'
         def nginx(command,**kwargs):
             if '-t' not in command:live['value']=True;(gateway_root/'nginx.pid').write_text('9000')

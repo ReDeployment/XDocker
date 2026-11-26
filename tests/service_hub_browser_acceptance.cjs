@@ -51,7 +51,7 @@ async function main(){
  await click('[data-hub-preview]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('proxy_pass http://127.0.0.1:3000;')`));await click('#close-detail');
  await click('[data-hub-gateway]');await until(`document.querySelector('#hub-operation-form')`);await form({confirmation:'xdocker-gateway'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.gateway.runtime_verified`);
  await hubPage('services');await click('[data-hub-logs="browser-project"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`!document.querySelector('#detail-content').textContent.includes('fixture-secret')`));await click('#close-detail');
- await click('[data-hub-action="browser-project"]');await until(`document.querySelector('#hub-dialog').open&&serviceHubUI.editor?.kind==='action'`);await form({confirmation:'浏览器项目',action:'restart'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.operations.length===1`);
+ await click('[data-hub-action="browser-project"]');await until(`document.querySelector('#hub-dialog').open&&serviceHubUI.editor?.kind==='action'`);await form({confirmation:'example.service',action:'restart'},true);await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.operations.length===1`);
  await pane('records');assert(await evaluate(`document.querySelector('#view-service-hub-panel').textContent.includes('状态已核对')`));await shot('desktop-records');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
  for(const name of ['projects','services','records']){
@@ -154,6 +154,26 @@ async function main(){
   assert(await evaluate("document.querySelector('#view-services-logs').getAttribute('aria-selected')==='true'"));
   await shot(width===390?'mobile-container-logs':'desktop-container-logs');
  }
+ await hubPage('services');
+ for(const width of [1440,390]){
+   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+   await click('[data-hub-batch]');await until("document.querySelector('#hub-batch-form')");
+   assert(await evaluate(`(()=>{
+     const rows=[...document.querySelectorAll('[data-bind-row]')];
+     return rows.length===2&&rows.every(r=>!r.querySelector('input').checked&&r.querySelector('select').value==='browser-project')
+       &&document.querySelector('#hub-batch-form [type=submit]').disabled;
+   })()`));
+   await click('[data-bind-row] input');await click('[data-bind-row]:last-child input');
+   assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').getBoundingClientRect().bottom<=innerHeight"));
+   await shot(width===390?'mobile-batch-bindings':'desktop-batch-bindings');
+   if(width===1440){await click('#hub-dialog [data-hub-close]');continue;}
+   await click('#hub-batch-form [type=submit]');
+   await until("!document.querySelector('#hub-dialog').open&&document.querySelectorAll('#view-service-hub-panel tbody tr').length===3");
+ }
+ await click('[data-hub-status][data-hub-alias="browser-project-backend"]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='browser-project-backend.service'");
+ await click('#close-detail');
+ assert(await evaluate("!document.querySelector('[data-hub-action][data-hub-alias=browser-project-backend]')&&document.querySelector('[data-hub-batch]').disabled"));
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');

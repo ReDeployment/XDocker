@@ -243,10 +243,38 @@ class ServiceHub:
             endpoint=policy['endpoints'][row['endpoint']];gateway=policy['gateway']
             require(not proxy_loop(endpoint,gateway),'XD_SERVICE_PROXY_LOOP')
             require(row['monitor'] is None or row['monitor'] in self.monitors(),'XD_SERVICE_MONITOR_UNAVAILABLE')
+            require(row['service'] not in self.store.additional_bindings(),'XD_SERVICE_UNIT_ALREADY_BOUND')
             # One service belongs to one project; observing it never grants other aliases.
             require(row['service'] is None or not any(r['id']!=row['id'] and r['service']==row['service'] for r in data['projects'].values()),'XD_SERVICE_UNIT_ALREADY_BOUND')
             data['projects'][row['id']]=row;self.store.write_hub(data)
         return row
+
+    def bind_services(self,body):
+        require(isinstance(body,dict) and set(body)=={'policy_sha256','bindings'},'XD_SERVICE_BATCH_INVALID')
+        entries=body['bindings']
+        require(isinstance(entries,list) and 1<=len(entries)<=100,'XD_SERVICE_BATCH_INVALID')
+        with self.locked():
+            policy=self.policy()
+            require(body['policy_sha256']==fingerprint(policy),'XD_SERVICE_CONFIGURATION_CHANGED')
+            projects=self.data()['projects']
+            owners=self.store.additional_bindings()
+            owners.update({p['service']:p['id'] for p in projects.values() if p['service']})
+            seen=set()
+            additions=[]
+            for entry in entries:
+                require(isinstance(entry,dict) and set(entry)=={'project','alias','revision'},'XD_SERVICE_BATCH_INVALID')
+                alias=entry['alias'];name=entry['project']
+                identifier(alias);identifier(name)
+                require(alias not in seen,'XD_SERVICE_BATCH_INVALID')
+                seen.add(alias)
+                row=projects.get(name)
+                require(row is not None,'XD_SERVICE_PROJECT_NOT_FOUND')
+                require(type(entry['revision']) is int and row['revision']==entry['revision'],'XD_SERVICE_REVISION_CONFLICT')
+                require(alias in policy['services'] and row['endpoint'] in policy['endpoints'],'XD_SERVICE_BINDING_UNAVAILABLE')
+                require(alias not in owners or owners[alias]==name,'XD_SERVICE_UNIT_ALREADY_BOUND')
+                if alias not in owners:additions.append((alias,name))
+            if additions:self.store.add_bindings(additions)
+            return {'added':len(additions),'already_bound':len(entries)-len(additions)}
 
     def remove(self,identifier,body):
         with self.locked():
@@ -256,9 +284,12 @@ class ServiceHub:
             require(body['confirmation']==row['name'],'XD_SERVICE_CONFIRMATION_REQUIRED')
             del data['projects'][identifier];self.store.write_hub(data)
 
-    def bound(self,identifier):
+    def bound(self,identifier,alias=None):
         data=self.data();require(identifier in data['projects'],'XD_SERVICE_PROJECT_NOT_FOUND')
         row=data['projects'][identifier];policy=self.policy()
+        if alias is not None:
+            require(alias==row['service'] or self.store.additional_bindings().get(alias)==identifier,'XD_SERVICE_BINDING_UNAVAILABLE')
+            row={**row,'service':alias}
         require(row['endpoint'] in policy['endpoints'] and (row['service'] is None or row['service'] in policy['services']),'XD_SERVICE_BINDING_UNAVAILABLE')
         return row,policy
 
@@ -270,30 +301,34 @@ class ServiceHub:
         atomic_json(private_directory(self.root/'health')/(identifier+'.json'),self.observations[identifier])
         return value
 
-    def status(self,identifier):
-        row,policy=self.bound(identifier);require(row['service'] is not None,'XD_SERVICE_NOT_SUPERVISED')
+    def status(self,identifier,alias=None):
+        row,policy=self.bound(identifier,alias);require(row['service'] is not None,'XD_SERVICE_NOT_SUPERVISED')
         value=self.adapter.status(policy['services'][row['service']])
         return {**value,'revision':row['revision'],'policy_sha256':fingerprint(policy),
             'actions':policy['services'][row['service']]['actions']}
 
-    def action(self,identifier,body):
+    def action(self,identifier,body,alias=None):
         require(isinstance(body,dict) and set(body)=={'action','revision','confirmation','observation','policy_sha256','idempotency_key'},'XD_SERVICE_ACTION_INVALID')
         require(isinstance(body['idempotency_key'],str) and re.fullmatch(r'[a-f0-9-]{32,36}',body['idempotency_key']),'XD_SERVICE_ACTION_INVALID')
         with self.locked():
-            data=self.data();request_sha=fingerprint({'project':identifier,'body':body})
+            data=self.data()
+            request={'project':identifier,'body':body}
+            if alias is not None:request['service']=alias
+            request_sha=fingerprint(request)
             old=next((o for o in data['operations'] if o.get('idempotency_key')==body['idempotency_key']),None)
             if old:
                 require(old.get('request_sha256')==request_sha,'XD_SERVICE_IDEMPOTENCY_CONFLICT')
                 return old
-            row,policy=self.bound(identifier)
+            row,policy=self.bound(identifier,alias)
             require(row['service'] is not None,'XD_SERVICE_NOT_SUPERVISED')
             require(type(body['revision']) is int and row['revision']==body['revision'] and fingerprint(policy)==body['policy_sha256'],'XD_SERVICE_CONFIGURATION_CHANGED')
-            require(body['confirmation']==row['name'],'XD_SERVICE_CONFIRMATION_REQUIRED')
             grant=policy['services'][row['service']]
+            require(body['confirmation']==(grant['unit'] if alias is not None else row['name']),'XD_SERVICE_CONFIRMATION_REQUIRED')
             require(body['action'] in WRITE_ACTIONS and body['action'] in grant['actions'],'XD_SERVICE_ACTION_NOT_GRANTED')
             require(len(data['operations'])<200,'XD_SERVICE_OPERATION_CAPACITY')
             operation={'id':os.urandom(16).hex(),'project':identifier,'action':body['action'],'at':time.time(),'state':'unconfirmed','policy_sha256':fingerprint(policy),
                        'idempotency_key':body['idempotency_key'],'request_sha256':request_sha}
+            if alias is not None:operation['result']={'unit':grant['unit'],'scope':grant['scope']}
             data['operations'].append(operation);self.store.write_hub(data)
             try:
                 result=self.adapter.action(grant,body['action'],body['observation'])
@@ -308,17 +343,21 @@ class ServiceHub:
 
     def listing(self):
         policy=self.policy();data=self.data();rows=[];monitors=self.monitors()
+        additional={}
+        for alias,project in self.store.additional_bindings().items():
+            additional.setdefault(project,[]).append(alias)
         for row in data['projects'].values():
+            aliases=([row['service']] if row['service'] else [])+additional.get(row['id'],[])
             snapshot=self.observations.get(row['id'])
             if snapshot is None and (self.root/'health'/(row['id']+'.json')).exists():
                 snapshot=read_json(self.root/'health'/(row['id']+'.json'))
             matches=bool(snapshot and snapshot.get('fingerprint')==fingerprint({'row':row,'policy':policy}))
             fresh=bool(matches and time.time()-snapshot['at']<=30)
-            rows.append({**row,'health':snapshot if fresh else None,'last_health':snapshot if matches else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
-                         'service_available':row['service'] is None or row['service'] in policy['services'],
+            rows.append({**row,'bound_services':aliases,'health':snapshot if fresh else None,'last_health':snapshot if matches else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
+                         'service_available':all(a in policy['services'] for a in aliases),
                          'monitor_available':row['monitor'] is None or row['monitor'] in monitors})
         return {'projects':rows,'endpoints':policy['endpoints'],
             'services':{k:{'unit':v['unit'],'scope':v['scope'],'actions':v['actions']} for k,v in policy['services'].items()},
             'certificates':{k:{'domains':v['domains']} for k,v in policy['certificates'].items()},
             'policy_sha256':fingerprint(policy),'gateway_enabled':policy['gateway']['enabled'],
-            'operations':data['operations'],'configuration_writable':True}
+            'operations':data['operations'],'configuration_writable':True,'batch_binding_available':True}

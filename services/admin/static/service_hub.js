@@ -3,6 +3,11 @@ const serviceHubUI={data:null,error:'',loading:false,drafts:{},editor:null,busy:
 const hubViews={projects:'项目登记',services:'系统服务',records:'操作记录'};
 const hubMessages={XD_SERVICE_BINDING_UNAVAILABLE:'接入地址或服务授权已变化，请重新选择。',XD_SERVICE_REVISION_CONFLICT:'项目已被修改，请重新读取登记。',XD_SERVICE_POLICY_REVISION_CONFLICT:'主机接入策略版本已变化。',XD_SERVICE_DOMAIN_CONFLICT:'域名已被其他入口使用。',XD_SERVICE_ACTION_NOT_GRANTED:'该服务尚未获准执行此操作。',XD_SERVICE_OPERATIONS_DISABLED:'运行操作尚未开启；登记和读取仍可使用。',XD_SERVICE_NOT_SUPERVISED:'该项目由自己的开发进程运行，尚未关联系统服务。',XD_SERVICE_STATUS_UNAVAILABLE:'无法读取 systemd 状态，请检查主机权限与服务名称。',XD_SERVICE_DEFINITION_CHANGED:'服务定义或加载状态已变化，操作已阻断，请重新核对授权。',XD_SERVICE_OBSERVATION_CHANGED:'服务运行状态发生变化，请重新读取后确认。',XD_SERVICE_CONFIRMATION_REQUIRED:'请输入完整目标名称确认。',XD_SERVICE_COMMAND_TIMEOUT:'命令已超时，结果未确认；请先检查实际状态。',XD_SERVICE_ACTION_REJECTED:'系统拒绝了本次服务操作，请检查权限与服务日志。',XD_SERVICE_RUNTIME_UNCONFIRMED:'命令返回后实际服务状态仍未确认。',XD_GATEWAY_APPLY_DISABLED:'主机尚未启用 XDocker 网关。',XD_GATEWAY_PLAN_CHANGED:'项目或入口配置发生变化，请重新预览。',XD_GATEWAY_CONFIG_CHECK_FAILED:'Nginx 配置检查失败，原配置保持保留。',XD_GATEWAY_PORT_IN_USE:'网关端口已被占用，请检查主机接入策略。',XD_GATEWAY_BIND_PERMISSION_REQUIRED:'网关尚无绑定标准端口的权限，请按接入指南配置 XDocker 的标准端口授权。',XD_GATEWAY_OWNER_UNCONFIRMED:'无法确认网关进程归属，本次未接管已有 Nginx。',XD_GATEWAY_RUNTIME_UNCONFIRMED:'网关实际加载版本未确认，请检查回退记录与实际入口。',XD_SERVICE_PROXY_LOOP:'目标地址指向网关本身，请更换接入端口。',XD_SERVICE_MONITOR_UNAVAILABLE:'资源监控分组尚未登记或已被移除。'};
 Object.assign(hubMessages,{XD_GATEWAY_ADDRESS_UNAVAILABLE:'网关监听地址尚未就绪，正在等待网络或 VPN 恢复。',XD_GATEWAY_BIND_FAILED:'网关监听失败，请核对主机网络与运行日志。',XD_GATEWAY_PENDING_CONFIGURATION:'存在尚未应用的修改，自动恢复不会发布这些修改。',XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED:'已应用的网关文件发生变化，请先人工核对。',XD_GATEWAY_RELOAD_FAILED:'网关启动或重新加载失败，正在核对恢复结果。',XD_GATEWAY_RESTORE_UNCONFIRMED:'网关恢复结果尚未确认。'});
+Object.assign(hubMessages,{
+ XD_SERVICE_BATCH_INVALID:'请选择要绑定的服务和关联项目。',
+ XD_SERVICE_UNIT_ALREADY_BOUND:'有服务已绑定，请关闭窗口并刷新清单。',
+ XD_SERVICE_CONFIGURATION_CHANGED:'主机授权或项目已变化，请刷新后重新核对。'
+});
 const hubText=value=>hubMessages[value]||value;
 const hubButton=(text,data={},blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-hub-${k}="${esc(v)}"`).join(' ')} ${blocked||serviceHubUI.busy?'disabled':''}>${esc(text)}</button>`;
 let overviewCheck=null;
@@ -116,17 +121,17 @@ function registeredProjectsPanel(data){
 function boundSystemServices(data){
  const bindings=[];
  for(const project of data.projects){
-   if(project.service && Object.hasOwn(data.services,project.service)){
-     bindings.push({project,grant:data.services[project.service]});
+   for(const alias of project.bound_services||(project.service?[project.service]:[])){
+     if(Object.hasOwn(data.services,alias))bindings.push({alias,project,grant:data.services[alias]});
    }
  }
  return bindings;
 }
 
-function systemServicesPanel(bindings,operationsEnabled){
- if(!bindings.length)return panel('系统服务','','<p class="panel-body">当前没有项目绑定已授权的 systemd 服务。</p>');
+function systemServicesPanel(bindings,operationsEnabled,bindButton=''){
+ if(!bindings.length)return panel('系统服务','','<p class="panel-body">当前没有项目绑定已授权的 systemd 服务。</p>',bindButton);
  const labels={start:'启动',stop:'停止',restart:'重启'};
- const rows=bindings.map(({grant,project})=>{
+ const rows=bindings.map(({alias,grant,project})=>{
    const writes=Object.keys(labels).filter(action=>grant.actions.includes(action));
    const fullControl=writes.includes('start')&&writes.includes('stop');
    const canOperate=project.endpoint_available&&operationsEnabled&&writes.length>0;
@@ -135,13 +140,13 @@ function systemServicesPanel(bindings,operationsEnabled){
    const reason=!project.endpoint_available?'项目目标绑定失效':writes.length&&!operationsEnabled?'运行操作未开启':'';
    const buttons=[];
    if(project.endpoint_available){
-     buttons.push(hubButton('状态',{status:project.id}));
-     if(grant.actions.includes('logs'))buttons.push(hubButton('最近日志',{logs:project.id}));
-     if(canOperate)buttons.push(hubButton('服务操作',{action:project.id}));
+     buttons.push(hubButton('状态',{status:project.id,alias}));
+     if(grant.actions.includes('logs'))buttons.push(hubButton('最近日志',{logs:project.id,alias}));
+     if(canOperate)buttons.push(hubButton('服务操作',{action:project.id,alias}));
    }
    return `<tr><td><strong>${esc(grant.unit)}</strong><small>${grant.scope==='user'?'用户级':'系统级'}</small></td><td>${esc(project.name)}</td><td>${badge(permission,canOperate?'blue':'')}${reason?`<small>${esc(reason)}</small>`:''}</td><td><div class="actions">${buttons.join('')}</div></td></tr>`;
  });
- return panel('系统服务',`${bindings.length} 个已绑定的 systemd 服务`,table(['服务单元','关联项目','当前权限','操作'],rows));
+ return panel('系统服务',`${bindings.length} 个已绑定的 systemd 服务`,table(['服务单元','关联项目','当前权限','操作'],rows),bindButton);
 }
 
 function renderServiceHubPage(){
@@ -159,8 +164,14 @@ function renderServiceHubPage(){
  let body=serviceHubUI.error?'':'<div class="empty">正在读取独立服务接入…</div>';
  if(d){
   if(view==='projects')body=registeredProjectsPanel(d);
-  if(view==='services')body=systemServicesPanel(boundSystemServices(d),d.operations_enabled);
-  if(view==='records')body=panel('运行操作记录','结果持久保存；超时或重载不自动重放操作',table(['时间','项目 / 操作','结果','说明'],[...d.operations].reverse().map(o=>`<tr><td>${date(o.at*1000)}</td><td>${esc(o.project)}<small>${esc(o.action)}</small></td><td>${badge(o.state==='observed'?'状态已核对':'结果未确认',o.state==='observed'?'good':'warn')}</td><td>${esc(hubText(o.error||'systemd 实际状态符合预期；业务健康仍需单独检查。'))}</td></tr>`)));
+  if(view==='services'){
+    const bindings=boundSystemServices(d);
+    const free=Object.keys(d.services).length-bindings.length;
+    const action=hubButton(free?`批量绑定（${free} 个待绑定）`:'批量绑定',{batch:'yes'},
+      !free||!d.batch_binding_available||!d.configuration_writable||!d.projects.some(p=>p.endpoint_available));
+    body=systemServicesPanel(bindings,d.operations_enabled,action);
+  }
+  if(view==='records')body=panel('运行操作记录','结果持久保存；超时或重载不自动重放操作',table(['时间','项目 / 操作','结果','说明'],[...d.operations].reverse().map(o=>`<tr><td>${date(o.at*1000)}</td><td>${esc(o.project)}<small>${esc(o.result?.unit||'')}</small><small>${esc(o.action)}</small></td><td>${badge(o.state==='observed'?'状态已核对':'结果未确认',o.state==='observed'?'good':'warn')}</td><td>${esc(hubText(o.error||'systemd 实际状态符合预期；业务健康仍需单独检查。'))}</td></tr>`)));
   if(!Object.keys(d.endpoints).length&&view!=='records')body='<div class="hub-alert" role="alert">尚无已批准的接入地址。请先按独立服务接入指南准备这台主机的地址和服务清单。</div>'+body;
  }
  const alerts=errors.map(e=>`<div class="hub-alert" role="alert">${esc(hubText(e))}</div>`).join('');
@@ -184,7 +195,7 @@ function hubEdit(identifier='new',entry=false){
  const hidden=names=>names.map(name=>`<input type="hidden" name="${name}" value="${esc(draft[name]??'')}">`).join('');
  const access=select('endpoint','已批准的访问地址',Object.keys(d.endpoints).map(k=>[k,k+' · '+hubEndpoint(k)]))+input('domain','访问域名','required placeholder="例如 app.home.test"')+select('tls','入口协议 / 证书',[['','HTTP'],...Object.keys(d.certificates).map(k=>[k,'HTTPS · '+k])]);
  const enabled=`<label class="hub-check"><input type="checkbox" name="enabled" ${draft.enabled?'checked':''}>纳入下一次网关配置</label>`;
- const project=input('id','项目标识','required pattern="[a-z0-9][a-z0-9-]{0,63}" '+(row?'readonly':''))+input('name','项目名称','required maxlength="80"')+select('service','系统服务',[['','独立启动，暂不关联'],...Object.entries(d.services).map(([k,v])=>[k,v.unit+' · '+v.scope])])+input('directory','项目目录（可选）')+input('monitor','资源分组标识（可选）')+select('delivery','项目交付方式',[['external','项目自行部署'],['source','源码构建'],['binary','二进制'],['image','容器镜像']]);
+ const project=input('id','项目标识','required pattern="[a-z0-9][a-z0-9-]{0,63}" '+(row?'readonly':''))+input('name','项目名称','required maxlength="80"')+select('service','主服务（可选）',[['','独立启动，暂不关联'],...Object.entries(d.services).filter(([k])=>k===row?.service||!d.projects.some(p=>(p.bound_services||[p.service]).includes(k))).map(([k,v])=>[k,v.unit+' · '+v.scope])])+input('directory','项目目录（可选）')+input('monitor','资源分组标识（可选）')+select('delivery','项目交付方式',[['external','项目自行部署'],['source','源码构建'],['binary','二进制'],['image','容器镜像']]);
  const fields=entry?hidden(['id','name','service','directory','monitor','delivery'])+`<p class="muted">${esc(row.name)} · ${esc(row.id)}</p>`+access:project+(row?hidden(['endpoint','domain','tls'])+`<div><label>网站入口</label><a href="#sites" data-hub-entry-link>到网站入口管理 ${esc(row.domain)} →</a></div>`:access);
  const dialog=hubDialog();dialog.innerHTML=`<form id="hub-form" method="post"><div class="detail-head"><h2>${entry?'编辑网站入口':row?'编辑独立项目':'登记独立项目'}</h2>${hubButton('关闭',{'close':'yes'})}</div><div class="hub-form-body"><div class="hub-fields">${fields}</div>${!entry&&row?`<div hidden>${enabled}</div>`:enabled}<p class="muted">${entry?'保存后请在网关配置中预览并应用。':'登记不会启动项目；域名和转发目标在网站入口统一管理。'}</p></div><p id="hub-form-error" class="error" role="alert"></p><div class="dialog-actions">${row?hubButton('重读登记（放弃草稿）',{'discard':row.id,...(entry?{entryMode:'yes'}:{})})+(!entry?hubButton('移除登记',{'remove':row.id}):''):''}${hubButton('取消',{'close':'yes'})}<button type="submit" class="primary">${entry?'保存入口':'保存登记'}</button></div></form>`;
  if(!dialog.open)dialog.showModal();
@@ -196,38 +207,81 @@ function serviceOperationKey(){
  return Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
 }
 
-async function hubConfirm(kind,id){
+function serviceTarget(project,alias){
+ return 'service-hub/projects/'+encodeURIComponent(project)+'/services/'+encodeURIComponent(alias);
+}
+
+function openBatchBindings(){
+ const data=serviceHubUI.data,owners=new Set(boundSystemServices(data).map(b=>b.alias));
+ const projects=data.projects.filter(p=>p.endpoint_available);
+ const labels={status:'状态',logs:'日志',start:'启动',stop:'停止',restart:'重启'};
+ const candidates=Object.entries(data.services).filter(([alias])=>!owners.has(alias));
+ const rows=candidates.map(([alias,grant])=>{
+   const matches=projects.filter(p=>[alias,grant.unit].some(name=>name===p.id||name.startsWith(p.id+'-')||name.startsWith(p.id+'.')));
+   const suggested=matches.length===1?matches[0].id:null;
+   const options=projects.map(p=>`<option value="${esc(p.id)}" ${p.id===suggested?'selected':''}>${esc(p.name)}${p.id===suggested?'（建议）':''}</option>`).join('');
+   return `<div class="hub-binding-row" data-bind-row>
+     <label class="hub-check"><input type="checkbox" value="${esc(alias)}"><strong>${esc(grant.unit)}</strong></label>
+     <small>${grant.scope==='user'?'用户级':'系统级'} · ${grant.actions.map(a=>esc(labels[a])).join('、')}</small>
+     <label>关联项目<select><option value="">请选择项目</option>${options}</select></label></div>`;
+ });
+ const dialog=hubDialog();
+ serviceHubUI.editor={kind:'bindings',policy:data.policy_sha256,revisions:new Map(projects.map(p=>[p.id,p.revision]))};
+ dialog.innerHTML=`<form id="hub-batch-form"><div class="detail-head"><h2>批量绑定系统服务</h2></div>
+   <div class="hub-form-body">${rows.join('')}</div><p id="hub-form-error" class="error" role="alert"></p>
+   <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary" disabled>保存绑定</button></div></form>`;
+ dialog.showModal();
+}
+function batchSelections(form){
+ return [...form.querySelectorAll('[data-bind-row]')].filter(row=>row.querySelector('input').checked)
+   .map(row=>({alias:row.querySelector('input').value,project:row.querySelector('select').value}));
+}
+document.addEventListener('change',event=>{
+ const form=event.target.closest('#hub-batch-form');
+ if(form){
+   const selected=batchSelections(form);
+   form.querySelector('[type=submit]').disabled=!selected.length||selected.some(row=>!row.project)||serviceHubUI.busy;
+ }
+});
+
+async function hubConfirm(kind,id,alias){
  const dialog=hubDialog();let extra='',target,editor;
  if(kind==='gateway'){const plan=await api('service-hub/gateway/preview');target='xdocker-gateway';editor={kind,id,plan};extra=`<p>将检查并应用 ${plan.routes} 条网页入口，监听 ${esc(plan.address)}。</p><p class="muted">应用失败会尝试恢复原配置；实际入口版本会再次核对。</p>`;}
- else if(kind==='action'){const p=serviceHubUI.data.projects.find(p=>p.id===id),s=(await api('service-hub/projects/'+id+'/status')).result;target=p.name;editor={kind,id,status:s,idempotency_key:serviceOperationKey()};extra=`<p>${esc(s.unit)} · 当前 ${esc(s.state)}，PID ${s.pid??'—'}</p><label>操作<select name="action">${s.actions.filter(a=>['start','stop','restart'].includes(a)).map(a=>`<option value="${a}">${esc({start:'启动',stop:'停止',restart:'重启'}[a])}</option>`).join('')}</select></label>`;}
+ else if(kind==='action'){const s=(await api(serviceTarget(id,alias)+'/status')).result;target=s.unit;editor={kind,id,alias,status:s,idempotency_key:serviceOperationKey()};extra=`<p>${esc(s.unit)} · 当前 ${esc(s.state)}，PID ${s.pid??'—'}</p><label>操作<select name="action">${s.actions.filter(a=>['start','stop','restart'].includes(a)).map(a=>`<option value="${a}">${esc({start:'启动',stop:'停止',restart:'重启'}[a])}</option>`).join('')}</select></label>`;}
  else {const p=serviceHubUI.data.projects.find(p=>p.id===id);target=p.name;editor={kind,id,revision:p.revision};extra='<p>移除登记后需要重新应用网关配置。应用本身继续运行。</p>';}
  serviceHubUI.editor=editor;dialog.innerHTML=`<form id="hub-operation-form"><div class="detail-head"><h2>确认${kind==='gateway'?'应用网关':kind==='action'?'服务操作':'移除登记'}</h2>${hubButton('关闭',{'close':'yes'})}</div>${extra}<label>输入完整名称 <strong>${esc(target)}</strong><input name="confirmation" required autocomplete="off"></label><p id="hub-form-error" class="error" role="alert"></p><div class="dialog-actions">${hubButton('取消',{'close':'yes'})}<button type="submit" class="primary">确认执行</button></div></form>`;if(!dialog.open)dialog.showModal();
 }
 document.addEventListener('submit',async event=>{
- const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form'].includes(id))return;event.preventDefault();const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
+ const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form','hub-batch-form'].includes(id))return;event.preventDefault();const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
  try{
-  if(e.kind==='project')await api('service-hub/projects',{...v,revision:e.revision+1,directory:v.directory||null,service:v.service||null,monitor:v.monitor||null,tls:v.tls||null,enabled:form.elements.enabled.checked});
+  let message;
+  if(e.kind==='bindings'){
+    const bindings=batchSelections(form).map(row=>({...row,revision:e.revisions.get(row.project)}));
+    const result=await api('service-hub/bindings',{bindings,policy_sha256:e.policy});
+    message=`新增 ${result.added} 个服务绑定，${result.already_bound} 个已绑定。`;
+  }else if(e.kind==='project')await api('service-hub/projects',{...v,revision:e.revision+1,directory:v.directory||null,service:v.service||null,monitor:v.monitor||null,tls:v.tls||null,enabled:form.elements.enabled.checked});
   else if(e.kind==='gateway')await api('service-hub/gateway/apply',{fingerprint:e.plan.fingerprint,confirmation:v.confirmation});
   else if(e.kind==='remove')await api('service-hub/projects/'+e.id+'/remove',{revision:e.revision,confirmation:v.confirmation});
-  else await api('service-hub/projects/'+e.id+'/action',{action:v.action,revision:e.status.revision,policy_sha256:e.status.policy_sha256,observation:e.status.observation,confirmation:v.confirmation,idempotency_key:e.idempotency_key});
-  if(e.kind==='project')delete serviceHubUI.drafts[e.draftKey];serviceHubUI.editor=null;$('hub-dialog').close();await loadServiceHub();notice(e.kind==='project'?'项目接入已保存，应用启动方式保持独立。':'操作结果已返回，请继续核对入口和业务健康。');
+  else await api(serviceTarget(e.id,e.alias)+'/action',{action:v.action,revision:e.status.revision,policy_sha256:e.status.policy_sha256,observation:e.status.observation,confirmation:v.confirmation,idempotency_key:e.idempotency_key});
+  if(e.kind==='project')delete serviceHubUI.drafts[e.draftKey];serviceHubUI.editor=null;$('hub-dialog').close();await loadServiceHub();notice(message||(e.kind==='project'?'项目接入已保存，应用启动方式保持独立。':'操作结果已返回，请继续核对入口和业务健康。'));
  }catch(error){$('hub-form-error').textContent=hubText(error.message);}
  finally{serviceHubUI.busy=false;event.submitter.disabled=false;if(current==='service-hub')renderServiceHubPage();if(current==='sites')renderSitesPage();if(current==='overview')render();}
 });
 document.addEventListener('input',event=>{if(event.target.closest('#hub-form'))hubCapture();});
 document.addEventListener('change',event=>{if(event.target.closest('#hub-form'))hubCapture();});
 document.addEventListener('click',async event=>{
- const b=event.target.closest('[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
+ const b=event.target.closest('[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
+  if(d.hubBatch){openBatchBindings();return;}
   if(d.hubDiscard){delete serviceHubUI.drafts[(d.hubEntryMode?'entry:':'')+d.hubDiscard];serviceHubUI.editor=null;await loadServiceHub();hubEdit(d.hubDiscard,!!d.hubEntryMode);return;}
   if(d.hubEntry){hubEdit(d.hubEntry,true);return;}
   if(d.hubRefresh){if(current==='sites')await refresh();else await loadServiceHub();return;}
   if(d.hubEdit){hubEdit(d.hubEdit);return;}
   if(d.hubClose){hubCapture();$('hub-dialog').close();return;}
-  if(d.hubAction||d.hubGateway||d.hubRemove){await hubConfirm(d.hubAction?'action':d.hubGateway?'gateway':'remove',d.hubAction||d.hubRemove||'gateway');return;}
+  if(d.hubAction||d.hubGateway||d.hubRemove){await hubConfirm(d.hubAction?'action':d.hubGateway?'gateway':'remove',d.hubAction||d.hubRemove||'gateway',d.hubAlias);return;}
   if(d.hubHealth){await api('service-hub/projects/'+d.hubHealth+'/health',{});await loadServiceHub();return;}
-  if(d.hubStatus){const s=(await api('service-hub/projects/'+d.hubStatus+'/status')).result;$('detail-title').textContent=s.unit;$('detail-content').innerHTML=`<p>状态：${esc(s.state)} / ${esc(s.substate)} · PID ${s.pid??'—'}</p><p>服务定义：${s.definition_matches?'与授权匹配':'尚未匹配写操作授权'}</p><p>定义重新加载：${s.reload_required?'需要核对':'无待加载变更'}</p>`;}
-  if(d.hubLogs){const s=await api('service-hub/projects/'+d.hubLogs+'/logs');$('detail-title').textContent='系统服务最近日志';$('detail-content').innerHTML=`<p>${s.truncated?'输出已截断':'最近最多 100 行'} · 常见凭据已脱敏</p><pre>${esc(s.text)}</pre>`;}
+  if(d.hubStatus){const s=(await api(serviceTarget(d.hubStatus,d.hubAlias)+'/status')).result;$('detail-title').textContent=s.unit;$('detail-content').innerHTML=`<p>状态：${esc(s.state)} / ${esc(s.substate)} · PID ${s.pid??'—'}</p><p>服务定义：${s.definition_matches?'与授权匹配':'尚未匹配写操作授权'}</p><p>定义重新加载：${s.reload_required?'需要核对':'无待加载变更'}</p>`;}
+  if(d.hubLogs){const s=await api(serviceTarget(d.hubLogs,d.hubAlias)+'/logs');$('detail-title').textContent='系统服务最近日志';$('detail-content').innerHTML=`<p>${s.truncated?'输出已截断':'最近最多 100 行'} · 常见凭据已脱敏</p><pre>${esc(s.text)}</pre>`;}
   if(d.hubPreview){const s=await api('service-hub/gateway/preview');$('detail-title').textContent='Nginx 配置预览';$('detail-content').innerHTML=`<p>${s.routes} 条入口 · ${esc(s.address)}</p><pre>${esc(s.configuration)}</pre>`;}
   $('detail-dialog').showModal();
  }catch(error){notice(hubText(error.message),true);}

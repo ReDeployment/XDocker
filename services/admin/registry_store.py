@@ -189,9 +189,31 @@ class RegistryStore:
             require(value['revision']==current+1,'XD_SERVICE_POLICY_REVISION_CONFLICT')
             self._save_policy(db,value)
 
+    @staticmethod
+    def _has_bindings(db):
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_service_bindings'").fetchone() is not None
+
+    def additional_bindings(self):
+        with self.connection() as db:
+            if not self._has_bindings(db):
+                return {}
+            return dict(db.execute('SELECT alias,project FROM project_service_bindings ORDER BY alias'))
+
+    def add_bindings(self,bindings):
+        with self.connection(write=True) as db:
+            # Defer the FK because legacy hub writes replace all project rows in one transaction.
+            db.execute("""CREATE TABLE IF NOT EXISTS project_service_bindings(
+                alias TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED)""")
+            db.execute("""CREATE TRIGGER IF NOT EXISTS unique_project_service BEFORE INSERT ON projects
+                WHEN EXISTS(SELECT 1 FROM project_service_bindings WHERE alias=NEW.service)
+                BEGIN SELECT RAISE(ABORT,'duplicate service'); END""")
+            db.executemany('INSERT INTO project_service_bindings(alias,project) VALUES(?,?)',bindings)
+
     def _save_hub(self,db,data):
         db.execute('DELETE FROM projects');db.execute('DELETE FROM native_operations')
         db.executemany('INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?,?,?)',[(r['id'],r['revision'],r['name'],r['endpoint'],r['domain'],r['service'],r['monitor'],r['delivery'],r['tls'],int(r['enabled']),r.get('directory')) for r in data['projects'].values()])
+        if self._has_bindings(db):
+            db.execute('DELETE FROM project_service_bindings WHERE project NOT IN (SELECT id FROM projects)')
         for r in data['operations']:
             db.execute('INSERT INTO native_operations VALUES(?,?,?,?,?,?,?,?,?,?)',(r['id'],r['project'],r['action'],r['at'],r['state'],r.get('policy_sha256'),r.get('idempotency_key'),r.get('request_sha256'),encoded(r['result']) if 'result' in r else None,r.get('error')))
 
