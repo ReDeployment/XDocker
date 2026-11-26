@@ -51,10 +51,16 @@ def main():
             value['services'][alias]={'scope':'user','unit':alias+'.service','actions':['status','logs'],'definition_sha256':None}
         def match_runner(command, **kwargs):
             if command[0] == 'systemctl':
+                units = command[command.index('--') + 1:]
+                if units == ['*.service']:
+                    units = ['padelu-web.service', 'browser-project-backend.service', 'unrelated.service'] if '--user' in command else []
                 output = '\n\n'.join(f'Id={unit}\nLoadState=loaded\nControlGroup=/fixture/{unit}'
-                                      for unit in command[command.index('--') + 1:])
+                                      for unit in units)
             elif command[0] == 'ss' and '-4' in command:
                 output = 'LISTEN 0 5 127.0.0.1:3000 0.0.0.0:* cgroup:/fixture/browser-project-backend.service'
+                output += '\nLISTEN 0 5 127.0.0.1:15173 0.0.0.0:* cgroup:/fixture/padelu-web.service'
+            elif command[0] == 'ip':
+                output = '[]'
             else:
                 output = ''
             return {'code': 0, 'stdout': output, 'truncated': False}

@@ -1,10 +1,10 @@
-"""Read-only ownership suggestions for explicitly granted native units."""
+"""Read-only systemd discovery for registered projects and authorized binding previews."""
 from ipaddress import ip_address
 import json
 import os
 from pathlib import PurePosixPath
 
-from native_services import ServiceError, run_fixed
+from native_services import UNIT, ServiceError, run_fixed
 
 
 def read_host(command, **bounds):
@@ -15,12 +15,30 @@ def read_host(command, **bounds):
     return run_fixed(command, **bounds)
 
 
-def observation(runner, command):
+def observation(runner, command, issues=None, source=None):
     try:
         result = runner(command, timeout=2, limit=256 * 1024)
+        if not result['code'] and not result['truncated']:
+            return result['stdout']
     except (ServiceError, OSError):
-        return ''
-    return result['stdout'] if not result['code'] and not result['truncated'] else ''
+        pass
+    if issues is not None:
+        issues.add(source)
+    return ''
+
+
+def loaded_units(scope, names, runner, issues=None):
+    command = ['systemctl'] + (['--user'] if scope == 'user' else [])
+    output = observation(runner, command + ['show', '--no-pager', '--all',
+        '--property=Id,LoadState,ControlGroup,WorkingDirectory,RootDirectory,RootImage',
+        '--', *names], issues, scope)
+    units = {}
+    for block in output.strip().split('\n\n'):
+        fields = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+        unit = fields.get('Id', '')
+        if UNIT.fullmatch(unit) and fields.get('LoadState') == 'loaded':
+            units[scope, unit] = fields
+    return units
 
 
 def unit_properties(grants, runner):
@@ -29,21 +47,17 @@ def unit_properties(grants, runner):
         names = {grant['unit'] for grant in grants.values() if grant['scope'] == scope}
         if not names:
             continue
-        command = ['systemctl'] + (['--user'] if scope == 'user' else [])
-        output = observation(runner, command + ['show', '--no-pager',
-            '--property=Id,LoadState,ControlGroup,WorkingDirectory,RootDirectory,RootImage', '--', *sorted(names)])
-        for block in output.strip().split('\n\n'):
-            fields = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
-            if fields.get('Id') in names and fields.get('LoadState') == 'loaded':
-                properties[scope, fields['Id']] = fields
+        for identity, fields in loaded_units(scope, sorted(names), runner).items():
+            if identity[1] in names:
+                properties[identity] = fields
     return properties
 
 
-def listeners(runner):
+def listeners(runner, issues=None):
     # Separate families so that a wildcard IPv6 listener never proves IPv4 ownership.
     by_port = {}
     for family in (4, 6):
-        output = observation(runner, ['ss', '-' + str(family), '-H', '-ltn', '--cgroup'])
+        output = observation(runner, ['ss', '-' + str(family), '-H', '-ltn', '--cgroup'], issues, 'listeners')
         for line in output.splitlines():
             parts = line.split()
             if len(parts) < 5 or parts[0] != 'LISTEN':
@@ -62,12 +76,14 @@ def listeners(runner):
     return by_port
 
 
-def local_addresses(runner):
-    output = observation(runner, ['ip', '-j', 'address', 'show'])
+def local_addresses(runner, issues=None):
+    output = observation(runner, ['ip', '-j', 'address', 'show'], issues, 'addresses')
     try:
         return {ip_address(addr['local']) for interface in json.loads(output)
                 for addr in interface['addr_info'] if 'local' in addr}
     except (KeyError, ValueError, TypeError):
+        if issues is not None:
+            issues.add('addresses')
         return set()
 
 
@@ -77,7 +93,13 @@ def owns_listener(endpoint, group, sockets, addresses):
     host = ip_address(endpoint['host'])
     owners = [owner for address, owner in sockets.get((host.version, endpoint['port']), [])
               if address == host or address.is_unspecified and (host.is_loopback or host in addresses)]
-    return bool(owners) and all(owner == group or owner.startswith(group + '/') for owner in owners)
+    # A parent manager (e.g. user@UID.service) does not own sockets of nested units.
+    def belongs(owner):
+        if owner == group:
+            return True
+        suffix = owner.removeprefix(group + '/')
+        return suffix != owner and not any(part.endswith(('.service', '.scope')) for part in suffix.split('/'))
+    return bool(owners) and all(belongs(owner) for owner in owners)
 
 
 def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses):
@@ -93,8 +115,8 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses):
         if root and PurePosixPath(root) != PurePosixPath('/') and directory and '..' not in directory.parts and directory.is_relative_to(root):
             by_dir.add(key)
             reasons['directory'] = working
-        endpoint = endpoints[project['endpoint']]
-        if owns_listener(endpoint, fields.get('ControlGroup'), sockets, addresses):
+        endpoint = endpoints.get(project['endpoint'])
+        if endpoint and owns_listener(endpoint, fields.get('ControlGroup'), sockets, addresses):
             by_port.add(key)
             reasons['listener'] = {'host': endpoint['host'], 'port': endpoint['port']}
         if any(name == key or name.startswith((key + '-', key + '.')) for name in (alias, grant['unit'])):
@@ -125,3 +147,31 @@ def binding_preview(listing, runner=read_host):
             rows.append(match_grant(alias, grant, fields, projects, listing['endpoints'], sockets, addresses))
     return {'rows': rows, 'policy_sha256': listing['policy_sha256'],
             'projects': [{key: project[key] for key in ('id', 'revision', 'name', 'domain')} for project in projects]}
+
+def project_services(listing, runner=read_host):
+    """Return only project-related candidates. Discovery never issues a grant or a binding."""
+    projects = listing['projects']
+    candidates = {project['id']: [] for project in projects}
+    issues = set()
+    if not runner or not projects:
+        return {'candidates': candidates, 'unavailable': [] if runner else ['native']}
+
+    units = {}
+    for scope in ('user', 'system'):
+        units.update(loaded_units(scope, ['*.service'], runner, issues))
+    grants = {(grant['scope'], grant['unit']): alias for alias, grant in listing['services'].items()}
+    owned = {alias for project in projects for alias in project['bound_services']}
+    sockets = listeners(runner, issues)
+    addresses = local_addresses(runner, issues) if sockets else set()
+    for scope, unit in sorted(units.keys() | grants.keys()):
+        alias = grants.get((scope, unit))
+        if alias in owned:
+            continue
+        result = match_grant(alias or unit, {'scope': scope, 'unit': unit}, units.get((scope, unit), {}),
+                             projects, listing['endpoints'], sockets, addresses)
+        for key, reasons in result['evidence'].items():
+            if result['suggested'] and key != result['suggested']:
+                continue
+            candidates[key].append({'scope': scope, 'unit': unit, 'alias': alias,
+                                    'suggested': key == result['suggested'], 'reasons': reasons})
+    return {'candidates': candidates, 'unavailable': sorted(issues)}

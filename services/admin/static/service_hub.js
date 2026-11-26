@@ -11,10 +11,13 @@ Object.assign(hubMessages,{
 const hubText=value=>hubMessages[value]||value;
 const hubButton=(text,data={},blocked=false)=>`<button type="button" ${Object.entries(data).map(([k,v])=>`data-hub-${k}="${esc(v)}"`).join(' ')} ${blocked||serviceHubUI.busy?'disabled':''}>${esc(text)}</button>`;
 let overviewCheck=null;
-function resetServiceHub(){overviewCheck=null;serviceHubUI.data=null;serviceHubUI.error='';serviceHubUI.drafts={};serviceHubUI.editor=null;sitesUI.source='all';sitesUI.lastView='';$('hub-dialog')?.close();}
+function resetServiceHub(){serviceHubUI.serviceFilter='all';overviewCheck=null;serviceHubUI.data=null;serviceHubUI.error='';serviceHubUI.drafts={};serviceHubUI.editor=null;sitesUI.source='all';sitesUI.lastView='';$('hub-dialog')?.close();}
 async function loadServiceHub(){
  if(!loggedIn||serviceHubUI.loading)return;serviceHubUI.loading=true;
- try{const data=await api('service-hub');if(loggedIn){serviceHubUI.data=data;serviceHubUI.error='';}}
+ const inspect=current==='service-hub'&&moduleViews['service-hub']==='services';
+ try{const data=await api(inspect?'service-hub?project_services=1':'service-hub');
+   if(inspect&&!data.project_services)data.project_services={candidates:{},unavailable:['unsupported']};
+   if(loggedIn){serviceHubUI.data=data;serviceHubUI.error='';}}
  catch(error){serviceHubUI.error=error.message;}
  finally{serviceHubUI.loading=false;if(loggedIn){if(current==='service-hub')renderServiceHubPage();if(current==='sites')renderSitesPage();if(current==='overview')render();}}
 }
@@ -128,10 +131,8 @@ function boundSystemServices(data){
  return bindings;
 }
 
-function systemServicesPanel(bindings,operationsEnabled,bindButton=''){
- if(!bindings.length)return panel('系统服务','','<p class="panel-body">当前没有项目绑定已授权的 systemd 服务。</p>',bindButton);
- const labels={start:'启动',stop:'停止',restart:'重启'};
- const rows=bindings.map(({alias,grant,project})=>{
+function boundServiceControls(project,grant,alias,operationsEnabled){
+   const labels={start:'启动',stop:'停止',restart:'重启'};
    const writes=Object.keys(labels).filter(action=>grant.actions.includes(action));
    const fullControl=writes.includes('start')&&writes.includes('stop');
    const canOperate=project.endpoint_available&&operationsEnabled&&writes.length>0;
@@ -144,10 +145,54 @@ function systemServicesPanel(bindings,operationsEnabled,bindButton=''){
      if(grant.actions.includes('logs'))buttons.push(hubButton('最近日志',{logs:project.id,alias}));
      if(canOperate)buttons.push(hubButton('服务操作',{action:project.id,alias}));
    }
-   return `<tr><td><strong>${esc(grant.unit)}</strong><small>${grant.scope==='user'?'用户级':'系统级'}</small></td><td>${esc(project.name)}</td><td>${badge(permission,canOperate?'blue':'')}${reason?`<small>${esc(reason)}</small>`:''}</td><td><div class="actions">${buttons.join('')}</div></td></tr>`;
- });
- return panel('系统服务',`${bindings.length} 个已绑定的 systemd 服务`,table(['服务单元','关联项目','当前权限','操作'],rows),bindButton);
+   return {permission,reason,buttons};
 }
+
+const serviceFilters={all:'全部项目',discovered:'待授权',pending:'待绑定',bound:'已绑定',empty:'未发现匹配'};
+
+function projectServicePanel(data, bindButton){
+ const scan=data.project_services,issues=scan?.unavailable||[];
+ const sourceNames={native:'原生主机',user:'用户级 systemd',system:'系统级 systemd',listeners:'监听端口',addresses:'本机地址',unsupported:'主机发现接口'};
+ const rows=data.projects.map(project=>{
+   const entries=[];
+   const states=new Set();
+   const aliases=project.bound_services||(project.service?[project.service]:[]);
+   for(const alias of aliases){
+     states.add('bound');
+     const grant=Object.hasOwn(data.services,alias)?data.services[alias]:null;
+     if(!grant){entries.push(`<li><strong>${esc(alias)}</strong> ${badge('绑定授权已失效','warn')}</li>`);continue;}
+     const controls=boundServiceControls(project,grant,alias,data.operations_enabled);
+     entries.push(`<li><strong>${esc(grant.unit)}</strong> ${badge('已绑定','good')}
+       <small>${grant.scope==='user'?'用户级':'系统级'} · ${esc(controls.permission)} ${esc(controls.reason)}</small>
+       <div class="actions">${controls.buttons.join('')}</div></li>`);
+   }
+   for(const candidate of scan?.candidates[project.id]||[]){
+     const {alias,scope,unit,reasons,suggested}=candidate;
+     states.add(alias?'pending':'discovered');
+     const access=alias?'已授权 · 待绑定':'已发现 · 待授权';
+     const next=alias?hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available):
+       `<details><summary>如何接入</summary><p>主机管理员可在私有策略的 services 中为该单元设置别名，导入新版本策略后，刷新本页并核对绑定。只读授权示例：</p><code>${esc(JSON.stringify({scope,unit,actions:['status','logs'],definition_sha256:null}))}</code></details>`;
+     entries.push(`<li><strong>${esc(unit)}</strong> ${badge(access,alias?'blue':'warn')}
+       <small>${scope==='user'?'用户级':'系统级'} · ${suggested?'匹配依据':'归属待核对'} · ${esc(bindingReasons(reasons))}</small>${next}</li>`);
+   }
+   if(!entries.length&&scan&&!issues.length)states.add('empty');
+   const emptyText=!scan?(serviceHubUI.error?'读取失败，请刷新重试':'正在检查服务…'):issues.length?'发现未完成':'未发现匹配的 systemd 服务';
+   return {states,html:`<tr data-service-project="${esc(project.id)}"><td><strong>${esc(project.name)}</strong><small>${esc(project.domain)}</small></td>
+     <td>${entries.length?`<ul>${entries.join('')}</ul>`:esc(emptyText)}</td></tr>`};
+ });
+ const filter=serviceHubUI.serviceFilter||'all';
+ const visible=rows.filter(row=>filter==='all'||row.states.has(filter));
+ const options=Object.entries(serviceFilters).map(([key,label])=>{
+   const count=key==='all'?rows.length:rows.filter(row=>row.states.has(key)).length;
+   return `<option value="${key}" ${key===filter?'selected':''}>${label}（${count}）</option>`;
+ }).join('');
+ const filterField=`<label class="service-filter">筛选项目 <select data-project-service-filter>${options}</select></label>`;
+ const alert=issues.length?`<p class="hub-alert" role="alert">未能完整检查${esc(issues.map(source=>sourceNames[source]||source).join('、'))}。可刷新重试。</p>`:'';
+ const content=visible.length?table(['登记项目','系统服务与接入状态'],visible.map(row=>row.html)):
+   `<p class="panel-body">${rows.length?'当前筛选没有项目。':'尚未登记项目。'}</p>`;
+ return panel('项目与系统服务',`${rows.length} 个登记项目`,alert+filterField+'<div class="project-service-list">'+content+'</div>',bindButton);
+}
+
 
 function renderServiceHubPage(){
  if(location.hash==='#service-hub/gateway'){current='sites';moduleViews.sites='gateway';location.replace('#sites/gateway');render();if(loggedIn)loadServiceHub();return;}
@@ -167,9 +212,10 @@ function renderServiceHubPage(){
   if(view==='services'){
     const bindings=boundSystemServices(d);
     const free=Object.keys(d.services).length-bindings.length;
-    const action=hubButton(free?`批量绑定（${free} 个待绑定）`:'批量绑定',{batch:'yes'},
+    const action=hubButton(free?`绑定已授权服务（${free}）`:'绑定已授权服务',{batch:'yes'},
       !free||!d.batch_binding_available||!d.configuration_writable||!d.projects.some(p=>p.endpoint_available));
-    body=systemServicesPanel(bindings,d.operations_enabled,action);
+    if(!d.project_services&&!serviceHubUI.loading&&!serviceHubUI.error)loadServiceHub();
+    body=projectServicePanel(d,action);
   }
   if(view==='records')body=panel('运行操作记录','结果持久保存；超时或重载不自动重放操作',table(['时间','项目 / 操作','结果','说明'],[...d.operations].reverse().map(o=>`<tr><td>${date(o.at*1000)}</td><td>${esc(o.project)}<small>${esc(o.result?.unit||'')}</small><small>${esc(o.action)}</small></td><td>${badge(o.state==='observed'?'状态已核对':'结果未确认',o.state==='observed'?'good':'warn')}</td><td>${esc(hubText(o.error||'systemd 实际状态符合预期；业务健康仍需单独检查。'))}</td></tr>`)));
   if(!Object.keys(d.endpoints).length&&view!=='records')body='<div class="hub-alert" role="alert">尚无已批准的接入地址。请先按独立服务接入指南准备这台主机的地址和服务清单。</div>'+body;
@@ -262,7 +308,7 @@ function bindingCount(form){
  submit.disabled=!count||serviceHubUI.busy;
 }
 
-async function openBatchBindings(){
+async function openBatchBindings(alias){
  const dialog=hubDialog();
  dialog.innerHTML=`<div class="detail-head"><h2>匹配系统服务</h2>${hubButton('关闭',{close:'yes'})}</div><p role="status" data-bind-loading>正在核对工作目录和监听地址…</p>`;
  const loading=dialog.querySelector('[data-bind-loading]');
@@ -273,7 +319,7 @@ async function openBatchBindings(){
  if(!dialog.open||!loading.isConnected)return;
  const editor={kind:'bindings',policy:preview.policy_sha256,projects:preview.projects,
    revisions:new Map(preview.projects.map(p=>[p.id,p.revision])),
-   rows:preview.rows.map(row=>({...row,project:row.suggested,included:!!row.suggested,editing:false,manual:false}))};
+   rows:preview.rows.filter(row=>!alias||row.alias===alias).map(row=>({...row,project:row.suggested,included:!!row.suggested,editing:false,manual:false}))};
  serviceHubUI.editor=editor;
  const groups=[[true,'可确认的匹配'],[false,'需要判断']];
  const body=groups.map(([ready,title])=>{
@@ -330,11 +376,16 @@ document.addEventListener('submit',async event=>{
  finally{serviceHubUI.busy=false;event.submitter.disabled=false;if(current==='service-hub')renderServiceHubPage();if(current==='sites')renderSitesPage();if(current==='overview')render();}
 });
 document.addEventListener('input',event=>{if(event.target.closest('#hub-form'))hubCapture();});
-document.addEventListener('change',event=>{if(event.target.closest('#hub-form'))hubCapture();});
+document.addEventListener('change',event=>{
+ if(event.target.matches('[data-project-service-filter]')){
+   serviceHubUI.serviceFilter=event.target.value;renderServiceHubPage();
+   document.querySelector('[data-project-service-filter]')?.focus();
+ }else if(event.target.closest('#hub-form'))hubCapture();
+});
 document.addEventListener('click',async event=>{
  const b=event.target.closest('[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
-  if(d.hubBatch){await openBatchBindings();return;}
+  if(d.hubBatch){await openBatchBindings(d.hubBindAlias);return;}
   if(d.hubDiscard){delete serviceHubUI.drafts[(d.hubEntryMode?'entry:':'')+d.hubDiscard];serviceHubUI.editor=null;await loadServiceHub();hubEdit(d.hubDiscard,!!d.hubEntryMode);return;}
   if(d.hubEntry){hubEdit(d.hubEntry,true);return;}
   if(d.hubRefresh){if(current==='sites')await refresh();else await loadServiceHub();return;}

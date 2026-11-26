@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/admin'))
-from service_binding_matches import binding_preview, match_grant, owns_listener, read_host
+from service_binding_matches import binding_preview, match_grant, owns_listener, project_services, read_host
 
 
 class BindingMatchTests(unittest.TestCase):
@@ -95,3 +95,41 @@ class BindingMatchTests(unittest.TestCase):
             row, = binding_preview(listing, lambda *a, **kw: {**bad, 'stdout': 'partial'})['rows']
             self.assertIsNone(row['suggested'])
             self.assertFalse(row['unit_observed'])
+
+    def test_discovery_groups_grants_and_candidates_without_returning_unrelated_units(self):
+        self.projects[0]['bound_services'] = ['existing']
+        grants = {'existing': {**self.grant, 'unit': 'web.service'},
+                  'api-worker': {**self.grant, 'unit': 'api-worker.service'}}
+        listing = {'projects': self.projects, 'services': grants, 'endpoints': self.endpoints}
+        def runner(command, **kwargs):
+            if command[0] == 'systemctl':
+                self.assertEqual(command[-1], '*.service')
+                units = ['web.service', 'api-worker.service', 'unknown.service', 'private.service',
+                         'user@1000.service'] if '--user' in command else []
+                blocks = []
+                for unit in units:
+                    group = '/parent' if unit.startswith('user@') else '/parent/' + unit
+                    blocks.append(f'Id={unit}\nLoadState=loaded\nControlGroup={group}')
+                out = '\n\n'.join(blocks)
+            elif '-4' in command:
+                out = 'LISTEN 0 5 127.0.0.1:8080 *:* cgroup:/parent/unknown.service'
+            else:
+                out = '[]' if command[0] == 'ip' else ''
+            return {'stdout': out, 'code': 0, 'truncated': False}
+        result = project_services(listing, runner)
+        self.assertEqual(result['unavailable'], [])
+        self.assertEqual(result['candidates']['web'], [])
+        candidates = {row['unit']: row for row in result['candidates']['api']}
+        self.assertEqual(set(candidates), {'api-worker.service', 'unknown.service'})
+        self.assertIsNone(candidates['unknown.service']['alias'])
+        self.assertTrue(candidates['unknown.service']['suggested'])
+        self.assertEqual(candidates['api-worker.service']['alias'], 'api-worker')
+        self.assertFalse(candidates['api-worker.service']['suggested'])
+        self.assertNotIn('private.service', str(result))
+
+    def test_incomplete_host_observations_and_non_native_are_not_reported_as_no_match(self):
+        listing = {'projects': self.projects, 'services': {}, 'endpoints': {}}
+        self.assertEqual(project_services(listing, None)['unavailable'], ['native'])
+        result = project_services(listing, lambda *a, **kw: {'code': 1, 'truncated': True, 'stdout': 'partial'})
+        self.assertEqual(set(result['unavailable']), {'system', 'user', 'listeners'})
+        self.assertEqual(result['candidates'], {'api': [], 'web': []})

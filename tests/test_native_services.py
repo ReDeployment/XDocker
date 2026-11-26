@@ -264,6 +264,32 @@ class HubAPITests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/service-hub/projects/example/services/api/logs').json['error'],'XD_SERVICE_ACTION_NOT_GRANTED')
         self.assertEqual(self.client.get('/api/service-hub/projects/example/services/unknown/status').status_code,409)
 
+    def test_host_discovery_does_not_grant_binding_or_logs(self):
+        path = '/api/service-hub?project_services=1'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.login()
+        hub = self.app.extensions['service_hub']
+        value = policy()
+        hub.import_policy(value)
+        hub.save(project(directory='/work/example'))
+        def reader(command, **kwargs):
+            output = ''
+            if command[0] == 'systemctl' and '--user' in command:
+                output = 'Id=worker.service\nLoadState=loaded\nWorkingDirectory=/work/example/tasks'
+            return {'code': 0, 'stdout': output, 'truncated': False}
+        self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
+        self.assertNotIn('project_services', self.client.get('/api/service-hub').json)
+        result = self.client.get(path).json
+        candidate, = result['project_services']['candidates']['example']
+        self.assertEqual((candidate['unit'], candidate['scope'], candidate['alias']), ('worker.service', 'user', None))
+        self.assertTrue(candidate['suggested'])
+        self.assertFalse(result['services'])
+        body = {'policy_sha256': fingerprint(value), 'bindings': [{'project': 'example', 'revision': 1, 'alias': 'worker'}]}
+        self.assertEqual(self.post('/api/service-hub/bindings', body).status_code, 409)
+        for action in ('status', 'logs'):
+            self.assertEqual(self.client.get('/api/service-hub/projects/example/services/worker/' + action).status_code, 409)
+        self.assertFalse(hub.store.additional_bindings())
+
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()
         self.app.extensions['service_hub'].import_policy(policy())

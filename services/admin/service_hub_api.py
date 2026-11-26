@@ -4,7 +4,7 @@ from flask import jsonify, request
 from native_services import ServiceHub, ServiceError, probe_endpoint
 from gateway_runtime import GatewayRuntime
 from registry_store import RegistryError
-from service_binding_matches import binding_preview, read_host
+from service_binding_matches import binding_preview, project_services, read_host
 
 
 def register_service_hub(app,state,audit,redactor,domains):
@@ -20,6 +20,9 @@ def register_service_hub(app,state,audit,redactor,domains):
         try:
             value=hub.listing();value['native']=bool(app.config.get('NATIVE_MODE'))
             value['operations_enabled']=bool(app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED'))
+            if request.args.get('project_services') == '1':
+                runner = app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host) if value['native'] else None
+                value['project_services'] = project_services(value, runner)
             try:
                 preview=gateway.preview();value['gateway']={k:v for k,v in preview.items() if k!='configuration'}
             except (OSError,ValueError) as exc:value['gateway']={'error':str(exc) if isinstance(exc,(ServiceError,RegistryError)) else 'XD_GATEWAY_PREVIEW_UNAVAILABLE'}
