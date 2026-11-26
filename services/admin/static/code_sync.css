@@ -18,10 +18,28 @@
 .sync-toolbar select { max-width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: white; }
 .sync-filters { max-width: 100%; }
 .sync-toolbar [aria-pressed="true"] { background: #edf3ff; border-color: var(--blue); color: var(--blue); }
-.sync-sources td { overflow-wrap: anywhere; }
-.sync-sources td .sync-source-issue { color: #943c22; font-weight: 600; }
-.sync-sources td .actions { align-items: center; }
-.sync-workspace .panel.sync-sources { margin-top: 0; }
+.sync-workspace .panel.sync-sources { margin-top: 0; container-type: inline-size; }
+.sync-sources table { table-layout: fixed; width: 100%; }
+.sync-sources th, .sync-sources td { padding: 12px 14px; text-align: left; overflow-wrap: anywhere; }
+.sync-sources td { vertical-align: top; }
+.sync-sources th:nth-child(1) { width: 25%; }
+.sync-sources th:nth-child(2) { width: 33%; }
+.sync-sources th:nth-child(3) { width: 24%; }
+.sync-sources th:nth-child(4) { width: 18%; }
+.sync-repo-name, .sync-push-state, .sync-next-step { display: block; color: #52647d; font-size: 12px; line-height: 1.5; }
+.sync-repo-name, .sync-next-step { margin-top: 3px; }
+.sync-push-state { margin-top: 5px; }
+.sync-branches, .sync-source-facts { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: baseline; gap: 4px 8px; margin: 0; }
+.sync-branches dt, .sync-source-facts dt { color: #52647d; font-size: 12px; }
+.sync-branches dd, .sync-source-facts dd { margin: 0; overflow-wrap: anywhere; }
+.sync-branches dd { font: 12px/1.55 ui-monospace, monospace; }
+.sync-source-issue { color: #873d20; font-weight: 600; }
+.sync-row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 8px; }
+.sync-row-actions button { white-space: nowrap; }
+.sync-row-actions [data-sync-details] { color: var(--blue); border: 0; background: transparent; padding-inline: 4px; }
+.sync-source-facts { gap: 10px 20px; }
+.sync-detail-notice { padding: 9px 12px; color: #773a20; background: #fff5eb; border-radius: 6px; margin: 0 0 14px; overflow-wrap: anywhere; }
+.sync-detail-notice small { display: block; margin-top: 4px; }
 
 @media (max-width: 720px) {
   .shell:has(.sync-workspace) .sidebar {
@@ -40,13 +58,17 @@
   .sync-sources .sync-toolbar { padding: 8px 10px; gap: 5px 8px; }
   .sync-sources .actions { margin: 0; flex-wrap: wrap; }
   .sync-toolbar button, .sync-toolbar select, .sync-sources .actions button { min-height: 44px; }
-  .sync-sources table { min-width: 0; width: 100%; }
+}
+
+@container (max-width: 695px) {
+  .sync-sources table { min-width: 0; }
   .sync-sources thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .sync-sources tbody { display: block; }
-  .sync-sources tbody tr { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 8px; padding: 10px; border-bottom: 1px solid var(--line); }
-  .sync-sources td { padding: 0; border: 0; grid-column: 1/-1; }
-  .sync-sources td:first-child:not([colspan]) { grid-column: 1; grid-row: 1; }
-  .sync-sources td:nth-child(3) { grid-column: 2; grid-row: 1; }
-  .sync-sources td:nth-child(3)::before { content: "推送 "; color: var(--muted); font-size: 11px; }
-  .sync-sources td small { max-width: none; }
+  .sync-sources tbody tr { display: grid; grid-template-columns: minmax(0,1fr); gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+  .sync-sources td { padding: 0; border: 0; }
+  .sync-identity { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 8px; align-items: baseline; }
+  .sync-repo-name { grid-column: 1/-1; grid-row: 2; margin: 0; }
+  .sync-push-state { grid-column: 2; grid-row: 1; margin: 0; }
+  .sync-sources td:nth-child(3) { grid-row: 2; }
+  .sync-row-actions button { min-height: 44px; }
 }

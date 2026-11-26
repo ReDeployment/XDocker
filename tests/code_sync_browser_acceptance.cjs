@@ -54,7 +54,9 @@ async function main(){
  await edit('credentials');await form({id:'github',name:'GitHub Fixture',token:'fixture_github_token_123456789'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.credentials.length===1`);
  assert(await evaluate(`!location.search.includes('fixture_github_token_123456789')&&!JSON.stringify(codeSyncUI.data).includes('fixture_github_token_123456789')&&!document.querySelector('#sync-form input[name=token]').value`));
  await edit('sources');await form({id:'example',name:'Example',directory:info.directory,repository:'example/project',branch:'main',credential:'github',enabled:true,confirmation:'Example'});
- await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('新文件 1（均不上传）')`));await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
+ await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('未暂存 1 · 新文件 1')`));await click('[data-sync-details="example"]');await until(`document.querySelector('#detail-dialog').open`);
+ assert(await evaluate(`document.querySelector('.sync-source-facts').textContent.includes(${JSON.stringify(info.directory)})`));
+ await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
  await rpc('Page.reload');
  await until(`performance.getEntriesByType('navigation')[0]?.type==='reload'&&typeof codeSyncUI!=='undefined'&&codeSyncUI.data?.sources.length===1`);
  for(const [width,height] of [[1440,900],[390,844],[320,700]])await compactSourceLayout(width,height);
@@ -67,7 +69,7 @@ async function main(){
  await click('[data-sync-device="copy"]');await until(`document.querySelector('#detail-dialog').open`);await click('#close-detail');
  await pane('targets');await edit('targets');await form({id:'copy-example',source:'example',device:'copy',remote_target:'example',directory:info.copy_directory,enabled:true,restart:false,confirmation:'Example'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.targets.length===1`);
  await pane('schedules');await edit('schedules');await form({id:'daily',source:'example',mode:'upload',clock:'02:00',timezone:'Asia/Shanghai',enabled:true,confirmation:'Example'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.schedules.length===1`);
- await pane('sources');await click('[data-sync-run="example"][data-sync-kind="upload"]');await until(`document.querySelector('#sync-operation')`);await form({confirmation:'Example'},true);await until(`!document.querySelector('#sync-dialog').open`);
+ await pane('sources');await click('[data-sync-details="example"]');await click('[data-sync-run="example"][data-sync-kind="upload"]');await until(`document.querySelector('#sync-operation')`);await form({confirmation:'Example'},true);await until(`!document.querySelector('#sync-dialog').open`);
  await until(`(async()=>{await loadCodeSync();return codeSyncUI.data.jobs.some(j=>j.state==='success'&&j.result?.[0]?.state==='observed')})()`);
  await pane('records');await shot('desktop-records');assert.equal(await evaluate(`codeSyncUI.data.jobs[0].sha`),await evaluate(`codeSyncUI.data.jobs[0].result[0].sha`));
  assert(await evaluate(`(()=>{
@@ -78,9 +80,11 @@ async function main(){
      renderCodeSync();
      document.querySelector('[data-sync-open-review]').click();
      const row=document.querySelector('.sync-source-issue');
-     if(!row.textContent.includes('previous-branch → 当前分支：main'))return false;
+     if(row.textContent!=='开发分支已切换')return false;
+     const branches=row.closest('tr').querySelectorAll('.sync-branches dd');
+     if(branches.length!==2||branches[0].textContent!=='previous-branch'||branches[1].textContent!=='main')return false;
      const project=document.querySelector('#sync-project');project.value=missing.id;project.dispatchEvent(new Event('change',{bubbles:true}));
-     if(document.querySelectorAll('.sync-sources tbody tr').length!==1||!document.querySelector('.sync-source-issue').textContent.includes('未发现登记目录'))return false;
+     if(document.querySelectorAll('.sync-sources tbody tr').length!==1||!document.querySelector('.sync-source-issue').textContent.includes('找不到源码目录'))return false;
      selectViewModule('code-sync','devices');selectViewModule('code-sync','sources');
      if(document.querySelector('#sync-project').value!==missing.id||document.querySelector('[data-sync-review]').getAttribute('aria-pressed')!=='true')return false;
      document.querySelector('[data-sync-edit="sources"][data-sync-id="unavailable"]').click();

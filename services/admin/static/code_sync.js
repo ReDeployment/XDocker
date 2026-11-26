@@ -13,11 +13,37 @@ async function loadCodeSync(){
 }
 function syncSource(id){return codeSyncUI.data?.sources.find(s=>s.id===id);}
 function syncSourceIssue(source,checkout){
- if(!checkout)return '本轮未发现登记目录，请核对路径';
- if(checkout.repository.toLowerCase()!==source.repository.toLowerCase())return '当前仓库：'+checkout.repository+'，请核对登记';
- if(checkout.branch!==source.branch)return '登记分支：'+source.branch+' → 当前分支：'+checkout.branch;
- if(!checkout.pushable)return '当前为固定提交，请在源码仓库中选择开发分支';
- return '';
+ if(!checkout)return {title:'找不到源码目录',action:'核对目录',hint:'请确认项目的本地路径。'};
+ if(checkout.repository.toLowerCase()!==source.repository.toLowerCase())return {title:'仓库地址已变更',action:'核对仓库',hint:'请核对当前目录关联的 GitHub 仓库。'};
+ if(!checkout.pushable)return {title:'尚未选择开发分支',action:'查看配置',hint:'请在本地仓库切换到开发分支。'};
+ if(checkout.branch!==source.branch)return {title:'开发分支已切换',action:'核对分支',hint:'请确认以后跟踪哪条分支。'};
+ return null;
+}
+function syncBranchFacts(source,checkout,short=false){
+ return [['登记',source.branch],['当前',checkout?.branch]].map(([label,branch])=>{
+  if(branch?.startsWith('HEAD@'))return [label+'提交',branch.slice(5,short?17:undefined)];
+  return [label+'分支',branch||'未检测到'];
+ });
+}
+function syncWorktreeChanges(pending){
+ if(!pending)return '';
+ return [['modified','未暂存'],['staged','已暂存'],['untracked','新文件']]
+  .filter(([key])=>pending[key].count>0)
+  .map(([key,label])=>label+' '+pending[key].count).join(' · ');
+}
+function syncSourceDetails(source){
+ const data=codeSyncUI.data,checkout=data.inventory.find(r=>r.directory===source.directory);
+ const issue=syncSourceIssue(source,checkout);
+ const fields=[['GitHub 仓库',source.repository],['本地目录',source.directory]];
+ if(checkout&&checkout.repository.toLowerCase()!==source.repository.toLowerCase())fields.push(['当前仓库',checkout.repository]);
+ fields.push(...syncBranchFacts(source,checkout),
+  ['工作区',checkout?.pending?(syncWorktreeChanges(checkout.pending)||'没有未提交的改动'):'尚未读取'],
+  ['推送开关',source.enabled?'已开启':'已关闭']);
+ const values=fields.map(([label,value])=>`<dt>${label}</dt><dd>${esc(value)}</dd>`).join('');
+ const advice=issue?`<p class="sync-detail-notice"><strong>${issue.title}</strong>　${issue.hint}</p>`:'';
+ $('detail-title').textContent=source.name+' · 仓库详情';
+ $('detail-content').innerHTML=`${advice}<dl class="sync-source-facts">${values}</dl><p class="sync-help">推送只包含已提交的代码。</p><div class="actions">${syncButton('编辑配置',{edit:'sources',id:source.id})}${syncButton('推送预览',{preview:source.id})}${syncButton('推送并分发',{run:source.id,kind:'upload'},!source.enabled||!data.execution_enabled)}</div>`;
+ $('detail-dialog').showModal();
 }
 function syncProjectFilter(data){
  return `<select id="sync-project" aria-label="筛选项目"><option value="">全部项目</option>${data.sources.map(r=>`<option value="${esc(r.id)}" ${codeSyncUI.selected===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}</select>`;
@@ -27,12 +53,21 @@ function syncSourcesPanel(data,issues,inventory){
  const review=selected.filter(r=>issues.has(r.id));
  const shown=codeSyncUI.reviewOnly?review:[...review,...selected.filter(r=>!issues.has(r.id))];
  const toolbar=`<div class="sync-toolbar"><div class="sync-filters">${syncProjectFilter(data)}<button type="button" data-sync-review aria-pressed="${codeSyncUI.reviewOnly}">待核对 ${review.length}</button></div><div class="actions">${syncButton('GitHub 凭据',{edit:'credentials',id:'new'})}${syncButton('添加源码',{edit:'sources',id:'new'},!data.inventory.length)}</div></div>`;
- const rows=shown.map(r=>{
-  const issue=issues.get(r.id);
-  return `<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.directory)}</small>${syncPending(inventory.get(r.directory))}</td><td>${esc(r.repository)}<small class="${issue?'sync-source-issue':''}">${esc(issue||'同步分支：'+r.branch)}</small></td><td>${badge(r.enabled?'已开启':'未开启',r.enabled?'good':'')}</td><td><div class="actions">${syncButton(issue?'核对配置':'编辑',{edit:'sources',id:r.id})}${syncButton('推送预览',{preview:r.id})}${syncButton('推送并分发',{run:r.id,kind:'upload'},!r.enabled||!data.execution_enabled)}</div></td></tr>`;
+ const rows=shown.map(source=>{
+  const issue=issues.get(source.id),checkout=inventory.get(source.directory);
+  const changes=syncWorktreeChanges(checkout?.pending);
+  const result=issue?.title||(changes?'有未提交的改动':checkout?.pending?'工作区干净':'工作区待检查');
+  const note=issue?.hint||changes;
+  const branches=syncBranchFacts(source,checkout,true).map(([label,value])=>`<dt>${label}</dt><dd>${esc(value)}</dd>`).join('');
+  return `<tr>
+    <td class="sync-identity"><strong>${esc(source.name)}</strong><span class="sync-repo-name">${esc(source.repository)}</span><span class="sync-push-state">推送${source.enabled?'已开启':'已关闭'}</span></td>
+    <td><dl class="sync-branches">${branches}</dl></td>
+    <td><span class="${issue?'sync-source-issue':'sync-source-result'}">${esc(result)}</span>${note?`<span class="sync-next-step">${esc(note)}</span>`:''}</td>
+    <td><div class="sync-row-actions">${syncButton(issue?.action||'编辑配置',{edit:'sources',id:source.id})}<button type="button" data-sync-details="${esc(source.id)}" aria-label="${esc(source.name)}仓库详情">详情</button></div></td>
+  </tr>`;
  });
  if(!rows.length&&codeSyncUI.reviewOnly)rows.push('<tr><td class="empty" colspan="4">当前范围没有待核对的源码仓库</td></tr>');
- return `<section class="panel sync-sources" aria-label="源码仓库">${toolbar}${table(['项目 / 目录','GitHub / 分支','推送开关','操作'],rows)}</section><p class="sync-help">已发现 ${data.inventory.length} 个主仓库 · <a href="/assets/code-sync-guide.html" target="_blank" rel="noreferrer">连接与授权指南 ↗</a></p>`;
+ return `<section class="panel sync-sources" aria-label="源码仓库">${toolbar}${table(['项目','分支','检查结果','操作'],rows)}</section><p class="sync-help">已登记 ${data.sources.length} 个源码仓库 · <a href="/assets/code-sync-guide.html" target="_blank" rel="noreferrer">连接与授权指南 ↗</a></p>`;
 }
 function renderCodeSync(){
  codeSyncUI.view=moduleViews['code-sync'];
@@ -69,7 +104,7 @@ function renderCodeSync(){
   if(projectFilter||reviewLink)body='<div class="sync-toolbar">'+projectFilter+reviewLink+'</div>'+body;
  }
  if(d?.mode_migration&&['schedules','targets'].includes(v))body+='<p class="sync-help">同步策略已升级为仅推送已有提交。重新启用原计划前，请核对分支与目标设备授权。</p>';
- const tabs=Object.entries(codeSyncViews).map(([key,label])=>({key,label,count:key==='sources'&&issues.size?issues.size+' 待核对':undefined}));
+ const tabs=Object.entries(codeSyncViews).map(([key,label])=>({key,label,count:key==='sources'&&v!=='sources'&&issues.size?issues.size+' 待核对':undefined}));
  const warnings=alerts.map(t=>`<div class="sync-alert" role="alert">${esc(t)}</div>`).join('');
  $('content').innerHTML='<div class="sync-workspace">'+warnings+verticalTabs('code-sync','代码同步分区',tabs,v,body)+'</div>';
  if(innerWidth<=720){
@@ -94,7 +129,9 @@ function syncEdit(kind,id='new'){
  if(kind==='devices')fields+=input('name','设备名称','required maxlength="80"')+input('host','VPN / 内网 IP','required')+input('port','SSH 端口','type="number" min="1" max="65535" required')+input('username','SSH 用户','required')+select('identity','已授权的本机 SSH 身份',d.policy.identities.map(r=>[r,r]))+area('host_key','已核对的 SSH 主机公钥（类型 + Base64）')+check('enabled','允许连接此设备')+'<p class="sync-help">首次需按连接指南安装 Agent 和设备端副本授权；不接受任意远程命令。</p>';
  if(kind==='targets')fields+=select('source','来源项目',d.sources.map(r=>[r.id,r.name]))+select('device','目标设备',d.devices.map(r=>[r.id,r.name]))+input('remote_target','Agent 中已批准的副本标识','required')+input('directory','设备端副本目录（须与授权一致）','required')+check('restart','副本实际更新后重启已授权服务')+check('enabled','核对设备授权并启用此副本')+input('confirmation','启用时输入完整来源项目名称','autocomplete="off"');
  if(kind==='schedules')fields+=select('source','项目',d.sources.map(r=>[r.id,r.name]))+select('mode','每日执行内容',[['upload','推送并分发'],['distribute','仅同步已确认提交']])+input('clock','每天时间','type="time" required')+input('timezone','时区','required')+check('enabled','启用每日计划')+input('confirmation','启用时输入完整项目名称','autocomplete="off"');
- const dialog=syncDialog();dialog.innerHTML=`<form id="sync-form" method="post"><div class="detail-head"><h2>${old?'编辑':'新增'}${esc({sources:'源码仓库',devices:'目标设备',targets:'分发策略',schedules:'每日计划',credentials:'GitHub 凭据'}[kind])}</h2>${syncButton('关闭',{dismiss:'yes'})}</div><div class="sync-form-body"><div class="sync-fields">${fields}</div></div><p id="sync-form-error" class="error" role="alert"></p><div class="dialog-actions">${old?syncButton('重读配置（放弃草稿）',{reload:kind,id}):''}${syncButton('取消',{dismiss:'yes'})}<button type="submit" class="primary">保存配置</button></div></form>`;if(!dialog.open)dialog.showModal();
+ const issue=kind==='sources'&&old?syncSourceIssue(old,checkout):null;
+ const context=issue?`<p class="sync-detail-notice"><strong>${issue.title}</strong>　${issue.hint}${!checkout?`<small>登记目录　${esc(old.directory)}</small>`:''}</p>`:'';
+ const dialog=syncDialog();dialog.innerHTML=`<form id="sync-form" method="post"><div class="detail-head"><h2>${old?'编辑':'新增'}${esc({sources:'源码仓库',devices:'目标设备',targets:'分发策略',schedules:'每日计划',credentials:'GitHub 凭据'}[kind])}</h2>${syncButton('关闭',{dismiss:'yes'})}</div><div class="sync-form-body">${context}<div class="sync-fields">${fields}</div></div><p id="sync-form-error" class="error" role="alert"></p><div class="dialog-actions">${old?syncButton('重读配置（放弃草稿）',{reload:kind,id}):''}${syncButton('取消',{dismiss:'yes'})}<button type="submit" class="primary">保存配置</button></div></form>`;if(!dialog.open)dialog.showModal();
 }
 function syncConfirm(kind,id,mode){
  const source=kind==='run'?syncSource(id):syncSource(codeSyncUI.data.jobs.find(j=>j.id===id)?.source);codeSyncUI.editor={kind,id,mode,nonce:crypto.randomUUID()};
@@ -141,8 +178,11 @@ document.addEventListener('click',async event=>{
  if(event.target.closest('[data-sync-review]')){
   codeSyncUI.reviewOnly=!codeSyncUI.reviewOnly;renderCodeSync();document.querySelector('[data-sync-review]').focus();return;
  }
+ const details=event.target.closest('[data-sync-details]');
+ if(details&&loggedIn){syncSourceDetails(syncSource(details.dataset.syncDetails));return;}
  const b=event.target.closest('[data-sync-refresh],[data-sync-edit],[data-sync-reload],[data-sync-dismiss],[data-sync-preview],[data-sync-device],[data-sync-target],[data-sync-run],[data-sync-job],[data-sync-reconcile],[data-sync-close-job],[data-sync-archive]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
+  if(b.closest('#detail-dialog'))$('detail-dialog').close();
   if(d.syncRefresh){await loadCodeSync();return;}if(d.syncEdit){syncEdit(d.syncEdit,d.syncId);return;}if(d.syncDismiss){syncCapture();if(codeSyncUI.editor?.kind==='credentials'&&$('sync-form')?.elements.token)$('sync-form').elements.token.value='';$('sync-dialog').close();return;}
   if(d.syncReload){delete codeSyncUI.drafts[d.syncReload+':'+d.syncId];codeSyncUI.editor=null;await loadCodeSync();syncEdit(d.syncReload,d.syncId);return;}
   if(d.syncRun){syncConfirm('run',d.syncRun,d.syncKind);return;}if(d.syncCloseJob){syncConfirm('close-job',d.syncCloseJob);return;}
@@ -157,11 +197,6 @@ document.addEventListener('click',async event=>{
  }catch(error){notice(syncText(error.message),true);}
 });
 
-function syncPending(row){
- const p=row?.pending;
- if(!p)return '';
- return `<small>待处理：未暂存 ${p.modified.count} · 已暂存 ${p.staged.count} · 新文件 ${p.untracked.count}（均不上传）</small>`;
-}
 function renderSyncPreview(r){
  const p=r.pending,rules={'private-key':'私钥','github-token':'GitHub 令牌','aws-access-key':'云访问密钥','slack-token':'消息平台令牌','api-token':'API 令牌','credential-url':'含凭据的连接地址','literal-credential':'疑似明文凭据','temporary-or-private-file':'临时或私有文件','environment-file':'运行环境文件','credential-file':'凭据文件','unscannable-binary':'无法扫描的二进制文件','external-lfs-object':'需要独立审查的 LFS 文件','symlink-or-submodule':'符号链接或子模块'};
  return `<p>${badge('仅推送已有提交','blue')} ${badge(r.blocked?'风险检查已阻断':r.scope==='outgoing-history'?'待推送范围检查未命中':'本地检查未命中',r.blocked?'bad':r.scope==='outgoing-history'?'good':'warn')}</p><p>分支 ${esc(r.branch)} · 提交 ${esc(r.head)}</p><p class="muted">${r.scope==='outgoing-history'?'已核对远端与全部待推送提交。':'尚未核对远端，仅检查当前提交；配置 GitHub 凭据后才能预览完整待推送范围。'} 检查通过仍需遵守项目提交审查。</p><p>待处理改动：未暂存 ${p.modified.count}、已暂存 ${p.staged.count}、未跟踪 ${p.untracked.count}。这些工作区改动不会进入推送。</p>`+table(['已有提交','原提交描述'],r.commits.map(c=>`<tr><td>${esc(c.sha.slice(0,12))}</td><td>${esc(c.title)}</td></tr>`))+(r.blocked?table(['风险文件 / 提交','规则','行号'],r.findings.map(f=>`<tr><td>${esc(f.path)}<small>${esc(f.commit.slice(0,12))}</small></td><td>${esc(rules[f.rule]||f.rule)}</td><td>${f.line??'—'}</td></tr>`))+'<p class="error">请在项目中处理未推送历史后重新检查。仅删除后续版本中的文件，仍可能保留先前提交的敏感内容。</p>':'');
