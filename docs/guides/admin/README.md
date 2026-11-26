@@ -24,7 +24,7 @@ PowerX 的整套部署备份位于“实例备份”：数据库逻辑备份、R
        └── data/admin：访问令牌、登录会话、任务、审计、连接检查
 ```
 
-- 管理范围包含 `xdocker-web-hosting` 已启用的服务，以及 instances 中明确登记、启用的 PowerX 项目的 backend、web-admin、postgres、redis；过滤未登记项目和临时 Compose 任务。实例服务使用 `powerx-dev/backend` 等完整名称确认操作。
+- 启停操作范围包含 `xdocker-web-hosting` 已启用的服务，以及 instances 中明确登记、启用的 PowerX 项目的 backend、web-admin、postgres、redis；过滤未登记项目和临时 Compose 任务。实例服务使用 `powerx-dev/backend` 等完整名称确认操作。
 - 容器支持日志、实际 CPU/内存、启动、停止、重启；不提供任意命令、删除容器、删除卷或通用 Docker API 转发。
 - 网站与 FRP 支持 HTTPS 连接检查；FRP 使用 `/healthz` 验证整条链路。客户端端口来自公开模板，界面标注“客户端模板”，不当作实际客户端配置。FRPC 密钥和真实私有配置不展示。
 - 证书读取真实检查报告、剩余天数及检查时间；支持指定已启用证书的检查、续期测试、按需正式续期。禁止强制续期和新证书签发。正式续期继续使用既有自动 Nginx reload 机制。
@@ -240,6 +240,32 @@ ssh -N -o ExitOnForwardFailure=yes \
 7. **操作记录**：区别执行中、成功、失败和服务重启导致的未确认。失败不能当作完成，先检查输出及实际状态。
 
 初次使用建议先检查站点、查看日志和检查一组证书。不要为了试按钮去停止共享 Nginx 或 FRPS。
+
+### 统一查看 Docker 日志
+
+登录 XDocker，打开 **系统管理 → 容器服务 → 容器日志**（控制台路径 `/#services/logs`），按项目和服务选择「查看日志」。弹窗显示当前容器最近 200 行标准输出和标准错误，点击「刷新日志」可重新读取。常见凭据会脱敏。容器已经停止但仍保留时，也可以查看。Compose 临时任务、可能输出凭据的初始化任务和主机上的其他项目不进入列表。
+
+轮转设置来自所选容器的实际 Docker 配置。使用默认值时，单文件达到 20 MiB 后轮转，每容器保留 5 个文件并压缩轮转文件。「未设置大小上限」表示当前 json-file 容器没有有效的单文件上限。找不到预期容器时，检查控制台的 Docker 连接、宿主机检出目录与该容器的 Compose 工作目录、配置文件标签是否对应。
+
+在部署端 XDocker 根目录的私有 `.env` 设置 `XDOCKER_LOG_MAX_SIZE`（例如 `20971520` 字节）和 `XDOCKER_LOG_MAX_FILE`（压缩时至少 2 个）。共享入口、站点、基础服务和控制台创建的备份及证书辅助容器使用这套设置。PowerX 通过 `scripts/apps.sh` 读取共用设置，实例 `.env` 中显式填写的 `POWERX_LOG_MAX_SIZE` 和 `POWERX_LOG_MAX_FILE` 优先。已有实例如需改用公共值，应去掉这两项覆盖。
+
+**旧的独立部署目录。** 在已更新的 XDocker 检出目录中，下面的 Bash 示例为 `data/standalone/<项目>/apps/<应用>/compose.yml` 生成只包含日志配置的文件。需要 Python 3 和 PyYAML。脚本只向标准输出写配置。若遇到自定义日志驱动、外部 Compose 继承或模板解析失败，先核对原配置。
+
+```bash
+set -euo pipefail
+project=demo
+app=powerx
+preview=$(mktemp)
+python3 scripts/standalone-log-policy.py "$project" "$app" > "$preview"
+# 沿用实例启动脚本和私有配置，仅输出渲染后的日志字段
+runtime="$PWD/data/standalone/$project"
+(cd "$runtime" && sh scripts/apps.sh compose "$project" -f "$preview" --profile '*' config --format json) |
+  jq '.services | map_values(.logging)'
+```
+
+确认每个服务的 driver、max-size、max-file 和 compress 符合预期。其他独立项目使用自己的原 Compose 参数，保留项目名、工作目录和私有 env 文件，把 `-f "$preview"` 追加到原 `-f compose.yml` 后再执行 `config`。全量渲染可能包含私有值，应在本机管道内比较原模型与新模型，除 logging 外的字段应一致。
+
+维护窗口内，将核对过的文件保存为原模板同目录的 `container-logging.override.yml`，在该实例的后续 Compose 命令中显式追加此文件。轮转设置在容器创建时生效，旧容器需要按服务重建。先保存需保留的旧日志，涉及数据库时先核对备份、卷和恢复方案。每次只切换一个已确认的服务，健康检查通过后到日志页核对实际设置；如有差异，暂停后续切换。
 
 ## 维护
 

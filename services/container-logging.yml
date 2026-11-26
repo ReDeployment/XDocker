@@ -1,0 +1,9 @@
+# Inherited by the shared Compose project. This service is never launched.
+services:
+  rotated-logs:
+    logging:
+      driver: json-file
+      options:
+        max-size: "${XDOCKER_LOG_MAX_SIZE:-20971520}"
+        max-file: "${XDOCKER_LOG_MAX_FILE:-5}"
+        compress: "true"

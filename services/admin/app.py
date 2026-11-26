@@ -8,7 +8,6 @@ import platform
 from pathlib import Path
 import re
 import secrets
-import shlex
 import sqlite3
 import threading
 import time
@@ -18,7 +17,8 @@ import urllib.request
 
 from flask import Flask, g, jsonify, request, send_from_directory, send_file
 from werkzeug.exceptions import HTTPException
-from docker_api import Docker, DockerError, log_text
+from config_env import env_values
+from docker_api import Docker, DockerError, compose_log_owner, job_log_config, log_text
 from backups import InstanceBackups
 from instances import InstanceReader, setup_fields, password_for
 from preflight import Preflight, BusyCheck
@@ -38,23 +38,6 @@ DOMAIN = re.compile(r'^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$')
 
 def now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def env_values(path):
-    """Read simple assignment values, never evaluate shell or execute commands."""
-    result = {}
-    if not path.is_file():
-        return result
-    for line in path.read_text().splitlines():
-        match = re.match(r'^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$', line)
-        if match:
-            try:
-                parts = shlex.split(match[2], comments=True)
-                if len(parts) <= 1:
-                    result[match[1]] = parts[0] if parts else ''
-            except ValueError:
-                continue
-    return result
 
 
 def configuration(root):
@@ -136,7 +119,11 @@ def create_app(settings=None, docker=None):
     engine = docker or Docker()
     database = state / 'admin.sqlite3'
     operation_lock = threading.Lock()
-    backup_manager = InstanceBackups(engine, app.config['BACKUPS'], app.config['HOST_ROOT'])
+    def log_settings():
+        source = Path(app.config['HOST_ROOT']) / '.env' if app.config['NATIVE_MODE'] else config / 'root.env'
+        return env_values(source)
+
+    backup_manager = InstanceBackups(engine, app.config['BACKUPS'], app.config['HOST_ROOT'], log_settings=log_settings)
     instance_reader = InstanceReader(engine, app.config['HOST_ROOT'])
 
     try:watch_interval=int(app.config['GITHUB_WATCH_INTERVAL'])
@@ -280,16 +267,27 @@ def create_app(settings=None, docker=None):
     if not app.config['NATIVE_MODE']:
         backup_manager.recover([p for p in managed_projects() if p != PROJECT])
 
-    def managed_containers():
-        projects = managed_projects()
+    def compose_containers():
         filters = urlencode({'all': 'true', 'filters': json.dumps({'label': ['com.docker.compose.project']})})
         try:containers = engine.request('GET', '/containers/json?' + filters)
         except DockerError:
             if not app.config['NATIVE_MODE']:raise
             return []
-        return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project') in projects
-                and c['Labels'].get('com.docker.compose.service') in projects[c['Labels']['com.docker.compose.project']]
+        return [c for c in containers if c.get('Labels', {}).get('com.docker.compose.project')
+                and c['Labels'].get('com.docker.compose.service')
                 and c['Labels'].get('com.docker.compose.oneoff', 'False').lower() != 'true']
+
+    def managed_containers(containers=None):
+        projects = managed_projects()
+        return [c for c in (compose_containers() if containers is None else containers)
+                if c['Labels']['com.docker.compose.service'] in projects.get(c['Labels']['com.docker.compose.project'], ())]
+
+    def log_containers(containers):
+        # Log visibility must never grant lifecycle, backup, or upgrade permissions.
+        host_root = app.config['HOST_ROOT']
+        if not host_root:
+            return managed_containers(containers)
+        return [c for c in containers if compose_log_owner(c['Labels'], host_root)]
 
     preflight = Preflight(engine, config, state, reports, app.config['HOST_ROOT'],
                           lambda: configuration(config)[0],
@@ -321,8 +319,9 @@ def create_app(settings=None, docker=None):
             return None
         return next((c for c in managed_containers() if c['Id'] == identifier), None)
 
-    def safe_logs(identifier):
-        details = engine.request('GET', f'/containers/{identifier}/json')
+    def safe_logs(identifier, details=None):
+        if details is None:
+            details = engine.request('GET', f'/containers/{identifier}/json')
         sensitive = [token]
         for assignment in details.get('Config', {}).get('Env', []):
             key, _, value = assignment.partition('=')
@@ -368,7 +367,11 @@ def create_app(settings=None, docker=None):
     @app.get('/api/snapshot')
     def snapshot():
         sites, _ = configuration(config)
-        containers = managed_containers()
+        candidates = compose_containers()
+        containers = managed_containers(candidates)
+        log_services = [{'id': c['Id'], 'project': c['Labels']['com.docker.compose.project'],
+                         'service': c['Labels']['com.docker.compose.service'], 'name': c['Names'][0].lstrip('/'),
+                         'state': c['State']} for c in log_containers(candidates)]
         services = [{'id': c['Id'], 'service': service_name(c),
                      'name': c['Names'][0].lstrip('/'), 'image': c['Image'], 'state': c['State'],
                      'status': c['Status'], 'created': c['Created'], 'protected': c['Labels']['com.docker.compose.service'] == 'admin',
@@ -391,15 +394,22 @@ def create_app(settings=None, docker=None):
         except DockerError:
             if not app.config['NATIVE_MODE']:raise
             version={'Version':'未连接','Os':platform.system().lower(),'Arch':platform.machine(),'available':False}
-        return jsonify(at=now(), services=services, sites=sites, certificates=certs, reports=report_history,
+        return jsonify(at=now(), services=services, log_services=log_services, sites=sites, certificates=certs, reports=report_history,
                        engine={k: version.get(k) for k in ('Version', 'ApiVersion', 'Os', 'Arch','available')},runtime_mode='native' if app.config['NATIVE_MODE'] else 'container',
                        revision=os.getenv('ADMIN_DEPLOY_REVISION', 'development'), image_revision=os.getenv('XDOCKER_REVISION', 'development'))
 
     @app.get('/api/services/<identifier>/logs')
     def logs(identifier):
-        if not resolve(identifier):
-            return jsonify(error='该容器不属于已启用的 XDocker 服务。'), 404
-        return jsonify(text=safe_logs(identifier))
+        if not re.fullmatch(r'[a-f0-9]{64}', identifier) or not any(
+                c['Id'] == identifier for c in log_containers(compose_containers())):
+            return jsonify(error='该容器不在 XDocker 日志管理范围内。'), 404
+        details = engine.request('GET', f'/containers/{identifier}/json')
+        policy = details.get('HostConfig', {}).get('LogConfig') or {}
+        options = policy.get('Config') or {}
+        return jsonify(text=safe_logs(identifier, details), rotation={
+            'driver': policy.get('Type'), 'max_size': options.get('max-size'),
+            'max_file': options.get('max-file'), 'compress': options.get('compress'),
+        })
 
     @app.get('/api/services/<identifier>/stats')
     def stats(identifier):
@@ -511,7 +521,8 @@ def create_app(settings=None, docker=None):
                    '--report', '/var/lib/certbot-events/certificates-admin-'+identifier+'.json']
         body = {'Image': details['Config']['Image'], 'Entrypoint': command, 'Cmd': [],
                 'Labels': {'io.xdocker.admin.job': identifier},
-                'HostConfig': {'Mounts': mounts, 'NetworkMode': next(iter(networks))}}
+                'HostConfig': {'Mounts': mounts, 'NetworkMode': next(iter(networks)),
+                               'LogConfig': job_log_config(log_settings())}}
         created = engine.request('POST', '/containers/create?name=xdocker-admin-job-'+identifier, body)
         container_id = created['Id']
         try:

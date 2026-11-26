@@ -27,6 +27,22 @@ if [ "$action" = init ]; then
     exit 0
 fi
 [ -f "$directory/.env" ] && [ -f "$directory/instance.json" ] || die 'Run apps.sh init first.'
+# Import only the two shared integer limits. Other root settings belong to hosting.
+if [ -f "$root/.env" ]; then
+    root_limit() {
+        awk -v key="$1" '
+            { sub(/^[[:space:]]*(export[[:space:]]+)?/, "") }
+            index($0, key "=") == 1 {
+                value = substr($0, length(key) + 2)
+                sub(/[[:space:]]*#.*$/, "", value)
+                gsub(/^[[:space:]\"\047]+|[[:space:]\"\047]+$/, "", value)
+            }
+            END { print value }
+        ' "$root/.env"
+    }
+    export XDOCKER_LOG_MAX_SIZE="${XDOCKER_LOG_MAX_SIZE:-$(root_limit XDOCKER_LOG_MAX_SIZE)}"
+    export XDOCKER_LOG_MAX_FILE="${XDOCKER_LOG_MAX_FILE:-$(root_limit XDOCKER_LOG_MAX_FILE)}"
+fi
 set -a
 . "$directory/.env"
 set +a

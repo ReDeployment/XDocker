@@ -2,6 +2,17 @@ name: Validate host resource monitoring
 on:
   pull_request:
     paths:
+      - compose.yml
+      - .env.example
+      - apps/powerx/compose.yml
+      - apps/powerx/.env.example
+      - instances/*/.env.example
+      - services/container-logging.yml
+      - services/*/compose.yml
+      - sites/*/compose.yml
+      - scripts/standalone-log-policy.py
+      - scripts/apps.sh
+      - scripts/hosting.sh
       - services/admin/**
       - scripts/admin.sh
       - scripts/host-monitor*.py
@@ -35,7 +46,7 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r services/admin/requirements.txt
-      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_smart_sensors test_docs_loopback_repair test_code_sync test_gpu_metrics test_storage_metrics test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin
+      - run: PYTHONPATH=tests:services/admin:scripts python -B -m unittest test_smart_sensors test_docs_loopback_repair test_code_sync test_gpu_metrics test_storage_metrics test_host_metrics test_resource_monitor test_registry_store test_native_services test_native_gateway test_admin test_hosting test_backups test_container_logs
       - run: python -B tests/admin_build_context_smoke.py --static-only
       - run: node tests/resource_browser_acceptance.cjs
       - run: node tests/service_hub_browser_acceptance.cjs

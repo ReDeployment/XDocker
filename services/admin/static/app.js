@@ -13,9 +13,9 @@ const imageVersions={instances:[],candidates:[],checks:[],selected:'',channel:'a
 const githubData={projects:[],notifications:[],unread:0,nextBefore:null,loading:false,reachable:false,error:'',autoEnabled:false,running:false,interval:300,editing:null,webhooks:null};
 let githubEpoch=0,githubSummaryLoading=false;
 const tunnelManager={ready:false,loading:false,message:'本机管理服务尚未检查。'};
-const moduleViews={sites:'overview','code-sync':'sources','service-hub':'overview',resources:'overview',preflight:'overview',github:'issues','ssh-tunnel':'manager'};
+const moduleViews={services:'operations',sites:'overview','code-sync':'sources','service-hub':'overview',resources:'overview',preflight:'overview',github:'issues','ssh-tunnel':'manager'};
 const preflightGroups={'环境':['docker','Docker 与权限'],'宿主机报告':['host','宿主机报告'],'网络':['network','网络连接'],'DNS':['dns','域名解析'],'镜像':['images','镜像检查']};
-const viewModuleKeys={sites:['overview','gateway'],'code-sync':['sources','schedules','devices','targets','records'],'service-hub':['overview','projects','services','records'],resources:['overview','gpu','storage','apps','discover','history'],preflight:['overview',...Object.values(preflightGroups).map(g=>g[0])],github:['issues','projects','hooks','inbox','releases','diagnostics'],'ssh-tunnel':['manager','help']};
+const viewModuleKeys={services:['operations','logs'],sites:['overview','gateway'],'code-sync':['sources','schedules','devices','targets','records'],'service-hub':['overview','projects','services','records'],resources:['overview','gpu','storage','apps','discover','history'],preflight:['overview',...Object.values(preflightGroups).map(g=>g[0])],github:['issues','projects','hooks','inbox','releases','diagnostics'],'ssh-tunnel':['manager','help']};
 function verticalTabs(view,label,tabs,active,content){
   return `<div class="vertical-tabview"><div class="vertical-tab-list" role="tablist" aria-label="${esc(label)}" aria-orientation="vertical">${tabs.map(t=>`<button type="button" role="tab" id="view-${view}-${t.key}" aria-selected="${t.key===active}" aria-controls="view-${view}-panel" tabindex="${t.key===active?0:-1}" data-view-tab="${t.key}" data-view="${view}" class="${t.key===active?'active':''}"><span>${esc(t.label)}</span>${t.count!==undefined?`<small>${esc(t.count)}</small>`:''}</button>`).join('')}</div><section class="vertical-tab-panel" role="tabpanel" id="view-${view}-panel" aria-labelledby="view-${view}-${active}" tabindex="0">${content}</section></div>`;
 }
@@ -144,7 +144,9 @@ function render(){
   }else if(current==='instances'){
     html=renderInstances(services);
   }else if(current==='services'){
-    html=`<div class="intro"><div><h2>容器服务</h2><p class="muted">查看日志与资源，按服务执行启停。停止入口服务会影响站点访问。</p></div></div>`+panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
+    const active=moduleViews.services;
+    const content=active==='logs'?containerLogList():panel('已部署服务',`${services.length} 个服务 · 管理服务自身通过 SSH 维护`,table(['服务','运行状态','镜像版本','宿主机端口','操作'],serviceRows(services)));
+    html=verticalTabs('services','容器服务',[{key:'operations',label:'服务操作'},{key:'logs',label:'容器日志'}],active,content);
   }else if(current==='certificates'){
     html=`<div class="intro"><div><h2>HTTPS 证书</h2><p class="muted">按证书组管理，共享 SAN 的域名一起续期。续期使用现有 Certbot 配置。</p></div></div>`+panel('证书清单','状态来自真实检查报告；检查时间显示数据是否新鲜',table(['证书 / 域名','状态','到期 / 剩余','最近证书检查','操作'],certs.map(c=>`<tr><td><strong>${esc(c.name)}</strong><small>${c.domains.map(esc).join('<br>')}</small></td><td>${certBadge(c)}</td><td>${c.expiry?date(c.expiry):'尚未签发 / 待检查'}<small>${c.days_remaining!==undefined?c.days_remaining+' 天':''}</small></td><td>${date(c.checked_at)}</td><td><div class="actions">${btn('检查',{certificate:c.name,action:'check'},!c.enabled)}${btn('续期测试',{certificate:c.name,action:'renew-test'},!c.enabled)}${btn('按需续期',{certificate:c.name,action:'renew'},!c.enabled)}</div></td></tr>`)))+`<p class="muted">续期测试使用 Let’s Encrypt 测试环境；按需续期遵守到期判断，不强制重复签发。尚未签发的证书请先按 Git 部署流程建立入口。</p>`;
   }else if(current==='frp'){
@@ -165,8 +167,35 @@ function render(){
 function jobTable(list){return table(['操作','目标','状态','开始时间','结果'],list.map(j=>`<tr class="job-row" data-job="${esc(j.id)}"><td>${esc({probe:'连接检查',check:'证书检查','renew-test':'续期测试',renew:'按需续期',start:'启动',stop:'停止',restart:'重启','backup-scheduled':'计划实例备份'}[j.action]||j.action)}</td><td>${esc(j.target)}</td><td>${stateBadge(j.state)}</td><td>${date(j.created)}</td><td>查看详情 ↗</td></tr>`));}
 function askOperation(path, body, target, title, impact){pending={path,body,target};$('confirm-title').textContent=title;$('confirm-impact').textContent=impact;$('confirm-target').textContent=target;$('confirmation').value='';$('confirm-error').textContent='';$('confirm-dialog').showModal();$('confirmation').focus();}
 async function submitOperation(path, body){const result=await api(path,body);trackedJob=result.id;notice('操作已提交，正在执行；实际结果将在操作记录中显示。');await refresh();clearCredentials();current='audit';render();return result;}
+function containerLogList(){
+  const entries=[...(snapshot.log_services||[])].sort((a,b)=>a.project.localeCompare(b.project)||a.name.localeCompare(b.name));
+  if(snapshot.engine.available===false)return panel('容器日志','','<p class="panel-body">无法连接 Docker，日志清单暂不可用。</p>');
+  if(!entries.length)return panel('容器日志','','<p class="panel-body">当前没有可读取日志的 XDocker 服务容器。</p>');
+  const rows=entries.map(c=>`<div class="container-log-row"><div><strong>${esc(c.project)} / ${esc(c.service)}</strong><small>${esc(c.name)}</small></div>${stateBadge(c.state)}<button data-container-log="${esc(c.id)}">查看日志</button></div>`).join('');
+  return panel('容器日志',`${entries.length} 个容器`,rows);
+}
+let logRequest=0;
+$('detail-dialog').addEventListener('close',()=>{logRequest++;});
+async function openContainerLog(id){
+  const target=snapshot.log_services?.find(c=>c.id===id);
+  if(!target)return;
+  const sequence=++logRequest, dialog=$('detail-dialog');
+  $('detail-title').textContent=target.project+' / '+target.service;
+  $('detail-content').textContent='正在读取容器日志…';
+  if(!dialog.open)dialog.showModal();
+  try{
+    const result=await api('services/'+id+'/logs');
+    if(sequence!==logRequest||!dialog.open)return;
+    const p=result.rotation;
+    const size=p.max_size&&p.max_size!=='-1'?('单文件 '+p.max_size+(/^\d+$/.test(p.max_size)?' 字节':'')):'未设置大小上限';
+    const policy=[p.driver||'未知驱动',p.driver==='json-file'&&size,p.max_file&&('保留 '+p.max_file+' 个文件'),p.compress==='true'&&'轮转后压缩'].filter(Boolean).join(' · ');
+    $('detail-content').innerHTML=`<p class="muted">当前容器 · ${esc(policy)}</p><p>最近 200 行 <button data-container-log="${esc(id)}">刷新日志</button></p><pre>${esc(result.text||'暂无日志')}</pre>`;
+  }catch(error){
+    if(sequence===logRequest&&dialog.open)$('detail-content').textContent='读取失败，关闭后可重新选择容器。'+error.message;
+  }
+}
 async function detailService(id){const s=snapshot.services.find(s=>s.id===id);$('detail-title').textContent=s?.service||'服务详情';$('detail-content').innerHTML='<p class="muted">正在读取日志与资源…</p>';$('detail-dialog').showModal();const results=await Promise.allSettled([api('services/'+id+'/logs'),api('services/'+id+'/stats')]);const logs=results[0],stats=results[1];let html='';if(stats.status==='fulfilled'){const v=stats.value;html=`<div class="resource"><div><strong>${v.cpu_percent??'—'}%</strong><small>CPU 使用率（可超过单核 100%）</small></div><div><strong>${(v.memory_bytes/1048576).toFixed(1)} MB</strong><small>内存工作集</small></div><div><strong>${v.pids??'—'}</strong><small>进程数</small></div></div>`;}else html=`<p class="muted">${esc(stats.reason.message)}</p>`;html+=`<p class="muted">最近 200 行日志 · 已对常见凭据脱敏</p><pre>${esc(logs.status==='fulfilled'?logs.value.text:logs.reason.message)}</pre>`;$('detail-content').innerHTML=html;}
-document.addEventListener('click',async event=>{const button=event.target.closest('#tunnel-manager-recheck,[data-view-tab],[data-tab],[data-probe],[data-detail],[data-service],[data-certificate],[data-job],[data-backup],[data-open-instance],[data-instance-module],[data-credential],[data-copy-credential],[data-hide-credential],[data-preflight],[data-preflight-catalog],[data-preflight-cancel],[data-plan-edit],[data-plan-disable],[data-plan-refresh],[data-version-refresh],[data-version-current],[data-version-check],[data-version-local],[data-version-preview],[data-github-backfill],[data-github-backfill-submit],[data-github-issue],[data-github-issue-save],[data-github-diagnose],[data-github-report],[data-github-sync],[data-github-read],[data-github-configure],[data-github-save],[data-github-refresh],[data-github-more],[data-github-detail],[data-github-import]');if(!button||button.disabled||!loggedIn)return;const d=button.dataset;if(!snapshot&&button.id!=='tunnel-manager-recheck'&&!d.viewTab&&!d.tab&&!d.preflight&&!d.preflightCatalog&&!d.preflightCancel&&!d.planRefresh&&!d.planEdit&&!d.planDisable&&!d.versionRefresh&&!d.versionCurrent&&!d.versionCheck&&!d.versionLocal&&!d.versionPreview&&!d.githubBackfill&&!d.githubBackfillSubmit&&!d.githubIssue&&!d.githubIssueSave&&!d.githubDiagnose&&!d.githubReport&&!d.githubSync&&!d.githubRead&&!d.githubConfigure&&!d.githubSave&&!d.githubRefresh&&!d.githubMore&&!d.githubDetail&&!d.githubImport)return;try{
+document.addEventListener('click',async event=>{const button=event.target.closest('#tunnel-manager-recheck,[data-view-tab],[data-tab],[data-probe],[data-container-log],[data-detail],[data-service],[data-certificate],[data-job],[data-backup],[data-open-instance],[data-instance-module],[data-credential],[data-copy-credential],[data-hide-credential],[data-preflight],[data-preflight-catalog],[data-preflight-cancel],[data-plan-edit],[data-plan-disable],[data-plan-refresh],[data-version-refresh],[data-version-current],[data-version-check],[data-version-local],[data-version-preview],[data-github-backfill],[data-github-backfill-submit],[data-github-issue],[data-github-issue-save],[data-github-diagnose],[data-github-report],[data-github-sync],[data-github-read],[data-github-configure],[data-github-save],[data-github-refresh],[data-github-more],[data-github-detail],[data-github-import]');if(!button||button.disabled||!loggedIn)return;const d=button.dataset;if(!snapshot&&button.id!=='tunnel-manager-recheck'&&!d.viewTab&&!d.tab&&!d.preflight&&!d.preflightCatalog&&!d.preflightCancel&&!d.planRefresh&&!d.planEdit&&!d.planDisable&&!d.versionRefresh&&!d.versionCurrent&&!d.versionCheck&&!d.versionLocal&&!d.versionPreview&&!d.githubBackfill&&!d.githubBackfillSubmit&&!d.githubIssue&&!d.githubIssueSave&&!d.githubDiagnose&&!d.githubReport&&!d.githubSync&&!d.githubRead&&!d.githubConfigure&&!d.githubSave&&!d.githubRefresh&&!d.githubMore&&!d.githubDetail&&!d.githubImport)return;try{
   if(button.id==='tunnel-manager-recheck'){await loadTunnelManager();}
   else if(d.viewTab){selectViewModule(d.view,d.viewTab);}
   else if(d.tab){clearCredentials();current=d.tab;location.hash=d.tab==='instances'&&selectedInstance?'instances/'+selectedInstance+'/'+instanceModule:d.tab;render();if(current==='code-sync'&&typeof loadCodeSync==='function')await loadCodeSync();if(['service-hub','sites','overview'].includes(current)&&typeof loadServiceHub==='function')await loadServiceHub();if(current==='resources'&&typeof loadResources==='function')await loadResources();if(current==='preflight')await loadPreflight();if(current==='backup-plans')await loadBackupPlans();if(current==='image-versions')await loadImageVersions();if(current==='github')await loadGithub();if(current==='ssh-tunnel')await loadTunnelManager();}
@@ -197,6 +226,7 @@ document.addEventListener('click',async event=>{const button=event.target.closes
   else if(d.hideCredential){hideCredential(d.hideCredential);}
   else if(d.backup){const body={instance:d.instance,action:d.backup,id:d.id};if(d.backup==='prune')body.keep=Number($('keep-'+d.instance).value);const target=['create','prune'].includes(d.backup)?d.instance:d.id;const title={create:'创建实例备份',verify:'校验备份',drill:'隔离恢复验证',prune:'清理旧备份'}[d.backup];const impact={create:'将暂停该实例的前后端，完成数据库、Redis、配置及文件备份后恢复原运行状态。其他实例不暂停。',verify:'校验备份组成文件与下载包的 SHA256；不会写入运行中数据库。',drill:'在无网络、无公网端口的临时 PostgreSQL 中恢复并验证数据库；不会替换运行中实例。',prune:'仅删除超过所选保留份数的旧成功备份。至少保留一份；失败或中断记录保留。'}[d.backup];askOperation('backups/action',body,target,title,impact);}
   else if(d.probe){await submitOperation('sites/probe',{site:d.probe});}
+  else if(d.containerLog){await openContainerLog(d.containerLog);}
   else if(d.detail){await detailService(d.detail);}
   else if(d.service){const s=snapshot.services.find(s=>s.id===d.service);if(!s)return;const action={start:'启动',stop:'停止',restart:'重启'}[d.action];askOperation('services/'+s.id+'/action',{action:d.action},s.service,action+' '+s.service,s.service==='nginx'?'此操作将影响所有网站入口。请确认影响范围。':'此操作可能短暂中断该服务及依赖它的访问。配置与持久化数据保留。');}
   else if(d.certificate){const action={check:'检查证书','renew-test':'测试续期',renew:'按需续期'}[d.action];askOperation('certificates/action',{name:d.certificate,action:d.action},d.certificate,action,d.action==='renew'?'使用当前续期配置检查到期情况；需要时签发并通知 Nginx 自动重载。共享 SAN 的域名一起处理。':d.action==='renew-test'?'访问测试 ACME 服务并验证所有 SAN 域名。测试不会替换正式证书。':'核验当前证书、私钥匹配、SAN 与有效期，不签发证书。');}

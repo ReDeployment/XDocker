@@ -1,5 +1,6 @@
 services:
   frps:
+    extends: {file: services/container-logging.yml, service: rotated-logs}
     image: ${FRPS_IMAGE:?Initialize services/frps/.env}
     pull_policy: ${FRPS_PULL_POLICY:-missing}
     restart: unless-stopped

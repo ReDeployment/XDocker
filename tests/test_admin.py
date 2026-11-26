@@ -143,6 +143,42 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(self.post('/api/backups/action',{'instance':'powerx-dev','action':'create','confirmation':'wrong'}).status_code,400)
         self.assertEqual(self.post('/api/backups/action',{'instance':'powerx-dev','action':'restore-overwrite','confirmation':'powerx-dev'}).status_code,400)
 
+    def test_log_inventory_matches_launch_paths_without_granting_controls(self):
+        self.login()
+        self.app.config['HOST_ROOT'] = '/checkout'
+        def target(identifier, project, service, directory, files):
+            result = container(identifier, service, project)
+            result['Labels'].update({'com.docker.compose.project.working_dir': directory,
+                                     'com.docker.compose.project.config_files': files})
+            return result
+        path = '/checkout/data/standalone/home'
+        home = target(ID, 'home', 'gateway', path+'/instances/home', path+'/apps/powerx/compose.yml')
+        shared = target(SELF, 'xdocker-web-hosting', 'nginx', '/checkout',
+                        '/checkout/compose.yml,/checkout/sites/powerxdoc/compose.yml')
+        other = target(OTHER, 'home', 'gateway', '/external', path+'/apps/powerx/compose.yml')
+        wrong_file = target('d'*64, 'home', 'gateway', path+'/instances/home', '/external/compose.yml')
+        oneoff = target('e'*64, 'home', 'backend', path+'/instances/home', path+'/apps/powerx/compose.yml')
+        oneoff['Labels']['com.docker.compose.oneoff'] = 'True'
+        services = [home, shared, other, wrong_file, oneoff]
+        original = self.docker.request
+        def request(method, path, *args, **kwargs):
+            if path.startswith('/containers/json'):
+                return services
+            if path == '/containers/'+ID+'/json':
+                return {'HostConfig': {'LogConfig': {'Type': 'json-file', 'Config': {}}}}
+            return original(method, path, *args, **kwargs)
+        self.docker.request = request
+        snapshot = self.client.get('/api/snapshot').json
+        self.assertEqual({r['id'] for r in snapshot['log_services']}, {ID, SELF})
+        self.assertNotIn(ID, {r['id'] for r in snapshot['services']})
+        self.assertEqual(self.client.get('/api/services/'+ID+'/logs').json['rotation'], {
+            'driver': 'json-file', 'max_size': None, 'max_file': None, 'compress': None})
+        for c in (other, wrong_file, oneoff):
+            self.assertEqual(self.client.get('/api/services/'+c['Id']+'/logs').status_code, 404)
+        self.assertEqual(self.post('/api/services/'+ID+'/action', {'action':'stop','confirmation':'home/gateway'}).status_code, 404)
+        services.remove(home)
+        self.assertEqual(self.client.get('/api/services/'+ID+'/logs').status_code, 404)
+
     def test_unrelated_container_and_self_controls_blocked(self):
         self.login()
         self.assertEqual(self.post('/api/services/'+OTHER+'/action',{'action':'stop','confirmation':'nginx'}).status_code,404)
