@@ -1,9 +1,18 @@
 """Read-only ownership suggestions for explicitly granted native units."""
 from ipaddress import ip_address
 import json
+import os
 from pathlib import PurePosixPath
 
 from native_services import ServiceError, run_fixed
+
+
+def read_host(command, **bounds):
+    # A system service can run as the unit owner without inheriting their login session.
+    if command[:2] == ['systemctl', '--user'] and not (
+            os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('DBUS_SESSION_BUS_ADDRESS')):
+        command = ['env', f'XDG_RUNTIME_DIR=/run/user/{os.geteuid()}', *command]
+    return run_fixed(command, **bounds)
 
 
 def observation(runner, command):
@@ -102,7 +111,7 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses):
             'unit_observed': bool(fields)}
 
 
-def binding_preview(listing, runner=run_fixed):
+def binding_preview(listing, runner=read_host):
     owned = {alias for project in listing['projects'] for alias in project['bound_services']}
     grants = {alias: grant for alias, grant in listing['services'].items() if alias not in owned}
     projects = [project for project in listing['projects'] if project['endpoint_available']]

@@ -2,9 +2,10 @@ from ipaddress import ip_address
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/admin'))
-from service_binding_matches import binding_preview, match_grant, owns_listener
+from service_binding_matches import binding_preview, match_grant, owns_listener, read_host
 
 
 class BindingMatchTests(unittest.TestCase):
@@ -19,6 +20,18 @@ class BindingMatchTests(unittest.TestCase):
 
     def match(self, alias='demo'):
         return match_grant(alias, self.grant, self.fields, self.projects, self.endpoints, self.sockets, set())
+
+    def test_system_service_can_observe_its_own_login_manager(self):
+        command = ['systemctl', '--user', 'show', '--', 'example.service']
+        with patch.dict('os.environ', {}, clear=True), patch('os.geteuid', return_value=1234), \
+                patch('service_binding_matches.run_fixed') as run:
+            read_host(command, timeout=2)
+            run.assert_called_once_with(['env', 'XDG_RUNTIME_DIR=/run/user/1234', *command], timeout=2)
+            with patch.dict('os.environ', {'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/test/bus'}):
+                read_host(command)
+                run.assert_called_with(command)
+            read_host(['systemctl', 'show'])
+            run.assert_called_with(['systemctl', 'show'])
 
     def test_port_distinguishes_shared_directory(self):
         row = self.match()

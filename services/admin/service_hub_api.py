@@ -1,10 +1,10 @@
 """Authenticated integration of independently started applications."""
 from flask import jsonify, request
 
-from native_services import ServiceHub, ServiceError, probe_endpoint, run_fixed
+from native_services import ServiceHub, ServiceError, probe_endpoint
 from gateway_runtime import GatewayRuntime
 from registry_store import RegistryError
-from service_binding_matches import binding_preview
+from service_binding_matches import binding_preview, read_host
 
 
 def register_service_hub(app,state,audit,redactor,domains):
@@ -36,7 +36,7 @@ def register_service_hub(app,state,audit,redactor,domains):
     @app.get('/api/service-hub/bindings/preview')
     def hub_binding_preview():
         try:
-            runner = app.config.get('SERVICE_HUB_MATCH_RUNNER', run_fixed) if app.config.get('NATIVE_MODE') else None
+            runner = app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host) if app.config.get('NATIVE_MODE') else None
             return jsonify(binding_preview(hub.listing(), runner))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
