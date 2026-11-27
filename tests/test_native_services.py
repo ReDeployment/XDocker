@@ -14,6 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'services/admin'))
 from host_metrics import atomic_json, read_json
 from native_services import ServiceHub, ServiceError, SystemdServices, default_policy, validate_policy, fingerprint, probe_endpoint
+from registry_store import RegistryError
 from native_runtime import initialize, create_native_app, native_trusted_hosts
 from docker_api import DockerError
 from app import create_app
@@ -399,6 +400,70 @@ class HubAPITests(unittest.TestCase):
         self.assertFalse(any(p['bound_services'] for p in reopened.listing()['projects']))
         self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
         self.assertEqual(reopened.policies(), (effective, imported))
+
+    def test_review_grant_checks_directory_and_atomically_binds_selected_project(self):
+        hub = self.app.extensions['service_hub']
+        root = hub.root.parent / 'shared'
+        root.mkdir()
+        value = policy()
+        value['endpoints']['forward'] = {**value['endpoints']['example'], 'port': 8092}
+        value['endpoints']['api'] = {**value['endpoints']['example'], 'port': 8090}
+        hub.import_policy(value)
+        hub.save(project(id='app', domain='app.home.test', directory=str(root)))
+        hub.save(project(id='app-api', domain='api.home.test', directory=str(root), endpoint='api'))
+        hub.save(project(id='forward', domain='forward.home.test', endpoint='forward'))
+        unit = 'app-worker.service'
+        def reader(command, **kwargs):
+            out = ''
+            if command[0] == 'systemctl':
+                name = unit if '--user' in command else 'docker.service'
+                out = f'Id={name}\nLoadState=loaded\nControlGroup=/units/{name}\nWorkingDirectory={root}'
+            elif command[0] == 'ss' and '-4' in command:
+                out = (f'LISTEN 0 5 127.0.0.1:8092 *:* cgroup:/units/{unit}\n'
+                       'LISTEN 0 5 127.0.0.1:8090 *:* cgroup:/units/docker.service')
+            elif command[0] == 'ip':
+                out = '[]'
+            return {'code': 0, 'stdout': out, 'truncated': False}
+        self.app.config.update(NATIVE_MODE=True, NATIVE_OPERATIONS_ENABLED=True, SERVICE_HUB_MATCH_RUNNER=reader)
+        path = '/api/service-hub/read-grants/resolve'
+        entry = {'project': 'app-api', 'revision': 1, 'unit': unit, 'scope': 'user'}
+        body = {'policy_sha256': fingerprint(hub.policy()), 'grants': [entry]}
+        self.assertEqual(self.post(path, body).status_code, 401)
+        self.login()
+        self.assertEqual(self.post(path, body, csrf=False).status_code, 403)
+        with patch.dict(self.app.config, NATIVE_OPERATIONS_ENABLED=False):
+            self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_OPERATIONS_DISABLED')
+        candidates = self.client.get('/api/service-hub?project_services=1').json['project_services']['candidates']
+        eligible = {(pid, c['unit']) for pid, rows in candidates.items() for c in rows if c['can_review_read']}
+        self.assertEqual(eligible, {('app', unit), ('app-api', unit)})
+        self.assertEqual(self.post('/api/service-hub/read-grants', body).json['error'], 'XD_SERVICE_READ_MATCH_REQUIRED')
+        docker = {**entry, 'scope': 'system', 'unit': 'docker.service'}
+        self.assertEqual(self.post('/api/service-hub/read-grants', {**body, 'grants': [docker]}).json['error'],
+                         'XD_SERVICE_READ_MATCH_REQUIRED')
+        before = hub.policies()
+        plan_before = self.app.extensions['native_gateway'].preview()['fingerprint']
+        for change, error in [({'project': 'forward'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                              ({'scope': 'system', 'unit': 'docker.service'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                              ({'revision': 2}, 'XD_SERVICE_REVISION_CONFLICT'),
+                              ({'actions': ['restart']}, 'XD_SERVICE_GRANT_INVALID')]:
+            result = self.post(path, {**body, 'grants': [{**entry, **change}]})
+            self.assertEqual(result.json['error'], error)
+        with patch.dict(self.app.config, SERVICE_HUB_MATCH_RUNNER=lambda *a, **kw: {'code': 1, 'stdout': '', 'truncated': False}):
+            self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_READ_MATCH_REQUIRED')
+        with patch.object(hub.store, '_insert_bindings', side_effect=RegistryError('XD_REGISTRY_DATABASE_UNAVAILABLE')):
+            self.assertEqual(self.post(path, body).status_code, 409)
+        self.assertEqual(hub.policies(), before)
+        self.assertFalse(hub.store.additional_bindings())
+
+        result = self.post(path, body)
+        self.assertEqual(result.status_code, 201)
+        grant, = result.json['grants']
+        self.assertEqual(grant['actions'], ['status', 'logs'])
+        reopened = ServiceHub(hub.root.parent)
+        self.assertEqual(reopened.store.additional_bindings(), {grant['alias']: 'app-api'})
+        self.assertEqual(reopened.policies()[1], before[1])
+        self.assertEqual(self.app.extensions['native_gateway'].preview()['fingerprint'], plan_before)
+        self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
 
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()

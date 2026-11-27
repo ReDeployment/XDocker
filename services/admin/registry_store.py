@@ -202,7 +202,7 @@ class RegistryStore:
             db.execute("DELETE FROM registry_meta WHERE name GLOB 'web-read:*'")
             self._save_policy(db,value)
 
-    def add_read_grants(self, additions, revision):
+    def add_read_grants(self, additions, revision, *, bindings=()):
         with self.connection(write=True) as db:
             updated = db.execute('UPDATE gateway_settings SET revision=revision+? WHERE singleton=1 AND revision=?',
                                  (len(additions), revision))
@@ -211,6 +211,8 @@ class RegistryStore:
                 db.execute('INSERT INTO service_grants VALUES(?,?,?,?,NULL)',
                            (alias, grant['scope'], grant['unit'], encoded(['status', 'logs'])))
                 db.execute('INSERT INTO registry_meta VALUES(?,?)', ('web-read:' + alias, str(revision + offset)))
+            if bindings:
+                self._insert_bindings(db, bindings)
 
     @staticmethod
     def _has_bindings(db):
@@ -222,15 +224,19 @@ class RegistryStore:
                 return {}
             return dict(db.execute('SELECT alias,project FROM project_service_bindings ORDER BY alias'))
 
-    def add_bindings(self,bindings):
+    def add_bindings(self, bindings):
         with self.connection(write=True) as db:
-            # Defer the FK because legacy hub writes replace all project rows in one transaction.
-            db.execute("""CREATE TABLE IF NOT EXISTS project_service_bindings(
-                alias TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED)""")
-            db.execute("""CREATE TRIGGER IF NOT EXISTS unique_project_service BEFORE INSERT ON projects
-                WHEN EXISTS(SELECT 1 FROM project_service_bindings WHERE alias=NEW.service)
-                BEGIN SELECT RAISE(ABORT,'duplicate service'); END""")
-            db.executemany('INSERT INTO project_service_bindings(alias,project) VALUES(?,?)',bindings)
+            self._insert_bindings(db, bindings)
+
+    @staticmethod
+    def _insert_bindings(db, bindings):
+        # Defer the FK because legacy hub writes replace all project rows in one transaction.
+        db.execute("""CREATE TABLE IF NOT EXISTS project_service_bindings(
+            alias TEXT PRIMARY KEY, project TEXT NOT NULL REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED)""")
+        db.execute("""CREATE TRIGGER IF NOT EXISTS unique_project_service BEFORE INSERT ON projects
+            WHEN EXISTS(SELECT 1 FROM project_service_bindings WHERE alias=NEW.service)
+            BEGIN SELECT RAISE(ABORT,'duplicate service'); END""")
+        db.executemany('INSERT INTO project_service_bindings(alias,project) VALUES(?,?)',bindings)
 
     def _save_hub(self,db,data):
         db.execute('DELETE FROM projects');db.execute('DELETE FROM native_operations')

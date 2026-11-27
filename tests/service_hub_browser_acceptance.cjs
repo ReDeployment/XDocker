@@ -283,6 +283,39 @@ async function main(){
   await click('#hub-batch-form [data-hub-close]');
  }
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
+ await evaluate(`(async()=>{
+   for(const [id,endpoint] of [['review-web','padelu'],['review-api','example']]){
+     await api('service-hub/projects',{id,name:id,endpoint,domain:id+'.home.test',directory:${JSON.stringify(info.review_directory)},
+       service:null,tls:null,monitor:null,delivery:'external',enabled:false,revision:1});
+   }
+   serviceHubUI.serviceFilter='review';
+   await loadServiceHub();
+ })()`);
+ for(const width of [1440,390]){
+  await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await click('[data-service-project="review-web"] [data-hub-review-grant="review-worker.service"]');
+  assert(await evaluate(`(()=>{
+   const form=document.querySelector('#hub-review-grant-form'),confirm=form.querySelector('[type=submit]');
+   return confirm.disabled&&form.querySelectorAll('[name=project]').length===2&&
+     !form.querySelector('[name=project]:checked')&&confirm.getBoundingClientRect().bottom<=innerHeight+1;
+  })()`));
+  await click('#hub-review-grant-form [value=review-api]');
+  assert(await evaluate("!document.querySelector('#hub-review-grant-form [type=submit]').disabled"));
+  await shot(width===390?'mobile-review-grant':'desktop-review-grant');
+  if(width===1440){
+   await click('#hub-review-grant-form [data-hub-close]');
+   assert(await evaluate("!!document.querySelector('[data-hub-review-grant=\\\"review-worker.service\\\"]')"));
+  }else{
+   await click('#hub-review-grant-form [type=submit]');
+   await until(`!serviceHubUI.busy&&!document.querySelector('#hub-dialog').open&&
+     serviceHubUI.data.projects.find(p=>p.id==='review-api').bound_services.some(a=>serviceHubUI.data.services[a].unit==='review-worker.service')`);
+  }
+ }
+ assert(await evaluate(`(()=>{
+   const alias=serviceHubUI.data.projects.find(p=>p.id==='review-api').bound_services[0];
+   return serviceHubUI.data.services[alias].actions.join(',')==='status,logs';
+ })()`));
+ await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -299,6 +332,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

@@ -185,21 +185,25 @@ def project_services(listing, runner=read_host):
         for key, reasons in result['evidence'].items():
             if result['suggested'] and key != result['suggested']:
                 continue
-            # System-wide logs require a match to a host-approved listener. Only the
-            # running user's services can qualify through their working directory alone.
-            grantable = (not issues and not alias and key == result['suggested']
-                         and not unit.startswith(('xdocker-admin', 'xdocker-native', 'xdocker-host-monitor'))
-                         and ('listener' in reasons or (scope == 'user' and 'directory' in reasons)))
-            candidates[key].append({'scope': scope, 'unit': unit, 'alias': alias,
-                                    'can_grant_read': bool(grantable),
-                                    'suggested': key == result['suggested'], 'reasons': reasons})
+            suggested = key == result['suggested']
+            eligible = (not issues and not alias and (scope, unit) != ('system', 'docker.service')
+                        and not unit.startswith(('xdocker-admin', 'xdocker-native', 'xdocker-host-monitor')))
+            inside_project = scope == 'user' and 'directory' in reasons
+            # Manual review relies on a directory match for the current user's services.
+            # A port can describe a reverse proxy or other shared infrastructure.
+            can_review = eligible and result['suggested'] is None and inside_project
+            can_grant = eligible and suggested and ('listener' in reasons or inside_project)
+            candidates[key].append({'scope': scope, 'unit': unit, 'alias': alias, 'suggested': suggested,
+                                    'can_grant_read': bool(can_grant), 'can_review_read': bool(can_review),
+                                    'reasons': reasons})
     return {'candidates': candidates, 'unavailable': sorted(issues)}
 
 
-def grant_project_reads(hub, body, runner):
+def grant_project_reads(hub, body, runner, *, bind_selected=False):
     require(isinstance(body, dict) and set(body) == {'grants', 'policy_sha256'}, 'XD_SERVICE_GRANT_INVALID')
     entries = body['grants']
     require(isinstance(entries, list) and 1 <= len(entries) <= 100, 'XD_SERVICE_GRANT_INVALID')
+    require(not bind_selected or len(entries) == 1, 'XD_SERVICE_GRANT_INVALID')
     for entry in entries:
         require(isinstance(entry, dict) and set(entry) == {'project', 'revision', 'scope', 'unit'}
                 and all(isinstance(entry[key], str) for key in ('project', 'scope', 'unit')), 'XD_SERVICE_GRANT_INVALID')
@@ -213,7 +217,8 @@ def grant_project_reads(hub, body, runner):
             require(type(entry['revision']) is int and project['revision'] == entry['revision'], 'XD_SERVICE_REVISION_CONFLICT')
 
         candidates = project_services(listing, runner)['candidates']
-        eligible = {(pid, c['scope'], c['unit']) for pid, rows in candidates.items() for c in rows if c['can_grant_read']}
+        capability = 'can_review_read' if bind_selected else 'can_grant_read'
+        eligible = {(pid, c['scope'], c['unit']) for pid, rows in candidates.items() for c in rows if c[capability]}
         policy = hub.policy()
         reserved = set(policy['services']) | {a for p in projects.values() for a in p['bound_services']}
         additions = {}
@@ -228,5 +233,6 @@ def grant_project_reads(hub, body, runner):
             additions[alias] = {**grant, 'definition_sha256': None}
             results.append({'project': pid, 'alias': alias, **grant})
         validate_policy({**policy, 'services': {**policy['services'], **additions}})
-        hub.store.add_read_grants(additions, policy['revision'])
+        bindings = [(r['alias'], r['project']) for r in results] if bind_selected else []
+        hub.store.add_read_grants(additions, policy['revision'], bindings=bindings)
         return results

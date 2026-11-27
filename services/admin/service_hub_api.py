@@ -45,9 +45,10 @@ def register_service_hub(app,state,audit,redactor,domains):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
 
+    @app.post('/api/service-hub/read-grants/resolve', defaults={'bind_selected': True})
     @app.post('/api/service-hub/read-grants')
     @app.post('/api/service-hub/projects/<identifier>/read-grants')
-    def hub_grant_read(identifier=None):
+    def hub_grant_read(identifier=None, bind_selected=False):
         try:
             if not (app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED')):
                 raise ServiceError('XD_SERVICE_OPERATIONS_DISABLED')
@@ -57,9 +58,12 @@ def register_service_hub(app,state,audit,redactor,domains):
                     raise ServiceError('XD_SERVICE_GRANT_INVALID')
                 entry = {key: body[key] for key in ('scope', 'unit', 'revision')}
                 body = {'policy_sha256': body['policy_sha256'], 'grants': [{'project': identifier, **entry}]}
-            grants = grant_project_reads(hub, body, app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host))
+            grants = grant_project_reads(hub, body, app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host),
+                                         bind_selected=bind_selected)
             for grant in grants:
                 audit('service-read-grant', '/'.join(grant[k] for k in ('project', 'scope', 'unit')), 'success')
+                if bind_selected:
+                    audit('service-bind', grant['project'] + '/' + grant['alias'], 'success')
             if identifier is not None:
                 return jsonify(grant={k: v for k, v in grants[0].items() if k != 'project'}), 201
             return jsonify(grants=grants), 201
