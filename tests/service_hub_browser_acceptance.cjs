@@ -317,17 +317,21 @@ async function main(){
  })()`));
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
  await hubPage('projects');
+ const waitForMergeCandidates=count=>until(`(async()=>{
+   await loadServiceHub();
+   return serviceHubUI.data.project_groups.find(p=>p.id==='review-web').merge_candidates.length===${count};
+ })()`);
  await evaluate(`(async()=>{
    await api('service-hub/projects',{id:'review-alt',name:'Review Alt',endpoint:'example',domain:'review-alt.home.test',directory:${JSON.stringify(info.review_directory)},
      service:null,tls:null,monitor:null,delivery:'external',enabled:false,revision:1});
-   await loadServiceHub();
  })()`);
+ await waitForMergeCandidates(2);
  await click('[data-hub-merge-project="review-web"]');
  assert(await evaluate(`(()=>{
    const form=document.querySelector('#hub-merge-project-form');
    return form.textContent.includes('选择要归并的旧登记')&&form.querySelectorAll('[name=source]').length===2&&
      !form.querySelector('[name=source]:checked')&&form.querySelector('[type=submit]').disabled;
- })()`));
+ })()`),'Multiple merge candidates require choosing a source');
  await click('#hub-merge-project-form [value=review-alt]');
  await until("document.querySelector('[data-merge-preview]').textContent.includes('review-alt.home.test')");
  await click('#hub-merge-project-form [value=review-api]');
@@ -336,8 +340,8 @@ async function main(){
  await click('#hub-merge-project-form [data-hub-close]');
  await evaluate(`(async()=>{
    await api('service-hub/projects/review-alt/remove',{revision:1,confirmation:'Review Alt'});
-   await loadServiceHub();
  })()`);
+ await waitForMergeCandidates(1);
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
   await click('[data-hub-merge-project="review-web"]');
@@ -348,7 +352,7 @@ async function main(){
      screen.querySelector('[data-merge-summary]').textContent==='将 review-api 的网站入口归到 review-web。'&&
      preview.textContent.includes('review-api.home.test')&&preview.textContent.includes('review-web.home.test')&&
      preview.textContent.includes('review-worker.service')&&screen.querySelector('[type=submit]').getBoundingClientRect().bottom<=innerHeight+1;
-  })()`));
+  })()`),'Single-candidate merge shows direction and both routes at '+width);
   await shot(width===390?'mobile-project-merge':'desktop-project-merge');
   if(width===1440){await click('#hub-merge-project-form [data-hub-close]');continue;}
   await click('#hub-merge-project-form [type=submit]');
