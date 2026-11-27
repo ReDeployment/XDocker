@@ -1,6 +1,6 @@
 .hub-workspace{min-width:0}.hub-alert{padding:12px 16px;border:1px solid #f0c5ba;border-radius:12px;margin-bottom:14px;background:#fff4ef;color:#883b28;overflow-wrap:anywhere}.hub-dialog{width:min(700px,calc(100vw - 32px));max-height:90vh;overflow:auto}.hub-dialog label{display:block;margin:12px 0}.hub-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}.hub-dialog select{width:100%;padding:11px;border:1px solid #dce5ee;border-radius:8px;background:#fff;color:#172841;min-height:42px}.hub-dialog .hub-check{display:flex;gap:10px;align-items:center}.hub-check input{width:auto}.hub-workspace td small{max-width:340px;overflow-wrap:anywhere}.hub-dialog .dialog-actions{flex-wrap:wrap}.hub-workspace .vertical-tab-panel{min-width:0}@media(max-width:720px){.hub-workspace .vertical-tabview{display:block}.hub-workspace .vertical-tab-list{position:static;flex-direction:row;overflow-x:auto;max-width:100%;margin-bottom:14px}.hub-workspace .vertical-tab-list button{flex:none;white-space:nowrap;border-left:0;border-bottom:3px solid transparent}.hub-workspace .vertical-tab-list button.active{border-bottom-color:var(--blue)}.hub-fields{grid-template-columns:1fr}.hub-dialog{padding:16px}.hub-dialog .dialog-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.hub-dialog .dialog-actions button{width:100%;min-height:44px}}
 
-.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form){display:flex;flex-direction:column;max-height:calc(90vh - 48px);min-height:0}.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form)>.detail-head,.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form)>.dialog-actions,.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form)>.error{flex:none}.hub-form-body{overflow-y:auto;min-height:0;padding-right:6px}
+.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form,#hub-review-grant-form){display:flex;flex-direction:column;max-height:calc(90vh - 48px);min-height:0}.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form,#hub-review-grant-form)>.detail-head,.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form,#hub-review-grant-form)>.dialog-actions,.hub-dialog :is(#hub-form,#hub-batch-form,#hub-bulk-grant-form,#hub-review-grant-form)>.error{flex:none}.hub-form-body{overflow-y:auto;min-height:0;padding-right:6px}
 .hub-workspace .panel-head>button{flex:none;white-space:nowrap}
 
 .sites-filter{display:block;max-width:260px;margin:0 0 18px}.sites-filter select{display:block;width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);margin-top:6px}.sites-workspace .panel-head>button{flex:none;white-space:nowrap}
@@ -61,3 +61,9 @@
 @media(max-width:720px){
  .panel-head:has(.hub-bulk-actions){flex-wrap:wrap;gap:8px}
 }
+
+#hub-review-grant-form .hub-form-body{overflow-wrap:anywhere}
+#hub-review-grant-form fieldset{min-width:0;margin:12px 0;padding:0 12px;border:1px solid var(--line);border-radius:8px}
+#hub-review-grant-form .hub-review-option{align-items:flex-start}
+#hub-review-grant-form .hub-review-option input{flex:none;margin-top:.25rem}
+#hub-review-grant-form .hub-review-option small{display:block;color:var(--muted)}

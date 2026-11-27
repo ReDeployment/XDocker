@@ -152,8 +152,22 @@ function boundServiceControls(project,grant,alias,operationsEnabled){
 
 const serviceFilters={all:'全部项目',discovered:'待授权',pending:'待绑定',bound:'已绑定',review:'归属待核对',empty:'未发现匹配'};
 
+function reviewGrantOptions(data){
+ const units=new Map();
+ for(const project of data.projects){
+   if(!project.endpoint_available)continue;
+   for(const candidate of data.project_services?.candidates[project.id]||[]){
+     if(!candidate.can_review_read)continue;
+     if(!units.has(candidate.unit))units.set(candidate.unit,[]);
+     units.get(candidate.unit).push({project,reasons:candidate.reasons});
+   }
+ }
+ return units;
+}
+
 function projectServicePanel(data, actions){
  const scan=data.project_services,issues=scan?.unavailable||[];
+ const reviewOptions=data.operations_enabled?reviewGrantOptions(data):new Map();
  const sourceNames={native:'原生主机',user:'用户级 systemd',system:'系统级 systemd',listeners:'监听端口',addresses:'本机地址',unsupported:'主机发现接口'};
  const filter=serviceHubUI.serviceFilter||'all';
  const rows=data.projects.map(project=>{
@@ -180,6 +194,10 @@ function projectServicePanel(data, actions){
        next=hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available);
      }else if(candidate.can_grant_read&&project.endpoint_available&&data.operations_enabled){
        next=hubButton('授权',{grant:project.id,unit,scope});
+     }else if(scope==='user'&&reviewOptions.has(unit)){
+       next=hubButton('选择项目并授权',{'review-grant':unit});
+     }else if(scope==='system'&&unit==='docker.service'){
+       next='<a href="#services/logs">查看对应容器的日志 →</a>';
      }else{
        const reason=!data.operations_enabled?'主机未开启管理操作。':issues.length?'请刷新并重新检查主机服务。':
          !suggested?'请核对项目目录和登记端口后刷新。':!project.endpoint_available?'请先修复项目的接入地址。':
@@ -390,6 +408,32 @@ function openBatchReadGrants(){
  dialog.showModal();
 }
 
+function openReviewGrant(unit){
+ const data=serviceHubUI.data;
+ const options=reviewGrantOptions(data).get(unit);
+ if(!options?.length||!data.operations_enabled)return;
+ options.sort((a,b)=>Number(!!b.reasons.listener)-Number(!!a.reasons.listener));
+ serviceHubUI.editor={kind:'review-grant',unit,projects:new Map(options.map(({project})=>[project.id,project])),
+   policy:data.policy_sha256};
+ const rows=options.map(({project,reasons})=>`<label class="hub-check hub-review-option">
+   <input type="radio" name="project" value="${esc(project.id)}" required>
+   <span><strong>${esc(project.name)}</strong>
+     <small>${esc(project.domain)}</small><small>${esc(bindingReasons(reasons))}</small></span></label>`).join('');
+ const dialog=hubDialog();
+ dialog.innerHTML=`<form id="hub-review-grant-form"><div class="detail-head"><h2>选择项目并授权</h2></div>
+   <div class="hub-form-body"><p><strong>${esc(unit)}</strong></p>
+   <p>确认后将服务绑定到所选项目，并允许 XDocker 查看状态和最近 100 行日志。</p>
+   <fieldset><legend>归属项目</legend>${rows}</fieldset></div>
+   <p id="hub-form-error" class="error" role="alert"></p>
+   <div class="dialog-actions">${hubButton('取消',{close:'yes'})}
+     <button type="submit" class="primary" disabled>确认授权并绑定</button></div></form>`;
+ const form=dialog.querySelector('form');
+ form.addEventListener('change',()=>{
+   form.querySelector('[type=submit]').disabled=serviceHubUI.busy||!form.querySelector('[name=project]:checked');
+ });
+ dialog.showModal();
+}
+
 function openReadGrant(projectId,scope,unit){
  const data=serviceHubUI.data;
  const project=data.projects.find(p=>p.id===projectId);
@@ -470,7 +514,7 @@ async function hubConfirm(kind,id,alias){
  serviceHubUI.editor=editor;dialog.innerHTML=`<form id="hub-operation-form"><div class="detail-head"><h2>确认${kind==='gateway'?'应用网关':kind==='action'?'服务操作':'移除登记'}</h2>${hubButton('关闭',{'close':'yes'})}</div>${extra}<label>输入完整名称 <strong>${esc(target)}</strong><input name="confirmation" required autocomplete="off"></label><p id="hub-form-error" class="error" role="alert"></p><div class="dialog-actions">${hubButton('取消',{'close':'yes'})}<button type="submit" class="primary">确认执行</button></div></form>`;if(!dialog.open)dialog.showModal();
 }
 document.addEventListener('submit',async event=>{
- const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form','hub-batch-form','hub-read-grant-form','hub-bulk-grant-form'].includes(id))return;event.preventDefault();if(serviceHubUI.busy)return;const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
+ const id=event.target.getAttribute('id');if(!['hub-form','hub-operation-form','hub-batch-form','hub-read-grant-form','hub-bulk-grant-form','hub-review-grant-form'].includes(id))return;event.preventDefault();if(serviceHubUI.busy)return;const form=event.target,e=serviceHubUI.editor,v=Object.fromEntries(new FormData(form));hubCapture();serviceHubUI.busy=true;event.submitter.disabled=true;
  try{
   let message;
   if(e.kind==='batch-read-grants'){
@@ -478,6 +522,11 @@ document.addEventListener('submit',async event=>{
     const result=await api('service-hub/read-grants',{grants,policy_sha256:e.policy});
     serviceHubUI.serviceFilter='pending';
     message=`已授权 ${result.grants.length} 个服务。点击「批量绑定」可关联项目。`;
+  }else if(e.kind==='review-grant'){
+    const project=e.projects.get(v.project);
+    await api('service-hub/read-grants/resolve',{policy_sha256:e.policy,
+      grants:[{project:project.id,revision:project.revision,scope:'user',unit:e.unit}]});
+    message=e.unit+' 已授权并绑定到 '+project.name+'。';
   }else if(e.kind==='read-grant'){
     await api('service-hub/projects/'+encodeURIComponent(e.id)+'/read-grants',e.body);
     serviceHubUI.serviceFilter='pending';
@@ -503,8 +552,9 @@ document.addEventListener('change',event=>{
  }else if(event.target.closest('#hub-form'))hubCapture();
 });
 document.addEventListener('click',async event=>{
- const b=event.target.closest('[data-hub-batch-grant],[data-hub-grant],[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
+ const b=event.target.closest('[data-hub-review-grant],[data-hub-batch-grant],[data-hub-grant],[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
+  if(d.hubReviewGrant){openReviewGrant(d.hubReviewGrant);return;}
   if(d.hubBatchGrant){openBatchReadGrants();return;}
   if(d.hubGrant){openReadGrant(d.hubGrant,d.hubScope,d.hubUnit);return;}
   if(d.hubBatch){await openBatchBindings(d.hubBindAlias);return;}
