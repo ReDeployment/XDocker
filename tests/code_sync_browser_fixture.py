@@ -35,6 +35,7 @@ def main():
         git(source,'worktree','add','-b','feature',str(feature))
         (feature/'feature.py').write_text('feature = True')
         git(feature,'add','.');git(feature,'commit','-m','feature work')
+        feature_head=text_git(feature,'rev-parse','HEAD')
         (feature/'feature.py').write_text('feature = False')
         original_head=text_git(source,'rev-parse','HEAD');original_index=(source/'.git/index').read_bytes();(source/'app.py').write_text('print("uncommitted fixture")\n')
         (source/'scratch.tmp').write_text('private untracked scratch')
@@ -49,7 +50,7 @@ def main():
         hub.transfer=GitTransfer(private_directory(root/'cache'),resolver);hub.transport=lambda device,body:agent.handle({**body,'expected_agent_sha':agent_sha()})
         worker=CodeSyncWorker(hub);worker.start()
         def remote_state(hub,group):
-            return {'default':'main','heads':{'main':original_head},'prs':[{'name':'feature','number':7,
+            return {'default':'main','heads':{'main':original_head,'release/v1':original_head,'feature':feature_head},'prs':[{'name':'feature','number':7,
                     'base':'main','updated':time()}],'merged':{},'notes':[]}
         stopping=threading.Event()
         monitor=threading.Thread(target=ActivityMonitor(hub,remote_state).run,args=(stopping,),daemon=True)

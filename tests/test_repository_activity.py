@@ -11,7 +11,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/admin"))
 from code_sync import CodeSync, default_policy
-from repository_activity import ActivityMonitor, ZONE, candidates, observe, slot
+from repository_activity import ActivityMonitor, ZONE, activity_scope, candidates, observe, slot
 from sync_runtime import git, text_git
 
 
@@ -118,6 +118,26 @@ class RepositoryActivityTests(unittest.TestCase):
         self.assertIsNone(d["summary"]["pending"])
         self.assertEqual(d["summary"]["active"], 1)
         self.assertFalse(next(b for b in d["branches"] if b["name"] == "feature")["prs_known"])
+
+    def test_release_compares_published_development_history_and_preserves_legacy_settings(self):
+        group = candidates(self.hub)[0][0]
+        key = group["id"]
+        self.remote["heads"].update(develop=self.tip, release=self.base)
+        activity_scope(self.hub, key, {"branch": "develop", "release": "release", "request": "first"})
+        d = self.inspect()
+        self.assertEqual(d["summary"]["release"]["count"], 1)
+        self.assertEqual(d["summary"]["release"]["basis"], "GitHub")
+        self.assertEqual(
+            d["release_commits"],
+            [{"sha": self.tip, "at": d["release_commits"][0]["at"], "subject": "feature"}],
+        )
+        activity_scope(self.hub, key, {"branch": "main", "request": "legacy"})
+        self.assertEqual(self.inspect()["summary"]["release"]["count"], 0)
+        self.assertEqual(activity_scope(self.hub, key), {"branch": "main", "release": "release"})
+        del self.remote["heads"]["release"]
+        self.assertIsNone(self.inspect()["summary"]["release"]["count"])
+        activity_scope(self.hub, key, {"branch": "main", "release": "", "request": "clear"})
+        self.assertNotIn("release", self.inspect()["summary"])
 
     def test_schedule_boundary_override_and_published_snapshot(self):
         before = datetime(2026, 11, 27, 1, 59, 59, tzinfo=ZONE).timestamp()

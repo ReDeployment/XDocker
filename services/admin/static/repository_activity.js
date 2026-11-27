@@ -1,8 +1,8 @@
 'use strict';
 
-const repositoryView = {scope:'all', detail:null, section:'branches', filter:'all', treeBranch:'', request:0};
+const repositoryView = {scope:'all', detail:null, section:'branches', filter:'all', treeBranch:'', scopeDraft:null, request:0};
 const branchFilters = {all:'全部分支',active:'推进中',pending:'待合入'};
-const mergeLabels = {target:'目标分支',pending:'有待合入提交',merged:'已合入',unknown:'待核实'};
+const mergeLabels = {target:'开发主干',release:'发布分支',pending:'有待合入提交',merged:'已合入',unknown:'待核实'};
 const observationDate = stamp => stamp ? date(stamp*1000) : '未取得';
 const activityOptions = (values,selected) => Object.entries(values).map(([key,label]) =>
   `<option value="${esc(key)}" ${key===selected?'selected':''}>${esc(label)}</option>`).join('');
@@ -11,6 +11,7 @@ function resetRepositoryView(){
   repositoryView.request++;
   repositoryView.scope='all';
   repositoryView.detail=null;
+  repositoryView.scopeDraft=null;
   $('repo-dialog')?.remove();
 }
 function repoButton(row, filter, label, description){
@@ -33,17 +34,21 @@ function repositoryOverview(activity){
     <div class="actions"><select aria-label="筛选仓库" id="repo-scope">${activityOptions(scopes,repositoryView.scope)}</select>
     <button type="button" data-repo-refresh ${!activity.available||running||activity.pending?'disabled':''}>立即检查</button></div></div>`;
   function metric(row,key){
-    if(row[key]==null)return '待核实';
+    if(row[key]==null)return key==='pending'?'待合入 · 待核实':'待核实';
     const label=(key==='active'&&row.partial)||(key==='pending'&&row.unknown_merges)?'已见 '+row[key]:row[key];
-    return repoButton(row,key,label,row.name+' · '+branchFilters[key]+' '+label);
+    const caption=key==='pending'?label+' 条待合入':label;
+    return repoButton(row,key,caption,row.name+' · '+branchFilters[key]+' '+label);
   }
   const rows=list.map(r=>{
     const identity=repoButton(r,'all',r.name,r.name+' · 查看仓库详情')+`<small>${esc(r.repository||r.notes[0]||'目录待核对')}</small>`;
     const branch=r.branch?`<code title="${esc(r.directory)}">${esc(r.branch)}</code>`:'未检测到';
+    const development=metric(r,'pending')+(r.target?'<small>→ '+esc(r.target)+(r.target_push==='本地有待推送提交'?' · 本地待推送':'')+'</small>':'');
+    const release=r.release?repoButton(r,'release',r.release.count==null?'待发布 · 待核实':r.release.count+' 个提交待发布',
+      r.name+' · 查看待发布提交')+'<small>→ '+esc(r.release.branch)+'</small>':'';
     return '<tr>'+activityCell('仓库',identity)+activityCell('当前检出分支',branch)+activityCell('推进中',metric(r,'active'))+
-      activityCell('待合入',metric(r,'pending')+(r.target?'<small>→ '+esc(r.target)+(r.target_push==='本地有待推送提交'?' · 本地待推送':'')+'</small>':''))+activityCell('最近活动',observationDate(r.latest)+(r.partial&&r.branch_count!=null?'<small>'+esc(r.basis==='GitHub'?'部分数据待核实':r.basis)+'</small>':''))+'</tr>';
+      activityCell('合入进度',development+(release?'<div class="repo-release-cell">'+release+'</div>':''))+activityCell('最近活动',observationDate(r.latest)+(r.partial&&r.branch_count!=null?'<small>'+esc(r.basis==='GitHub'?'部分数据待核实':r.basis)+'</small>':''))+'</tr>';
   });
-  return `<section class="panel repo-panel">${header}${table(['仓库','当前检出分支','推进中','待合入','最近活动'],rows)}</section>`;
+  return `<section class="panel repo-panel">${header}${table(['仓库','当前检出分支','推进中','合入进度','最近活动'],rows)}</section>`;
 }
 
 async function openRepository(id,filter){
@@ -51,7 +56,8 @@ async function openRepository(id,filter){
   try{
     const detail=await api('code-sync/activity/'+id);
     if(seq!==repositoryView.request||!loggedIn||current!=='code-sync')return;
-    Object.assign(repositoryView,{detail,section:'branches',treeBranch:'',filter});
+    const section=filter==='release'?'release':'branches';
+    Object.assign(repositoryView,{detail,section,treeBranch:'',filter:section==='release'?'all':filter,scopeDraft:detail.scope});
     let dialog=$('repo-dialog');
     if(!dialog){
       dialog=document.createElement('dialog');dialog.id='repo-dialog';dialog.setAttribute('aria-labelledby','repo-title');
@@ -88,23 +94,54 @@ function worktreeTable(detail){
   const controls=branchFilter?`<div class="repo-filter">${esc(branchFilter)} <button data-repo-all-trees>查看全部目录</button></div>`:'';
   return controls+table(['本机工作目录','检出分支 / 提交','工作区'],rows);
 }
+function releaseTable(detail){
+  const release=detail.summary.release;
+  const commits=detail.release_commits;
+  const direction=`<p class="repo-direction"><strong>${esc(release.development||'开发主干待核实')} → ${esc(release.branch)}</strong><small>${esc(release.basis)}</small></p>`;
+  if(release.count==null)return direction+`<p>${esc(release.note)}</p>`;
+  if(!release.count)return direction+'<p>开发主干的提交均已进入发布分支。</p>';
+  const rows=commits.map(commit=>'<tr>'+activityCell('提交',`<code>${esc(commit.sha.slice(0,12))}</code>`)+
+    activityCell('描述',esc(commit.subject||'—'))+activityCell('提交时间',observationDate(commit.at))+'</tr>');
+  const count=release.count>commits.length?`，显示最近 ${commits.length} 个`:'';
+  return direction+`<p>${release.count} 个提交待进入发布分支${count}</p>`+
+    table(['提交','描述','提交时间'],rows)+
+    '<p class="sync-help">按 Git 提交历史比较。通过 cherry-pick 或 squash 进入发布分支的改动可能需要核对。</p>';
+}
+function scopeOptions(branches,selected){
+  const names=[...new Set(branches.map(b=>b.name))].sort((a,b)=>a.localeCompare(b));
+  const missing=selected&&!names.includes(selected)?
+    `<option value="${esc(selected)}" selected>${esc(selected)}（本轮未发现）</option>`:'';
+  return missing+names.map(name=>`<option value="${esc(name)}" ${name===selected?'selected':''}>${esc(name)}</option>`).join('');
+}
 function renderRepositoryDetail(){
   const d=repositoryView.detail,r=d.summary;
-  const sections={branches:'分支 '+(r.branch_count??'—'),trees:'工作目录（worktree） '+(r.worktree_count??'—'),settings:'检查范围'};
+  const sections={branches:'分支 '+(r.branch_count??'—'),trees:'工作目录（worktree） '+(r.worktree_count??'—')};
+  if(r.release)sections.release='待发布提交';
+  sections.settings='检查范围';
   const controls=Object.entries(sections).map(([id,label])=>`<button type="button" data-repo-tab="${id}" aria-pressed="${id===repositoryView.section}">${esc(label)}</button>`).join('');
-  const targets=activityOptions(Object.fromEntries(d.branches.map(b=>[b.name,b.name])),r.override);
   let body;
   if(repositoryView.section==='settings'){
     body=`<dl class="sync-source-facts"><dt>登记项目</dt><dd>${r.projects.map(esc).join('、')}</dd><dt>登记目录</dt><dd>${r.directories.map(path=>esc(path)+(r.directory_issues?.[path]?' · '+esc(r.directory_issues[path]):'')).join('<br>')}</dd><dt>分支数据来源</dt><dd>${esc(r.basis||'待核对目录')}</dd><dt>检查时间</dt><dd>${observationDate(r.at)}</dd></dl>`;
-    if(d.branches.length&&codeSyncUI.data?.activity.available)body+=`<form id="repo-target-form"><label>合入目标 <select name="branch"><option value="">仓库默认分支</option>${targets}</select></label><button type="submit">保存并检查</button></form>`;
+    if(d.branches.length&&codeSyncUI.data?.activity.available){
+      const scope=repositoryView.scopeDraft??{branch:r.override||'',release:r.release?.branch||''};
+      const defaultName=r.default_branch?' · '+esc(r.default_branch):'';
+      const form=`<form id="repo-target-form">
+        <label>开发主干 <select name="branch"><option value="">仓库默认分支${defaultName}</option>${scopeOptions(d.branches,scope.branch)}</select></label>
+        <label>发布分支 <select name="release"><option value="">不跟踪发布</option>${scopeOptions(d.branches,scope.release)}</select></label>
+        <button type="submit">保存并检查</button><p class="error" id="repo-scope-error" role="alert"></p>
+      </form>`;
+      body=form+body;
+    }
     body+='<p class="sync-help">待合入按分支提交与目标分支的历史关系核对，并参考最近 100 个已关闭 PR 的合入记录。更早的压缩或变基合入可能需要人工核对。</p>';
   }else if(r.branch_count==null)body='<p>请核对登记目录和本机读取范围。</p>';
+  else if(repositoryView.section==='release')body=releaseTable(d);
   else body=repositoryView.section==='branches'?branchTable(d):worktreeTable(d);
   const notes=r.notes.map(esc).join(' · ');
-  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>${esc(r.repository||r.notes[0]||'目录待核对')} · 合入目标 ${esc(r.target||'待核实')}</small></div><button type="button" data-repo-close>关闭</button></div>
+  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>${esc(r.repository||r.notes[0]||'目录待核对')} · 开发主干 ${esc(r.target||'待核实')}</small></div><button type="button" data-repo-close>关闭</button></div>
     <div class="repo-tabs" role="group" aria-label="仓库详情分区">${controls}</div>${notes?`<p class="repo-note">${notes}</p>`:''}<div class="repo-body">${body}</div>`;
 }
 document.addEventListener('change',event=>{
+  if(event.target.form?.id==='repo-target-form')repositoryView.scopeDraft=Object.fromEntries(new FormData(event.target.form));
   if(event.target.id==='repo-scope'){repositoryView.scope=event.target.value;renderCodeSync();$('repo-scope').focus();}
   if(event.target.id==='repo-branch-filter'){repositoryView.filter=event.target.value;renderRepositoryDetail();$('repo-branch-filter').focus();}
 });
@@ -124,9 +161,15 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('submit',async event=>{
   if(event.target.id!=='repo-target-form')return;
-  event.preventDefault();const button=event.submitter;button.disabled=true;
+  event.preventDefault();const form=event.target,button=event.submitter;button.disabled=true;
+  const fields=Object.fromEntries(new FormData(form));
   try{
-    await api('code-sync/activity/'+repositoryView.detail.summary.id+'/target',{branch:event.target.elements.branch.value});
-    $('repo-dialog').close();notice('合入目标已保存，正在排队重新检查。');await loadCodeSync();
-  }catch(error){notice(error.message,true);button.disabled=false;}
+    await api('code-sync/activity/'+repositoryView.detail.summary.id+'/target',fields);
+    $('repo-dialog').close();notice('检查范围已保存，正在排队重新检查。');await loadCodeSync();
+  }catch(error){
+    const message=form.querySelector('#repo-scope-error');
+    if(form.isConnected)message.textContent=error.message;
+    else notice(error.message,true);
+    button.disabled=false;
+  }
 });

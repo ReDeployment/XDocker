@@ -3,7 +3,7 @@ import secrets
 from flask import jsonify,request
 from code_sync import CodeSync
 from sync_runtime import SyncError,require
-from repository_activity import ActivityMonitor
+from repository_activity import ActivityMonitor,activity_scope
 
 
 def register_code_sync(app,state,audit):
@@ -25,7 +25,7 @@ def register_code_sync(app,state,audit):
         try:
             item=monitor.snapshot().get('repos',{}).get(key)
             if not item:return jsonify(error='该仓库尚无检查记录'),404
-            return jsonify(item)
+            return jsonify(**item,scope=activity_scope(hub,key))
         except (OSError,ValueError) as error:return failed(error)
 
     @app.post('/api/code-sync/activity/refresh')
@@ -41,12 +41,18 @@ def register_code_sync(app,state,audit):
         try:
             request.max_content_length=4096
             data=request.get_json()
-            require(native and isinstance(data,dict) and set(data)=={'branch'},'XD_SYNC_INPUT_INVALID')
+            require(native and isinstance(data,dict) and set(data) in ({'branch'},{'branch','release'}),'XD_SYNC_INPUT_INVALID')
             item=monitor.snapshot().get('repos',{}).get(key)
-            require(item and item['summary']['repository'] and data['branch'] in
-                    ['',*(b['name'] for b in item['branches'])],'XD_SYNC_INPUT_INVALID')
-            hub.store.metadata('activity-target:'+key,data['branch'])
-            hub.store.metadata('activity-request',secrets.token_hex(12))
+            require(item and item['summary']['repository'],'XD_SYNC_INPUT_INVALID')
+            current=activity_scope(hub,key)
+            branches={b['name'] for b in item['branches']}
+            for field,value in data.items():
+                require(isinstance(value,str) and (not value or value==current[field] or value in branches),
+                        '请从已发现的分支中选择')
+            release=data.get('release',current['release'])
+            development=data['branch'] or item['summary'].get('default_branch')
+            require(not release or release!=development,'开发主干与发布分支需选择不同分支')
+            activity_scope(hub,key,{**data,'request':secrets.token_hex(12)})
             audit('repository-check-target',key,'saved')
             return jsonify(queued=True)
         except (OSError,ValueError) as error:return failed(error)

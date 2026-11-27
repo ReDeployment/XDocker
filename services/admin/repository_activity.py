@@ -8,7 +8,7 @@ from threading import Lock
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from github_watch import PROJECTS, RepositoryReader, WatchError, owner_token
+from github_watch import PROJECTS, RepositoryReader, WatchError, owner_token, safe_text
 from host_metrics import atomic_json, read_json
 from sync_runtime import SyncError, canonical, git, require, safe_path
 
@@ -235,6 +235,57 @@ def contains(path, sha, target):
     return {0: True, 1: False}.get(code)
 
 
+def activity_scope(hub, key, settings=None):
+    keys = ("activity-target:" + key, "activity-release:" + key)
+    with hub.store.db(write=settings is not None) as db:
+        if settings is not None:
+            values = [(keys[0], settings["branch"])]
+            if "release" in settings:
+                values.append((keys[1], settings["release"]))
+            values.append(("activity-request", settings["request"]))
+            db.executemany(
+                "INSERT INTO metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                values,
+            )
+        stored = dict(db.execute("SELECT key,value FROM metadata WHERE key IN (?,?)", keys))
+    return {"branch": stored.get(keys[0], ""), "release": stored.get(keys[1], "")}
+
+
+def release_comparison(paths, development, release, development_sha, release_sha, basis):
+    result = {"branch": release, "development": development, "basis": basis, "count": None, "note": ""}
+    if development == release:
+        result["note"] = "请为发布分支选择另一条分支"
+    elif not development_sha or not release_sha:
+        result["note"] = "开发主干或发布分支的提交待核实"
+    elif development_sha == release_sha:
+        result["count"] = 0
+    else:
+        revisions = release_sha + ".." + development_sha
+        for path in paths:
+            try:
+                count = int(output(path, "rev-list", "--count", revisions, "--"))
+                raw = output(
+                    path,
+                    "log",
+                    "--no-show-signature",
+                    "-n",
+                    "25",
+                    "--format=%H%x00%ct%x00%s",
+                    revisions,
+                    "--",
+                )
+            except (SyncError, OSError, ValueError):
+                continue
+            commits = []
+            for line in raw.split("\n") if raw else []:
+                sha, stamp, subject = line.split("\0", 2)
+                commits.append({"sha": sha, "at": int(stamp), "subject": safe_text(subject, limit=160)})
+            result["count"] = count
+            return result, commits
+        result["note"] = "本机缺少完整的两条分支历史"
+    return result, []
+
+
 def observe(hub, group, roots, now, remote_reader=github_state):
     summary = {k: group[k] for k in ("id", "name", "repository", "projects", "directories")}
     summary.update(
@@ -252,6 +303,8 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         worktree_count=None,
         at=now,
     )
+    scope = activity_scope(hub, group["id"])
+    override, release = scope["branch"], scope["release"]
     detail = {"summary": summary, "branches": [], "worktrees": []}
     if not group["roots"]:
         summary["notes"] = summary["notes"] or ["登记目录中未找到可读取的 GitHub 仓库"]
@@ -281,8 +334,9 @@ def observe(hub, group, roots, now, remote_reader=github_state):
             summary["branch"] = primary.get("branch") or (
                 "提交 " + primary["head"][:12] if primary.get("head") else ""
             )
-    override = hub.store.metadata("activity-target:" + group["id"])
-    target = override or remote["default"] or (defaults[0] if len(set(defaults)) == 1 else "")
+    default_branch = remote["default"] or (defaults[0] if len(set(defaults)) == 1 else "")
+    summary["default_branch"] = default_branch
+    target = override or default_branch
     summary["target"] = target
     live = remote["heads"] is not None
     remote_heads = {k: {v} for k, v in remote["heads"].items()} if live else cached
@@ -292,6 +346,21 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         target_shas = local[target]
         summary["basis"] = "本地目标分支"
     target_sha = next(iter(target_shas)) if len(target_shas) == 1 else ""
+    if release:
+        release_shas = remote_heads.get(release, set())
+        release_basis = summary["basis"]
+        if not release_shas and not live and release in local:
+            release_shas = local[release]
+            release_basis = "本机分支引用"
+        release_sha = next(iter(release_shas)) if len(release_shas) == 1 else ""
+        summary["release"], detail["release_commits"] = release_comparison(
+            [path for path in group["roots"].values() if path not in shallow],
+            target,
+            release,
+            target_sha,
+            release_sha,
+            release_basis,
+        )
     if not target_sha:
         summary["notes"].append("目标分支待确认")
     if not live:
@@ -345,8 +414,8 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         ours = local.get(name, set())
         theirs = remote_heads.get(name, set())
         tips = ours | theirs
-        if name == target:
-            merge = "target"
+        if name in (target, release):
+            merge = "release" if name != target else "target"
         else:
             results = {merged(sha) for sha in tips}
             merge = "pending" if False in results else "merged" if results == {True} else "unknown"
@@ -355,7 +424,7 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         commit_dates = {s: dates.get(s) for s in tips}
         stamp = max((v for v in commit_dates.values() if v), default=0)
         reasons = []
-        if name != target:
+        if name not in (target, release):
             if any(w["dirty"] for w in linked):
                 reasons.append("工作区有改动")
             if pull:

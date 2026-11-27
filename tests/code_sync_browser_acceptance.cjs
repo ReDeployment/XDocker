@@ -77,8 +77,34 @@ async function main(){
    await click('[data-repo-close]');
  }
  await click('[data-repo-filter="all"]');await until("document.querySelector('#repo-dialog')?.open");
- await click('[data-repo-tab="settings"]');await evaluate("document.querySelector('#repo-target-form select').value='feature';document.querySelector('#repo-target-form').requestSubmit(document.querySelector('#repo-target-form button'))");
- await until("(async()=>{await loadCodeSync();return !document.querySelector('#repo-dialog').open&&codeSyncUI.data.activity.repositories.some(r=>r.target==='feature')})()");
+ await click('[data-repo-tab="settings"]');
+ const selectScope=(branch,release)=>evaluate(`(()=>{
+   const f=document.querySelector('#repo-target-form');
+   for(const [name,value] of Object.entries(${JSON.stringify({branch,release})})){
+     f.elements[name].value=value;f.elements[name].dispatchEvent(new Event('change',{bubbles:true}));
+   }
+ })()`);
+ const saveScope=()=>click('#repo-target-form button[type=submit]');
+ assert(await evaluate("document.querySelector('#repo-target-form select[name=release] option[value=\"release/v1\"]')"));
+ await selectScope('feature','feature');await saveScope();
+ await until("document.querySelector('#repo-scope-error')?.textContent.includes('不同分支')");
+ await selectScope('feature','release/v1');
+ await click('[data-repo-tab="branches"]');await click('[data-repo-tab="settings"]');
+ assert.equal(await evaluate("document.querySelector('#repo-target-form [name=release]').value"),'release/v1');
+ await shot('release-settings-320');
+ await saveScope();
+ await until("(async()=>{await loadCodeSync();return !document.querySelector('#repo-dialog').open&&codeSyncUI.data.activity.repositories.some(r=>r.target==='feature'&&r.release?.count===1)})()");
+ await click('[data-repo-filter="release"]');
+ await until("document.querySelector('#repo-dialog')?.open&&document.querySelector('.repo-direction')");
+ assert(await evaluate("document.querySelector('#repo-dialog tbody').innerText.includes('feature work')"));
+ assert(await evaluate("document.querySelector('#repo-dialog').scrollWidth<=document.querySelector('#repo-dialog').clientWidth+1"));
+ await shot('release-commits-320');
+ await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+ await shot('release-commits-1440');
+ await click('[data-repo-tab="settings"]');
+ assert.equal(await evaluate("document.querySelector('#repo-target-form [name=release]').value"),'release/v1');
+ await shot('release-settings-1440');
+ await click('[data-repo-close]');
  await pane('settings');
  await rpc('Page.reload');
  await until(`performance.getEntriesByType('navigation')[0]?.type==='reload'&&typeof codeSyncUI!=='undefined'&&codeSyncUI.data?.sources.length===1`);
