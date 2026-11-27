@@ -50,3 +50,5 @@ static/**
 !static/code-sync-guide.html
 
 !sync_scan.py
+!repository_activity.py
+!static/repository_activity.js

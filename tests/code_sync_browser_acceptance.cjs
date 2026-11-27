@@ -8,11 +8,41 @@ function rpc(method,params={},sid=session){return new Promise((resolve,reject)=>
 async function evaluate(expression){const r=await rpc('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.text+': '+r.exceptionDetails.exception?.description);return r.result.value;}
 async function until(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await sleep(100);}throw Error('UI timeout: '+expression);}
 async function click(selector){assert(await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)return false;e.click();return true})()`),'Missing active control: '+selector);}
-async function pane(name){await click(`[data-view="code-sync"][data-view-tab="${name}"]`);await until(`document.querySelector('#view-code-sync-panel')?.getAttribute('aria-labelledby')==='view-code-sync-${name}'`);}
+async function pane(name){
+ const section=name==='sources'?'sources':'settings';
+ if(name==='sources'||name==='settings'||!await evaluate("document.querySelector('.sync-push-nav')"))await click(`#view-code-sync-${section}`);
+ if(name!=='sources'&&name!=='settings')await click(`[data-sync-section="${name}"]`);
+ await until(`document.querySelector('#view-code-sync-panel')?.getAttribute('aria-labelledby')==='view-code-sync-${section}'&&moduleViews['code-sync']==='${name}'`);
+}
 async function shot(name){if(process.env.SYNC_UI_ARTIFACTS){fs.mkdirSync(process.env.SYNC_UI_ARTIFACTS,{recursive:true});const r=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(process.env.SYNC_UI_ARTIFACTS,name+'.png'),Buffer.from(r.data,'base64'));}}
 async function stop(child){if(!child||child.exitCode!==null)return;try{process.kill(-child.pid,'SIGINT');}catch{}for(let i=0;i<30&&child.exitCode===null;i++)await sleep(100);if(child.exitCode===null){try{process.kill(-child.pid,'SIGKILL');}catch{}}}
 async function form(values,operation=false){await evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(operation?'#sync-operation':'#sync-form')});for(const [key,value] of Object.entries(${JSON.stringify(values)})){const e=f.elements.namedItem(key);if(e.type==='checkbox')e.checked=value;else e.value=value;}f.requestSubmit(f.querySelector('button[type=submit]'));})()`);}
 async function edit(kind,id='new'){await click(`[data-sync-edit="${kind}"][data-sync-id="${id}"]`);await until(`document.querySelector('#sync-form')`);}
+async function compactSourceLayout(width,height){
+ await rpc('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<720});
+ await pane('settings');
+ const layout=await evaluate(`(()=>{
+   window.scrollTo(0,0);
+   const row=document.querySelector('.sync-sources tbody tr');
+   const action=row.querySelector('button').getBoundingClientRect();
+   return {rowTop:Math.round(row.getBoundingClientRect().top),actionBottom:Math.round(action.bottom),
+     inView:action.left>=0&&action.right<=innerWidth&&action.bottom<=innerHeight,
+     statusHidden:!document.querySelector('#shell-runtime').getClientRects().length,
+     noDuplicate:!document.querySelector('.sync-workspace .intro,[data-sync-refresh]'),
+     fits:document.documentElement.scrollWidth<=innerWidth+1};
+ })()`);
+ assert(layout.statusHidden&&layout.noDuplicate&&layout.inView&&layout.fits,JSON.stringify({width,height,...layout}));
+ if(width<=720){
+  await click('#sync-nav-toggle');assert(await evaluate(`document.querySelector('#workspace-navigation [data-tab="code-sync"]').offsetHeight>0`));
+  await click('#sync-nav-toggle');assert(await evaluate(`!document.querySelector('#workspace-navigation').offsetHeight`));
+ }
+ await click('#sync-status-toggle');
+ assert(await evaluate(`document.querySelector('#shell-runtime').offsetHeight>0&&document.querySelector('#sync-worker-state').innerText.includes('调度器在线')`));
+ await click('#sync-status-toggle');
+ assert(await evaluate(`(()=>{connectionState('offline','离线测试');const retry=document.querySelector('#shell-recheck').offsetHeight>0;connectionState('connected','管理连接正常',true);return retry&&!document.querySelector('#shell-runtime').offsetHeight})()`));
+ await shot('compact-sources-'+width);
+ console.log(JSON.stringify({width,height,...layout}));
+}
 async function main(){
  assert(chromeBin);fixture=cp.spawn(process.env.PYTHON||'python3',['-B','tests/code_sync_browser_fixture.py'],{cwd:root,detached:true,stdio:['ignore','pipe','pipe'],env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
  let lines='',errors='';fixture.stdout.on('data',b=>lines+=b);fixture.stderr.on('data',b=>errors+=b);
@@ -26,11 +56,71 @@ async function main(){
  await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});await rpc('Page.navigate',{url:info.url});await until(`document.querySelector('#login-form')&&typeof renderCodeSync==='function'`);
  await evaluate(`document.querySelector('#token').value=${JSON.stringify(info.fixture_token)};document.querySelector('#login-form').requestSubmit(document.querySelector('#login-form button[type=submit]'))`);
  await until(`codeSyncUI.data&&document.querySelector('#view-code-sync-panel')`);assert.equal(await evaluate(`codeSyncUI.data.inventory.length`),1);
+ assert(await evaluate("document.querySelector('#view-code-sync-sources').getAttribute('aria-selected')==='true'"));await pane('settings');
  await edit('credentials');await form({id:'github',name:'GitHub Fixture',token:'fixture_github_token_123456789'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.credentials.length===1`);
  assert(await evaluate(`!location.search.includes('fixture_github_token_123456789')&&!JSON.stringify(codeSyncUI.data).includes('fixture_github_token_123456789')&&!document.querySelector('#sync-form input[name=token]').value`));
  await edit('sources');await form({id:'example',name:'Example',directory:info.directory,repository:'example/project',branch:'main',credential:'github',enabled:true,confirmation:'Example'});
- await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('新文件 1（均不上传）')`));await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
- await edit('sources');await evaluate(`document.querySelector('[name=id]').value='draft-project';document.querySelector('[name=name]').value='保留的草稿'`);await click('[data-sync-dismiss]');await pane('devices');await pane('sources');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');await click('[data-sync-dismiss]');
+ await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('未暂存 1 · 新文件 1')`));await click('[data-sync-details="example"]');await until(`document.querySelector('#detail-dialog').open`);
+ assert(await evaluate(`document.querySelector('.sync-source-facts').textContent.includes(${JSON.stringify(info.directory)})`));
+ await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
+ await pane('sources');
+ assert.equal(await evaluate("document.querySelector('.sync-workspace [role=tablist]').innerText"),'仓库概览\n推送管理');
+ await click('[data-repo-refresh]');
+ await until('(async()=>{await loadCodeSync();return codeSyncUI.data.activity.repositories.some(r=>r.active===1&&r.pending===1&&r.worktree_count===2)})()');
+ for(const [width,height] of [[1440,900],[390,844],[320,700]]){
+   await rpc('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<720});
+   assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"));
+   assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.repo-panel th'),e=>e.textContent)"),['仓库','当前开发分支','开发主干','发布分支','并行开发']);
+   await shot('repository-overview-'+width);
+   await click('[data-repo-filter="parallel"]');await until("document.querySelector('#repo-dialog')?.open");
+   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'parallel');
+   assert(await evaluate("document.querySelector('#repo-dialog').innerText.includes('工作区有改动')&&document.querySelector('#repo-dialog a').textContent.includes('#7')"));
+   assert(await evaluate("document.querySelector('#repo-dialog tbody').innerText.includes('独有 1 · 落后 0')&&document.querySelector('#repo-dialog tbody').innerText.includes('查看合入 PR')"));
+   await shot('active-branches-'+width);await click('[data-repo-worktrees="feature"]');assert.equal(await evaluate("document.querySelectorAll('#repo-dialog tbody tr').length"),1);await click('[data-repo-all-trees]');
+   assert(await evaluate("document.querySelectorAll('#repo-dialog tbody tr').length===2&&document.querySelector('#repo-dialog').scrollWidth<=document.querySelector('#repo-dialog').clientWidth+1"));
+   await shot('worktrees-'+width);await click('[data-repo-tab="branches"]');
+   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'parallel');
+   await click('[data-repo-close]');await click('[data-repo-filter="pending"]');
+   await until("document.querySelector('#repo-dialog')?.open&&document.querySelector('#repo-branch-filter').value==='pending'");
+   await click('[data-repo-tab="settings"]');assert(await evaluate("document.querySelector('#repo-target-form').innerText.includes('仓库默认分支')"));
+   await click('[data-repo-close]');
+ }
+ await click('[data-repo-filter="all"]');await until("document.querySelector('#repo-dialog')?.open");
+ await click('[data-repo-tab="settings"]');
+ const selectScope=(branch,release)=>evaluate(`(()=>{
+   const f=document.querySelector('#repo-target-form');
+   for(const [name,value] of Object.entries(${JSON.stringify({branch,release})})){
+     f.elements[name].value=value;f.elements[name].dispatchEvent(new Event('change',{bubbles:true}));
+   }
+ })()`);
+ const saveScope=()=>click('#repo-target-form button[type=submit]');
+ assert(await evaluate("document.querySelector('#repo-target-form select[name=release] option[value=\"release/v1\"]')"));
+ await selectScope('feature','feature');await saveScope();
+ await until("document.querySelector('#repo-scope-error')?.textContent.includes('不同分支')");
+ await selectScope('feature','release/v1');
+ await click('[data-repo-tab="branches"]');await click('[data-repo-tab="settings"]');
+ assert.equal(await evaluate("document.querySelector('#repo-target-form [name=release]').value"),'release/v1');
+ await shot('release-settings-320');
+ await saveScope();
+ await until("(async()=>{await loadCodeSync();return !document.querySelector('#repo-dialog').open&&codeSyncUI.data.activity.repositories.some(r=>r.target==='feature'&&r.release?.count===1)})()");
+ assert(await evaluate("document.querySelector('.repo-panel [data-label=开发主干]').innerText.includes('feature')&&document.querySelector('.repo-panel [data-label=发布分支]').innerText.includes('release/v1')"));
+ await click('[data-repo-filter="release"]');
+ await until("document.querySelector('#repo-dialog')?.open&&document.querySelector('.repo-direction')");
+ assert(await evaluate("document.querySelector('#repo-dialog tbody').innerText.includes('feature work')"));
+ assert(await evaluate("document.querySelector('#repo-dialog').scrollWidth<=document.querySelector('#repo-dialog').clientWidth+1"));
+ await shot('release-commits-320');
+ await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+ await shot('release-commits-1440');
+ await click('[data-repo-tab="settings"]');
+ assert.equal(await evaluate("document.querySelector('#repo-target-form [name=release]').value"),'release/v1');
+ await shot('release-settings-1440');
+ await click('[data-repo-close]');
+ await pane('settings');
+ await rpc('Page.reload');
+ await until(`performance.getEntriesByType('navigation')[0]?.type==='reload'&&typeof codeSyncUI!=='undefined'&&codeSyncUI.data?.sources.length===1`);
+ for(const [width,height] of [[1440,900],[390,844],[320,700]])await compactSourceLayout(width,height);
+ await rpc('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+ await edit('sources');await evaluate(`document.querySelector('[name=id]').value='draft-project';document.querySelector('[name=name]').value='保留的草稿'`);await click('[data-sync-dismiss]');await pane('devices');await pane('settings');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');await click('[data-sync-dismiss]');
  await edit('sources','example');await evaluate(`document.querySelector('[name=name]').value='stale-draft'`);await click('[data-sync-dismiss]');
  await evaluate(`(async()=>{const {uid,...s}=codeSyncUI.data.sources[0];await api('code-sync/sources',{...s,revision:2,name:'Example',confirmation:'Example'});await loadCodeSync()})()`);
  await edit('sources','example');await form({confirmation:'stale-draft'});await until(`document.querySelector('#sync-form-error').textContent.length>0`);assert.equal(await evaluate(`document.querySelector('[name=name]').value`),'stale-draft');await click('[data-sync-reload]');await until(`document.querySelector('[name=name]').value==='Example'`);await click('[data-sync-dismiss]');
@@ -38,15 +128,37 @@ async function main(){
  await click('[data-sync-device="copy"]');await until(`document.querySelector('#detail-dialog').open`);await click('#close-detail');
  await pane('targets');await edit('targets');await form({id:'copy-example',source:'example',device:'copy',remote_target:'example',directory:info.copy_directory,enabled:true,restart:false,confirmation:'Example'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.targets.length===1`);
  await pane('schedules');await edit('schedules');await form({id:'daily',source:'example',mode:'upload',clock:'02:00',timezone:'Asia/Shanghai',enabled:true,confirmation:'Example'});await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.schedules.length===1`);
- await pane('sources');await click('[data-sync-run="example"][data-sync-kind="upload"]');await until(`document.querySelector('#sync-operation')`);await form({confirmation:'Example'},true);await until(`!document.querySelector('#sync-dialog').open`);
+ await pane('settings');await click('[data-sync-details="example"]');await click('[data-sync-run="example"][data-sync-kind="upload"]');await until(`document.querySelector('#sync-operation')`);await form({confirmation:'Example'},true);await until(`!document.querySelector('#sync-dialog').open`);
  await until(`(async()=>{await loadCodeSync();return codeSyncUI.data.jobs.some(j=>j.state==='success'&&j.result?.[0]?.state==='observed')})()`);
  await pane('records');await shot('desktop-records');assert.equal(await evaluate(`codeSyncUI.data.jobs[0].sha`),await evaluate(`codeSyncUI.data.jobs[0].result[0].sha`));
+ assert(await evaluate(`(()=>{
+   const data=codeSyncUI.data,source=data.sources[0];
+   const missing={...source,id:'unavailable',name:'Unavailable',directory:source.directory+'/gone'};
+   codeSyncUI.data={...data,sources:[{...source,branch:'previous-branch'},missing]};
+   try{
+     renderCodeSync();
+     document.querySelector('[data-sync-open-review]').click();
+     const row=document.querySelector('.sync-source-issue');
+     if(row.textContent!=='开发分支已切换')return false;
+     const branches=row.closest('tr').querySelectorAll('.sync-branches dd');
+     if(branches.length!==2||branches[0].textContent!=='previous-branch'||branches[1].textContent!=='main')return false;
+     const project=document.querySelector('#sync-project');project.value=missing.id;project.dispatchEvent(new Event('change',{bubbles:true}));
+     if(document.querySelectorAll('.sync-sources tbody tr').length!==1||!document.querySelector('.sync-source-issue').textContent.includes('找不到源码目录'))return false;
+     selectViewModule('code-sync','devices');selectViewModule('code-sync','settings');
+     if(document.querySelector('#sync-project').value!==missing.id||document.querySelector('[data-sync-review]').getAttribute('aria-pressed')!=='true')return false;
+     document.querySelector('[data-sync-edit="sources"][data-sync-id="unavailable"]').click();
+     const directory=document.querySelector('#sync-form [name=directory]');return directory.value===''&&!directory.checkValidity();
+   }finally{
+     if(document.querySelector('#sync-dialog')?.open)document.querySelector('[data-sync-dismiss]').click();
+     codeSyncUI.data=data;codeSyncUI.selected='';codeSyncUI.reviewOnly=false;renderCodeSync();
+   }
+ })()`),'Repository alerts, preserved filters and explicit directory selection');
  await rpc('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
- for(const name of ['sources','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);assert.equal(await evaluate(`document.querySelectorAll('.sync-workspace [role=tabpanel]').length`),1);assert(await evaluate(`(()=>{const n=document.querySelector('.sync-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.sync-workspace [aria-selected=true]').getBoundingClientRect();return a.left>=n.left-1&&a.right<=n.right+1})()`));}
- await pane('sources');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');assert(await evaluate(`document.querySelector('#sync-form button[type=submit]').getBoundingClientRect().bottom<=innerHeight`));await shot('mobile-editor');await click('[data-sync-dismiss]');await pane('records');await shot('mobile-records');
- await evaluate(`codeSyncUI.error='fixture-visible-error';codeSyncUI.data.jobs[0].state='partial';renderCodeSync()`);for(const name of ['sources','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.querySelector('.sync-workspace').innerText.includes('fixture-visible-error')&&document.querySelector('.sync-workspace').innerText.includes('待核对')`));}
+ for(const name of ['sources','settings','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`),'Narrow overflow '+name);assert.equal(await evaluate(`document.querySelectorAll('.sync-workspace [role=tabpanel]').length`),1);assert(await evaluate(`(()=>{const n=document.querySelector('.sync-workspace [role=tablist]').getBoundingClientRect(),a=document.querySelector('.sync-workspace [aria-selected=true]').getBoundingClientRect();return a.left>=n.left-1&&a.right<=n.right+1})()`));}
+ await pane('settings');await edit('sources');assert.equal(await evaluate(`document.querySelector('[name=id]').value`),'draft-project');assert(await evaluate(`document.querySelector('#sync-form button[type=submit]').getBoundingClientRect().bottom<=innerHeight`));await shot('mobile-editor');await click('[data-sync-dismiss]');await pane('records');await shot('mobile-records');
+ await until('!codeSyncUI.loading');await evaluate(`codeSyncUI.loading=true;codeSyncUI.error='fixture-visible-error';codeSyncUI.data.jobs[0].state='partial';renderCodeSync()`);for(const name of ['sources','settings','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.querySelector('.sync-workspace').innerText.includes('fixture-visible-error')&&document.querySelector('.sync-workspace').innerText.includes('待核对')`));}
  await evaluate(`codeSyncUI.error='';codeSyncUI.data.jobs[0].state='failed';codeSyncUI.data.jobs[0].error='XD_SYNC_SENSITIVE_CONTENT';renderCodeSync()`);
- for(const name of ['sources','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.querySelector('.sync-workspace').innerText.includes('敏感信息')&&document.querySelector('.sync-workspace').innerText.includes('执行记录核对阻断原因')`));}
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,panes:5,desktop:'1440x1000',mobile:'390x844',drafts:true,revisionConflict:true,credentialRedacted:true,scanFailureVisibleAcrossPanes:true,committedOnly:true,originalShaAndMessage:true,untrackedExcluded:true,realGitUpload:true,realCopyAgent:true,sshTransport:'fixture',sameSha:true,businessSourceUnchanged:true,consoleExceptions:0}));
+ for(const name of ['sources','settings','schedules','devices','targets','records']){await pane(name);assert(await evaluate(`document.querySelector('.sync-workspace').innerText.includes('敏感信息')&&document.querySelector('.sync-workspace').innerText.includes('执行记录核对阻断原因')`));}
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,panes:6,desktop:'1440x1000',mobile:'390x844',drafts:true,revisionConflict:true,credentialRedacted:true,scanFailureVisibleAcrossPanes:true,committedOnly:true,originalShaAndMessage:true,untrackedExcluded:true,realGitUpload:true,realCopyAgent:true,sshTransport:'fixture',sameSha:true,businessSourceUnchanged:true,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({error:codeSyncUI.error,form:document.querySelector('#sync-form-error')?.textContent,notice:document.querySelector('#notice')?.textContent,records:codeSyncUI.data?.jobs})`)}));await shot('failure')}catch{}}process.exitCode=1}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture final assertion failed');process.exitCode=1}if(tmp)fs.rmSync(tmp,{recursive:true,force:true})});
