@@ -465,6 +465,69 @@ class HubAPITests(unittest.TestCase):
         self.assertEqual(self.app.extensions['native_gateway'].preview()['fingerprint'], plan_before)
         self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
 
+    def test_project_merge_preserves_web_endpoints_health_and_bound_services(self):
+        hub = self.app.extensions['service_hub']
+        value = policy()
+        value['endpoints']['api'] = {**value['endpoints']['example'], 'port': 8111}
+        value['services']['api'] = {'unit': 'court-api.service', 'scope': 'user',
+                                    'actions': ['status', 'logs'], 'definition_sha256': None}
+        hub.import_policy(value)
+        checkout = hub.root.parent / 'court'
+        checkout.mkdir()
+        directory_alias = checkout.with_name('court-workspace')
+        directory_alias.symlink_to(checkout, target_is_directory=True)
+        web = project(id='court', name='Court', domain='court.home.test', directory=str(checkout))
+        api = project(id='court-api', name='Court API', domain='court-api.home.test', directory=str(directory_alias),
+                      endpoint='api', service='api')
+        hub.save(web)
+        hub.save(api)
+        hub.save(project(id='other', domain='other.home.test'))
+        hub.probe = lambda endpoint: {'state': 'healthy', 'status': 200, 'at': time.time()}
+        hub.health('court')
+        hub.health('court-api')
+        preview = '/api/service-hub/projects/court/merge-preview'
+        write = '/api/service-hub/projects/court/merge'
+        self.assertEqual(self.client.get(preview + '?source=court-api').status_code, 401)
+        self.login()
+        self.assertEqual(self.client.get(preview + '?source=other').json['error'], 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        def plan():
+            result = self.client.get(preview + '?source=court-api').json
+            return {'source': 'court-api', 'fingerprint': result['fingerprint']}, result['entries']
+        stale, entries = plan()
+        self.assertEqual([(e['domain'], e['target']['port'], e['services']) for e in entries],
+                         [('court.home.test', 3000, []), ('court-api.home.test', 8111, ['court-api.service'])])
+        self.assertFalse(hub.store.entry_owners())
+        hub.save({**api, 'revision': 2})
+        hub.health('court-api')
+        self.assertEqual(self.post(write, stale).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
+        body, _ = plan()
+        self.assertEqual(self.post(write, body, csrf=False).status_code, 403)
+        old_data = hub.data()
+        runtime = self.app.extensions['native_gateway']
+        before = runtime.preview()
+        self.assertEqual(self.post(write, body).json, {'project': 'court', 'entries': ['court-api']})
+        self.assertEqual(hub.data(), old_data)
+        self.assertEqual(runtime.preview(), before)
+        reopened = ServiceHub(hub.root.parent)
+        listing = reopened.listing()
+        roots = {p['id']: p for p in listing['project_groups']}
+        self.assertEqual(set(roots), {'court', 'other'})
+        self.assertEqual([e['domain'] for e in roots['court']['entries']], ['court.home.test', 'court-api.home.test'])
+        self.assertEqual(roots['court']['bound_services'], ['api'])
+        self.assertEqual(reopened.bound('court', 'api')[0]['id'], 'court-api')
+        self.assertEqual(reopened.bound('court-api', 'api')[0]['id'], 'court-api')
+        self.assertTrue(all(p['health'] for p in listing['projects'] if p['id'].startswith('court')))
+        self.assertEqual(self.post('/api/service-hub/projects/court/remove', {'revision': 1, 'confirmation': 'Court'}).json['error'],
+                         'XD_SERVICE_PROJECT_HAS_ENTRIES')
+
+        entry = {'project': 'court', 'domain': 'court-extra.home.test', 'endpoint': 'api', 'tls': None, 'enabled': True}
+        result = self.post('/api/service-hub/entries', entry)
+        self.assertEqual(result.status_code, 201)
+        new_id = result.json['entry']['id']
+        self.assertEqual(reopened.store.entry_owners(), {'court-api': 'court', new_id: 'court'})
+        self.assertEqual(self.post('/api/service-hub/entries', {**entry, 'project': 'court-api'}).status_code, 409)
+        self.assertIn('court-extra.home.test', runtime.preview()['configuration'])
+
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()
         self.app.extensions['service_hub'].import_policy(policy())

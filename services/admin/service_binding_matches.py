@@ -1,9 +1,8 @@
 """Match registered projects to observed systemd services and authorize confirmed read access."""
 from ipaddress import ip_address
 import json
-from pathlib import Path
 
-from native_services import UNIT, ServiceError, fingerprint, read_host, require, validate_policy
+from native_services import UNIT, ServiceError, fingerprint, host_directory, read_host, require, validate_policy
 
 
 def observation(runner, command, issues=None, source=None):
@@ -93,22 +92,6 @@ def owns_listener(endpoint, group, sockets, addresses):
     return bool(owners) and all(belongs(owner) for owner in owners)
 
 
-def host_directory(value):
-    if not value:
-        return None
-    path = Path(value)
-    if not path.is_absolute() or '..' in path.parts:
-        return None
-    try:
-        resolved = path.resolve(strict=True)
-        if resolved != Path('/') and resolved.is_dir():
-            return resolved
-    except (OSError, RuntimeError, ValueError):
-        # Missing paths, inaccessible directories and symlink loops cannot prove ownership.
-        return None
-    return None
-
-
 def registered_directories(projects):
     return {project['id']: host_directory(project.get('directory')) for project in projects}
 
@@ -126,10 +109,15 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, d
         if root is not None and directory is not None and directory.is_relative_to(root):
             by_dir.add(key)
             reasons['directory'] = str(directory)
-        endpoint = endpoints.get(project['endpoint'])
-        if endpoint and owns_listener(endpoint, fields.get('ControlGroup'), sockets, addresses):
-            by_port.add(key)
-            reasons['listener'] = {'host': endpoint['host'], 'port': endpoint['port']}
+        entries = project.get('entries') or [project]
+        for entry in entries:
+            endpoint = endpoints.get(entry['endpoint'])
+            if endpoint and owns_listener(endpoint, fields.get('ControlGroup'), sockets, addresses):
+                by_port.add(key)
+                reasons['listener'] = {'host': endpoint['host'], 'port': endpoint['port']}
+                if len(entries) > 1:
+                    reasons['entry_domain'] = entry['domain']
+                break
         if any(name == key or name.startswith((key + '-', key + '.')) for name in (alias, grant['unit'])):
             by_name.add(key)
             reasons['name'] = True
@@ -145,9 +133,10 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, d
 
 
 def binding_preview(listing, runner=read_host):
-    owned = {alias for project in listing['projects'] for alias in project['bound_services']}
+    catalog = listing.get('project_groups', listing['projects'])
+    owned = {alias for project in catalog for alias in project['bound_services']}
     grants = {alias: grant for alias, grant in listing['services'].items() if alias not in owned}
-    projects = [project for project in listing['projects'] if project['endpoint_available']]
+    projects = [project for project in catalog if project['endpoint_available']]
     rows = []
     if grants and projects:
         properties = unit_properties(grants, runner) if runner else {}
@@ -162,7 +151,7 @@ def binding_preview(listing, runner=read_host):
 
 def project_services(listing, runner=read_host):
     """Return only project-related candidates. Discovery never issues a grant or a binding."""
-    projects = listing['projects']
+    projects = listing.get('project_groups', listing['projects'])
     candidates = {project['id']: [] for project in projects}
     issues = set()
     if not runner or not projects:
@@ -210,7 +199,7 @@ def grant_project_reads(hub, body, runner, *, bind_selected=False):
     with hub.locked():
         listing = hub.listing()
         require(body['policy_sha256'] == listing['policy_sha256'], 'XD_SERVICE_CONFIGURATION_CHANGED')
-        projects = {p['id']: p for p in listing['projects']}
+        projects = {p['id']: p for p in listing['project_groups']}
         for entry in entries:
             project = projects.get(entry['project'])
             require(project and project['endpoint_available'], 'XD_SERVICE_BINDING_UNAVAILABLE')

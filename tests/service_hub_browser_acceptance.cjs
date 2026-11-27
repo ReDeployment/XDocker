@@ -63,8 +63,8 @@ async function main(){
  await pane('services');await shot('mobile-services');
  await evaluate(`serviceHubUI.error='fixture-visible-error';serviceHubUI.data.operations[0].state='unconfirmed';renderServiceHubPage()`);
  for(const name of ['projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
- await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',directory:info.padelu_directory,endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
- await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
+ await hubPage('projects');await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',directory:info.padelu_directory,endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
+ await sitesPage(); await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
  for(const view of ['overview','gateway']){
   await sitesPage(view);assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes('HTTP 403')`));
   assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`));assert.equal(await evaluate(`document.querySelectorAll('.sites-workspace [role=tabpanel]').length`),1);
@@ -316,6 +316,35 @@ async function main(){
    return serviceHubUI.data.services[alias].actions.join(',')==='status,logs';
  })()`));
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
+ await hubPage('projects');
+ for(const width of [1440,390]){
+  await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await click('[data-hub-merge-project="review-web"]');
+  await until("document.querySelector('#hub-merge-project-form [type=submit]:enabled')");
+  assert(await evaluate(`(()=>{
+   const screen=document.querySelector('#hub-merge-project-form'),preview=screen.querySelector('[data-merge-preview]');
+   return preview.textContent.includes('review-api.home.test')&&preview.textContent.includes('review-web.home.test')&&
+     preview.textContent.includes('review-worker.service')&&screen.querySelector('[type=submit]').getBoundingClientRect().bottom<=innerHeight+1;
+  })()`));
+  await shot(width===390?'mobile-project-merge':'desktop-project-merge');
+  if(width===1440){await click('#hub-merge-project-form [data-hub-close]');continue;}
+  await click('#hub-merge-project-form [type=submit]');
+  await until("serviceHubUI.data.entry_owners['review-api']==='review-web'&&!serviceHubUI.busy");
+ }
+ assert(await evaluate("!document.querySelector('[data-hub-edit=review-api]')"));
+ await click('[data-hub-site-project="review-web"]');
+ await until("document.querySelector('#sites-project')?.value==='review-web'");
+ assert.equal(await evaluate("document.querySelectorAll('[data-site-source=project]').length"),2);
+ assert(await evaluate("document.querySelector('[data-site-id=review-api]').textContent.includes('review-web')"));
+ await click('[data-hub-entry="new"]');
+ await form({project:'review-web',endpoint:'padelu',domain:'review-extra.home.test',enabled:false});
+ await until("document.querySelectorAll('[data-site-source=project]').length===3&&!serviceHubUI.busy");
+ await hubPage('services');
+ assert(await evaluate("!document.querySelector('[data-service-project=review-api]')&&document.querySelector('[data-service-project=review-web]').textContent.includes('review-worker.service')"));
+ const mergedAlias=await evaluate("serviceHubUI.data.project_groups.find(p=>p.id==='review-web').bound_services[0]");
+ await click('[data-hub-status="review-web"][data-hub-alias="'+mergedAlias+'"]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='review-worker.service'");
+ await click('#close-detail');
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -332,6 +361,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,mergedProjectEntries:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

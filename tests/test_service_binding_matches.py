@@ -96,6 +96,15 @@ class BindingMatchTests(unittest.TestCase):
                 self.fields['WorkingDirectory'] = str(path)
                 self.assertEqual(self.match()['evidence'], {})
 
+    def test_project_group_matches_an_api_listener_without_a_second_project_choice(self):
+        web, api = self.projects
+        web['entries'] = [{'id': p['id'], 'endpoint': p['endpoint'], 'domain': p['domain']} for p in self.projects]
+        self.projects = [web]
+        row = self.match('web-backend')
+        self.assertEqual(row['suggested'], 'web')
+        self.assertEqual(row['evidence']['web']['entry_domain'], api['domain'])
+        self.assertEqual(row['evidence']['web']['listener'], self.endpoints['api'])
+
     def test_local_wildcard_scope_and_shared_port(self):
         wildcard = ip_address('0.0.0.0')
         group = self.fields['ControlGroup']
