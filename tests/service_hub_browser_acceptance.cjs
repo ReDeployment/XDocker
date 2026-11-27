@@ -63,7 +63,7 @@ async function main(){
  await pane('services');await shot('mobile-services');
  await evaluate(`serviceHubUI.error='fixture-visible-error';serviceHubUI.data.operations[0].state='unconfirmed';renderServiceHubPage()`);
  for(const name of ['projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
- await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
+ await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',directory:'/fixture/padelu',endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
  await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
  for(const view of ['overview','gateway']){
   await sitesPage(view);assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes('HTTP 403')`));
@@ -124,7 +124,17 @@ async function main(){
   assert.equal(await evaluate("document.querySelectorAll('[data-service-project]').length"),1);
   assert.equal(await evaluate("document.querySelector('[data-hub-grant=padelu]').textContent"),'授权');
   assert(!await evaluate("!!document.querySelector('[data-service-project=padelu] [data-hub-logs]')"));
-  await click('[data-hub-grant="padelu"]');
+  await click('[data-hub-batch-grant]');
+  assert(await evaluate("document.querySelector('#hub-bulk-grant-form [type=submit]').disabled"));
+  await click('[data-grant-group]');
+  assert.equal(await evaluate("document.querySelector('#hub-bulk-grant-form [type=submit]').textContent"),'确认授权 3 项');
+  await click('#hub-bulk-grant-form [name=grant]');
+  assert(await evaluate("document.querySelector('[data-grant-group]').indeterminate&&document.querySelector('[data-grant-all]').indeterminate"));
+  assert(await evaluate("document.querySelector('#hub-bulk-grant-form [type=submit]').getBoundingClientRect().bottom<=innerHeight && document.documentElement.scrollWidth<=innerWidth+2"));
+  await shot(width===390?'mobile-batch-grants':'desktop-batch-grants');
+  await click('#hub-bulk-grant-form [data-hub-close]');
+  assert.equal(await evaluate("document.querySelector('[data-hub-batch-grant]').textContent"),'批量授权（3）');
+  await click('[data-hub-grant="padelu"][data-hub-unit="padelu-web.service"]');
   assert(await evaluate(`(()=>{const form=document.querySelector('#hub-read-grant-form');const box=form.querySelector('[type=submit]').getBoundingClientRect();
     return form.querySelector('[type=submit]').textContent==='确认授权'&&form.textContent.includes('最近 100 行日志')&&
            form.textContent.includes('PadelU')&&form.textContent.includes('padelu-web.service')&&form.textContent.includes('127.0.0.1:15173')&&
@@ -210,7 +220,7 @@ async function main(){
  await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='browser-project-backend.service'");
  await click('#close-detail');
  assert(await evaluate("!document.querySelector('[data-hub-action][data-hub-alias=browser-project-backend]')&&document.querySelector('[data-hub-batch]').disabled"));
- await click('[data-hub-grant="padelu"]');
+ await click('[data-hub-grant="padelu"][data-hub-unit="padelu-web.service"]');
  await click('#hub-read-grant-form [type=submit]');
  await until("!serviceHubUI.busy&&document.querySelector('[data-project-service-filter]')?.value==='pending'&&document.querySelector('[data-service-project=padelu] [data-hub-bind-alias]')");
  assert(await evaluate("!serviceHubUI.data.projects.find(p=>p.id==='padelu').bound_services.length"));
@@ -228,6 +238,14 @@ async function main(){
  await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-content pre')?.textContent.includes('[REDACTED]')");
  await click('#close-detail');
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
+ await click('[data-hub-batch-grant]');
+ await click('[data-grant-all]');
+ assert.equal(await evaluate("document.querySelector('#hub-bulk-grant-form [type=submit]').textContent"),'确认授权 2 项');
+ await click('#hub-bulk-grant-form [type=submit]');
+ await until("!serviceHubUI.busy&&!document.querySelector('#hub-dialog').open&&document.querySelector('[data-project-service-filter]').value==='pending'");
+ assert(await evaluate("document.querySelector('[data-hub-batch-grant]').disabled&&document.querySelector('[data-hub-batch]').textContent==='批量绑定（2）'"));
+ assert.equal(await evaluate("serviceHubUI.data.projects.find(p=>p.id==='padelu').bound_services.length"),1);
+ await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -244,6 +262,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

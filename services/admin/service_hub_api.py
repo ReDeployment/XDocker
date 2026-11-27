@@ -4,7 +4,7 @@ from flask import jsonify, request
 from native_services import ServiceHub, ServiceError, probe_endpoint
 from gateway_runtime import GatewayRuntime
 from registry_store import RegistryError
-from service_binding_matches import binding_preview, grant_project_read, project_services, read_host
+from service_binding_matches import binding_preview, grant_project_reads, project_services, read_host
 
 
 def register_service_hub(app,state,audit,redactor,domains):
@@ -20,6 +20,7 @@ def register_service_hub(app,state,audit,redactor,domains):
         try:
             value=hub.listing();value['native']=bool(app.config.get('NATIVE_MODE'))
             value['operations_enabled']=bool(app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED'))
+            value['batch_read_grants_available'] = True
             if request.args.get('project_services') == '1':
                 runner = app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host) if value['native'] else None
                 value['project_services'] = project_services(value, runner)
@@ -44,14 +45,24 @@ def register_service_hub(app,state,audit,redactor,domains):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
 
+    @app.post('/api/service-hub/read-grants')
     @app.post('/api/service-hub/projects/<identifier>/read-grants')
-    def hub_grant_read(identifier):
+    def hub_grant_read(identifier=None):
         try:
             if not (app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED')):
                 raise ServiceError('XD_SERVICE_OPERATIONS_DISABLED')
-            grant = grant_project_read(hub, identifier, request.get_json(), app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host))
-            audit('service-read-grant', identifier + '/' + grant['scope'] + '/' + grant['unit'], 'success')
-            return jsonify(grant=grant), 201
+            body = request.get_json()
+            if identifier is not None:
+                if not isinstance(body, dict) or set(body) != {'scope', 'unit', 'revision', 'policy_sha256'}:
+                    raise ServiceError('XD_SERVICE_GRANT_INVALID')
+                entry = {key: body[key] for key in ('scope', 'unit', 'revision')}
+                body = {'policy_sha256': body['policy_sha256'], 'grants': [{'project': identifier, **entry}]}
+            grants = grant_project_reads(hub, body, app.config.get('SERVICE_HUB_MATCH_RUNNER', read_host))
+            for grant in grants:
+                audit('service-read-grant', '/'.join(grant[k] for k in ('project', 'scope', 'unit')), 'success')
+            if identifier is not None:
+                return jsonify(grant={k: v for k, v in grants[0].items() if k != 'project'}), 201
+            return jsonify(grants=grants), 201
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
 

@@ -174,23 +174,37 @@ def project_services(listing, runner=read_host):
     return {'candidates': candidates, 'unavailable': sorted(issues)}
 
 
-def grant_project_read(hub, project_id, body, runner):
-    require(isinstance(body, dict) and set(body) == {'scope', 'unit', 'revision', 'policy_sha256'},
-            'XD_SERVICE_GRANT_INVALID')
+def grant_project_reads(hub, body, runner):
+    require(isinstance(body, dict) and set(body) == {'grants', 'policy_sha256'}, 'XD_SERVICE_GRANT_INVALID')
+    entries = body['grants']
+    require(isinstance(entries, list) and 1 <= len(entries) <= 100, 'XD_SERVICE_GRANT_INVALID')
+    for entry in entries:
+        require(isinstance(entry, dict) and set(entry) == {'project', 'revision', 'scope', 'unit'}
+                and all(isinstance(entry[key], str) for key in ('project', 'scope', 'unit')), 'XD_SERVICE_GRANT_INVALID')
     with hub.locked():
         listing = hub.listing()
         require(body['policy_sha256'] == listing['policy_sha256'], 'XD_SERVICE_CONFIGURATION_CHANGED')
-        project = next((p for p in listing['projects'] if p['id'] == project_id), None)
-        require(project and project['endpoint_available'], 'XD_SERVICE_BINDING_UNAVAILABLE')
-        require(type(body['revision']) is int and project['revision'] == body['revision'], 'XD_SERVICE_REVISION_CONFLICT')
-        candidates = project_services(listing, runner)['candidates'][project_id]
-        match = next((c for c in candidates if c['scope'] == body['scope'] and c['unit'] == body['unit']), None)
-        require(match and match['can_grant_read'], 'XD_SERVICE_READ_MATCH_REQUIRED')
-        alias = 'read-' + fingerprint([match['scope'], match['unit']])[:24]
+        projects = {p['id']: p for p in listing['projects']}
+        for entry in entries:
+            project = projects.get(entry['project'])
+            require(project and project['endpoint_available'], 'XD_SERVICE_BINDING_UNAVAILABLE')
+            require(type(entry['revision']) is int and project['revision'] == entry['revision'], 'XD_SERVICE_REVISION_CONFLICT')
+
+        candidates = project_services(listing, runner)['candidates']
+        eligible = {(pid, c['scope'], c['unit']) for pid, rows in candidates.items() for c in rows if c['can_grant_read']}
         policy = hub.policy()
-        require(alias not in policy['services'] and all(alias not in p['bound_services'] for p in listing['projects']),
-                'XD_SERVICE_BINDING_UNAVAILABLE')
-        grant = {'unit': match['unit'], 'scope': match['scope'], 'actions': ['status', 'logs'], 'definition_sha256': None}
-        validate_policy({**policy, 'services': {**policy['services'], alias: grant}})
-        hub.store.add_read_grant(alias, grant['scope'], grant['unit'], policy['revision'])
-        return {'alias': alias, 'unit': grant['unit'], 'scope': grant['scope'], 'actions': grant['actions']}
+        reserved = set(policy['services']) | {a for p in projects.values() for a in p['bound_services']}
+        additions = {}
+        results = []
+        for entry in entries:
+            pid, scope, unit = entry['project'], entry['scope'], entry['unit']
+            require((pid, scope, unit) in eligible, 'XD_SERVICE_READ_MATCH_REQUIRED')
+            alias = 'read-' + fingerprint([scope, unit])[:24]
+            require(alias not in additions, 'XD_SERVICE_GRANT_INVALID')
+            require(alias not in reserved, 'XD_SERVICE_BINDING_UNAVAILABLE')
+            grant = {'scope': scope, 'unit': unit, 'actions': ['status', 'logs']}
+            additions[alias] = {**grant, 'definition_sha256': None}
+            results.append({'project': pid, 'alias': alias, **grant})
+        validate_policy({**policy, 'services': {**policy['services'], **additions}})
+        hub.store.add_read_grants(additions, policy['revision'])
+        return results

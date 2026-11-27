@@ -53,8 +53,9 @@ def main():
             if command[0] == 'systemctl':
                 units = command[command.index('--') + 1:]
                 if units == ['*.service']:
-                    units = ['padelu-web.service', 'browser-project-backend.service', 'unrelated.service'] if '--user' in command else []
+                    units = ['padelu-web.service', 'tasks.service', 'worker.service', 'browser-project-backend.service', 'unrelated.service'] if '--user' in command else []
                 output = '\n\n'.join(f'Id={unit}\nLoadState=loaded\nControlGroup=/fixture/{unit}'
+                                      + ('\nWorkingDirectory=/fixture/padelu/jobs' if unit in ('tasks.service', 'worker.service') else '')
                                       for unit in units)
             elif command[0] == 'ss' and '-4' in command:
                 output = 'LISTEN 0 5 127.0.0.1:3000 0.0.0.0:* cgroup:/fixture/browser-project-backend.service'

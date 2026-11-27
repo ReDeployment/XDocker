@@ -202,12 +202,15 @@ class RegistryStore:
             db.execute("DELETE FROM registry_meta WHERE name GLOB 'web-read:*'")
             self._save_policy(db,value)
 
-    def add_read_grant(self, alias, scope, unit, revision):
+    def add_read_grants(self, additions, revision):
         with self.connection(write=True) as db:
-            updated = db.execute('UPDATE gateway_settings SET revision=revision+1 WHERE singleton=1 AND revision=?', (revision,))
+            updated = db.execute('UPDATE gateway_settings SET revision=revision+? WHERE singleton=1 AND revision=?',
+                                 (len(additions), revision))
             require(updated.rowcount == 1, 'XD_SERVICE_POLICY_REVISION_CONFLICT')
-            db.execute('INSERT INTO service_grants VALUES(?,?,?,?,NULL)', (alias, scope, unit, encoded(['status', 'logs'])))
-            db.execute('INSERT INTO registry_meta VALUES(?,?)', ('web-read:' + alias, str(revision + 1)))
+            for offset, (alias, grant) in enumerate(additions.items(), start=1):
+                db.execute('INSERT INTO service_grants VALUES(?,?,?,?,NULL)',
+                           (alias, grant['scope'], grant['unit'], encoded(['status', 'logs'])))
+                db.execute('INSERT INTO registry_meta VALUES(?,?)', ('web-read:' + alias, str(revision + offset)))
 
     @staticmethod
     def _has_bindings(db):

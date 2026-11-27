@@ -344,6 +344,52 @@ class HubAPITests(unittest.TestCase):
         self.assertFalse(hub.policy()['services'])
         self.assertEqual(*hub.policies())
 
+    def test_batch_read_grants_are_atomic_and_leave_projects_unbound(self):
+        hub = self.app.extensions['service_hub']
+        hub.import_policy(policy())
+        projects = ['first', 'second']
+        for name in projects:
+            hub.save(project(id=name, domain=name + '.home.test', directory='/work/' + name))
+        listing = hub.listing()
+        entries = [{'project': name, 'revision': 1, 'unit': name + '.service', 'scope': 'user'} for name in projects]
+        body = {'grants': entries, 'policy_sha256': listing['policy_sha256']}
+        path = '/api/service-hub/read-grants'
+        inventories = []
+        def reader(command, **kwargs):
+            output = ''
+            if command[0] == 'systemctl' and '--user' in command:
+                inventories.append(command)
+                output = '\n\n'.join(f'Id={p}.service\nLoadState=loaded\nWorkingDirectory=/work/{p}/web' for p in projects)
+            return {'code': 0, 'stdout': output, 'truncated': False}
+        self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
+        self.assertEqual(self.post(path, body).status_code, 401)
+        self.login()
+        self.assertEqual(self.post(path, body, csrf=False).status_code, 403)
+        self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_OPERATIONS_DISABLED')
+        self.app.config['NATIVE_OPERATIONS_ENABLED'] = True
+        before = hub.policies()
+        for change, error in [({'revision': 3}, 'XD_SERVICE_REVISION_CONFLICT'),
+                              ({'project': 'first'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                              ({'unit': 'removed.service'}, 'XD_SERVICE_READ_MATCH_REQUIRED'),
+                              ({'actions': ['restart']}, 'XD_SERVICE_GRANT_INVALID'),
+                              (entries[0], 'XD_SERVICE_GRANT_INVALID')]:
+            response = self.post(path, {**body, 'grants': [entries[0], {**entries[1], **change}]})
+            self.assertEqual(response.json['error'], error)
+            self.assertEqual(hub.policies(), before)
+        inventories.clear()
+        result = self.post(path, body)
+        self.assertEqual(result.status_code, 201)
+        self.assertEqual(len(inventories), 1)
+        self.assertEqual([row['project'] for row in result.json['grants']], projects)
+        reopened = ServiceHub(hub.root.parent)
+        effective, imported = reopened.policies()
+        self.assertEqual(imported, before[1])
+        self.assertEqual(effective['revision'], before[0]['revision'] + 2)
+        self.assertEqual([g['actions'] for g in effective['services'].values()], [['status', 'logs']] * 2)
+        self.assertFalse(any(p['bound_services'] for p in reopened.listing()['projects']))
+        self.assertEqual(self.post(path, body).json['error'], 'XD_SERVICE_CONFIGURATION_CHANGED')
+        self.assertEqual(reopened.policies(), (effective, imported))
+
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()
         self.app.extensions['service_hub'].import_policy(policy())
