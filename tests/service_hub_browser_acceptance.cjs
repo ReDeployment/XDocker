@@ -201,13 +201,13 @@ async function main(){
    assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').disabled"));
    await click(ready+' input');
    await click(pending+' [data-bind-edit]');
-   assert.equal(await evaluate("document.querySelectorAll('[data-bind-pick]').length"),1);
-   await evaluate("(()=>{const field=document.querySelector('[data-bind-search]');field.value='padelu';field.dispatchEvent(new Event('input',{bubbles:true}));})()");
-   assert.equal(await evaluate("document.querySelector('[data-bind-pick]').dataset.bindPick"),'padelu');
+   assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-bind-pick]')].map(b=>b.dataset.bindPick)"),['browser-project','padelu']);
+   assert(!await evaluate("document.querySelector('[data-bind-search]')!==null"));
    await click('[data-bind-pick="padelu"]');
    assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 2 项');
    // Re-open only the manually chosen row. Keep the other selection, and restore its suggested candidate.
    await click(pending+' [data-bind-edit]');
+   assert(await evaluate("document.querySelector('[data-bind-pick=padelu]').matches(':first-child[aria-current=true]')"));
    await click('[data-bind-pick="browser-project"]');
    assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+2"));
    assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').getBoundingClientRect().bottom<=innerHeight"));
@@ -245,6 +245,14 @@ async function main(){
  await until("!serviceHubUI.busy&&!document.querySelector('#hub-dialog').open&&document.querySelector('[data-project-service-filter]').value==='pending'");
  assert(await evaluate("document.querySelector('[data-hub-batch-grant]').disabled&&document.querySelector('[data-hub-batch]').textContent==='批量绑定（2）'"));
  assert.equal(await evaluate("serviceHubUI.data.projects.find(p=>p.id==='padelu').bound_services.length"),1);
+ await evaluate(`(async()=>{
+   for(let i=0;i<6;i++){
+     const id='extra-'+i;
+     await api('service-hub/projects',{id,name:'Extra '+i,endpoint:'example',domain:id+'.home.test',
+       directory:null,service:null,tls:null,monitor:null,delivery:'external',enabled:false,revision:1});
+   }
+   await loadServiceHub();
+ })()`);
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
   await click('[data-hub-batch]');
@@ -253,6 +261,25 @@ async function main(){
   assert(await evaluate(`[...document.querySelectorAll('#hub-batch-form [data-bind-row]')].every(row=>
     row.querySelector('input:checked')&&row.textContent.includes('PadelU')&&row.textContent.includes(${JSON.stringify(info.padelu_directory+'/jobs')}))`));
   assert(await evaluate("document.querySelector('#hub-batch-form [type=submit]').getBoundingClientRect().bottom<=innerHeight"));
+  const lastRow='.hub-binding-row:last-child';
+  await click(lastRow+' [data-bind-edit]');
+  assert(await evaluate(`(()=>{
+    const picker=document.querySelector('[data-bind-picker]'),first=picker.querySelector('[data-bind-pick]');
+    const choice=first.getBoundingClientRect(),body=picker.closest('.hub-form-body').getBoundingClientRect();
+    return picker.querySelectorAll('[data-bind-pick]').length===8
+      &&first.dataset.bindPick==='padelu'&&first.getAttribute('aria-current')==='true'&&first.textContent.includes('推荐')
+      &&document.activeElement===first&&choice.top>=body.top-1&&choice.bottom<=body.bottom+1;
+  })()`),'Project choices must be visible when expanded at '+width);
+  await shot(width===390?'mobile-project-picker':'desktop-project-picker');
+  await evaluate(`(()=>{
+    const search=document.querySelector('[data-bind-search]');
+    search.value='extra-5.home.test';
+    search.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-bind-pick]')].map(b=>b.dataset.bindPick)"),['extra-5']);
+  await click('[data-bind-pick="extra-5"]');
+  assert(await evaluate(`document.querySelector(${JSON.stringify(lastRow)}).textContent.includes('归属项目　Extra 5')`));
+  assert.equal(await evaluate("document.querySelector('#hub-batch-form [type=submit]').textContent"),'确认绑定 2 项');
   await click('#hub-batch-form [data-hub-close]');
  }
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
