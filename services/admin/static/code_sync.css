@@ -87,6 +87,7 @@
 .repo-panel code { font-family: inherit; font-size: inherit; white-space: normal; background: none; padding: 0; }
 #repo-dialog { width: min(980px,calc(100vw - 24px)); max-height: 88vh; padding: 18px; }
 #repo-dialog .detail-head { align-items: flex-start; gap: 12px; overflow-wrap: anywhere; }
+#repo-dialog .detail-head button { flex: none; white-space: nowrap; }
 #repo-dialog .detail-head h2 { margin: 0 0 3px; }
 .repo-tabs { margin: 14px 0 8px; border-bottom: 1px solid var(--line); gap: 4px; }
 .repo-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; }
@@ -111,3 +112,7 @@
 #repo-target-form select { display: block; width: 100%; margin-top: 5px; }
 #repo-target-form .error { flex-basis: 100%; margin: 0; }
 #repo-target-form .error:empty { display: none; }
+
+@container (max-width: 420px) {
+  #repo-target-form label { flex-basis: 100%; }
+}
