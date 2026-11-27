@@ -37,6 +37,34 @@ def register_service_hub(app,state,audit,redactor,domains):
             return jsonify(project=row,runtime_started=False)
         except (OSError,ValueError,KeyError,TypeError) as exc:return failure(exc)
 
+    @app.post('/api/service-hub/entries')
+    def hub_add_entry():
+        try:
+            body = request.get_json()
+            row = hub.add_entry(body)
+            audit('service-entry-register', row['domain'], 'success')
+            return jsonify(entry=row), 201
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return failure(exc)
+
+    @app.get('/api/service-hub/projects/<identifier>/merge-preview')
+    def hub_merge_preview(identifier):
+        try:
+            return jsonify(hub.project_merge_preview(identifier, request.args.get('source'),
+                                                  manual=request.args.get('manual') == '1'))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return failure(exc)
+
+    @app.post('/api/service-hub/projects/<identifier>/merge')
+    def hub_merge_projects(identifier):
+        try:
+            body = request.get_json()
+            result = hub.merge_projects(identifier, body)
+            audit('service-project-merge', body['source'] + ' → ' + identifier, 'success')
+            return jsonify(result)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return failure(exc)
+
     @app.get('/api/service-hub/bindings/preview')
     def hub_binding_preview():
         try:

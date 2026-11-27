@@ -63,8 +63,8 @@ async function main(){
  await pane('services');await shot('mobile-services');
  await evaluate(`serviceHubUI.error='fixture-visible-error';serviceHubUI.data.operations[0].state='unconfirmed';renderServiceHubPage()`);
  for(const name of ['projects','services','records']){await pane(name);assert(await evaluate(`document.querySelector('.hub-workspace').textContent.includes('fixture-visible-error')&&document.querySelector('.hub-workspace').textContent.includes('结果未确认')`));}
- await sitesPage();await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',directory:info.padelu_directory,endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
- await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
+ await hubPage('projects');await click('[data-hub-edit="new"]');await form({id:'padelu',name:'PadelU',directory:info.padelu_directory,endpoint:'padelu',domain:'padelu-admin.home.test',service:'',monitor:'',enabled:true});await until(`!document.querySelector('#hub-dialog').open&&serviceHubUI.data.projects.length===2`);
+ await sitesPage(); await click('[data-hub-health="padelu"]');await until(`document.querySelector('.sites-workspace [role=alert]')?.textContent.includes('HTTP 403')`);
  for(const view of ['overview','gateway']){
   await sitesPage(view);assert(await evaluate(`document.querySelector('.sites-workspace').textContent.includes('HTTP 403')`));
   assert(await evaluate(`document.documentElement.scrollWidth<=innerWidth+2`));assert.equal(await evaluate(`document.querySelectorAll('.sites-workspace [role=tabpanel]').length`),1);
@@ -316,6 +316,84 @@ async function main(){
    return serviceHubUI.data.services[alias].actions.join(',')==='status,logs';
  })()`));
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
+ await hubPage('projects');
+ const waitForMergeCandidates=count=>until(`(async()=>{
+   await loadServiceHub();
+   return serviceHubUI.data.project_groups.find(p=>p.id==='review-web').merge_candidates.length===${count};
+ })()`);
+ await evaluate(`(async()=>{
+   await api('service-hub/projects',{id:'review-alt',name:'Review Alt',endpoint:'example',domain:'review-alt.home.test',directory:${JSON.stringify(info.review_directory)},
+     service:null,tls:null,monitor:null,delivery:'external',enabled:false,revision:1});
+ })()`);
+ await waitForMergeCandidates(2);
+ await click('[data-hub-merge-project="review-web"]');
+ assert(await evaluate(`(()=>{
+   const form=document.querySelector('#hub-merge-project-form');
+   return form.textContent.includes('选择要归并的旧登记')&&form.querySelectorAll('[name=source]').length===2&&
+     !form.querySelector('[name=source]:checked')&&form.querySelector('[type=submit]').disabled;
+ })()`),'Multiple merge candidates require choosing a source');
+ await click('#hub-merge-project-form [value=review-alt]');
+ await until("document.querySelector('[data-merge-preview]').textContent.includes('review-alt.home.test')");
+ await click('#hub-merge-project-form [value=review-api]');
+ await until("document.querySelector('[data-merge-preview]').textContent.includes('review-api.home.test')");
+ assert(!await evaluate("document.querySelector('[data-merge-preview]').textContent.includes('review-alt.home.test')"));
+ await click('#hub-merge-project-form [data-hub-close]');
+ await evaluate(`(async()=>{
+   await api('service-hub/projects/review-alt/remove',{revision:1,confirmation:'Review Alt'});
+ })()`);
+ await waitForMergeCandidates(1);
+ for(const width of [1440,390]){
+  await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
+  await click('[data-hub-merge-project="review-web"]');
+  await until("document.querySelector('#hub-merge-project-form [type=submit]:enabled')");
+  assert(await evaluate(`(()=>{
+   const screen=document.querySelector('#hub-merge-project-form'),preview=screen.querySelector('[data-merge-preview]');
+   return !screen.querySelector('[name=source]')&&
+     screen.querySelector('[data-merge-summary]').textContent==='将 review-api 的网站入口归到 review-web。'&&
+     preview.textContent.includes('review-api.home.test')&&preview.textContent.includes('review-web.home.test')&&
+     preview.textContent.includes('review-worker.service')&&screen.querySelector('[type=submit]').getBoundingClientRect().bottom<=innerHeight+1;
+  })()`),'Single-candidate merge shows direction and both routes at '+width);
+  await shot(width===390?'mobile-project-merge':'desktop-project-merge');
+  if(width===1440){await click('#hub-merge-project-form [data-hub-close]');continue;}
+  await click('#hub-merge-project-form [type=submit]');
+  await until("serviceHubUI.data.entry_owners['review-api']==='review-web'&&!serviceHubUI.busy");
+ }
+ assert(await evaluate("!document.querySelector('[data-hub-edit=review-api]')"));
+ await click('[data-hub-site-project="review-web"]');
+ await until("document.querySelector('#sites-project')?.value==='review-web'");
+ assert.equal(await evaluate("document.querySelectorAll('[data-site-source=project]').length"),2);
+ assert(await evaluate("document.querySelector('[data-site-id=review-api]').textContent.includes('review-web')"));
+ await click('[data-hub-entry="new"]');
+ await form({project:'review-web',endpoint:'padelu',domain:'review-extra.home.test',enabled:false});
+ await until("document.querySelectorAll('[data-site-source=project]').length===3&&!serviceHubUI.busy");
+ await hubPage('services');
+ assert(await evaluate("!document.querySelector('[data-service-project=review-api]')&&document.querySelector('[data-service-project=review-web]').textContent.includes('review-worker.service')"));
+ const mergedAlias=await evaluate("serviceHubUI.data.project_groups.find(p=>p.id==='review-web').bound_services[0]");
+ await click('[data-hub-status="review-web"][data-hub-alias="'+mergedAlias+'"]');
+ await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='review-worker.service'");
+ await click('#close-detail');
+ await hubPage('projects');
+ await click('[data-hub-merge-project="review-web"][data-hub-merge-manual]');
+ assert(await evaluate("document.querySelector('#hub-merge-project-form h2').textContent==='手动归并'"));
+ assert(await evaluate("!document.querySelector('#hub-merge-project-form [name=source]:checked')"));
+ await evaluate(`(()=>{
+   const search=document.querySelector('[data-merge-search]');
+   search.value='PadelU';search.dispatchEvent(new Event('input',{bubbles:true}));
+ })()`);
+ assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-merge-option]:not([hidden]) input')].map(o=>o.value)"),['padelu']);
+ await click('#hub-merge-project-form [value=padelu]');
+ await until("document.querySelector('#hub-merge-project-form [type=submit]:enabled')");
+ assert(await evaluate(`(()=>{
+   const preview=document.querySelector('[data-merge-preview]');
+   return preview.querySelectorAll('article').length===4&&preview.textContent.includes(${JSON.stringify(info.padelu_directory)})&&
+     preview.textContent.includes(${JSON.stringify(info.review_directory)});
+ })()`),'Manual merge preview keeps directories for every route');
+ await shot('mobile-manual-project-merge');
+ await click('#hub-merge-project-form [type=submit]');
+ await until("!serviceHubUI.busy&&serviceHubUI.data.entry_owners.padelu==='review-web'");
+ await hubPage('services');
+ await until("document.querySelector('[data-service-project=review-web]').textContent.includes('tasks.service')");
+ assert(await evaluate("!document.querySelector('[data-service-project=padelu]')&&document.querySelector('[data-service-project=review-web]').textContent.includes('padelu-web.service')"));
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -332,6 +410,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,mergedProjectEntries:true,manualProjectMerge:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

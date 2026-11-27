@@ -46,6 +46,22 @@ def safe_path(value):
     return value
 
 
+def host_directory(value):
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute() or '..' in path.parts:
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+        if resolved != Path('/') and resolved.is_dir():
+            return resolved
+    except (OSError, RuntimeError, ValueError):
+        # Missing paths, inaccessible directories and symlink loops cannot prove ownership.
+        return None
+    return None
+
+
 def proxy_loop(endpoint,gateway):
     ep,gw=ipaddress.ip_address(endpoint['host']),ipaddress.ip_address(gateway['listen'])
     return endpoint['port'] in (gateway['http_port'],gateway['https_port']) and (ep==gw or gw.is_unspecified or ep.is_loopback and gw.is_loopback)
@@ -243,23 +259,79 @@ class ServiceHub:
             if row[field] is not None:identifier(row[field])
         require(row['delivery'] in ('external','source','binary','image') and type(row['enabled']) is bool,'XD_SERVICE_PROJECT_INVALID')
 
-    def save(self,row):
-        self.validate_project(row)
+    def save(self, row):
         with self.locked():
-            policy=self.policy();data=self.data();old=data['projects'].get(row['id'])
-            require(row['revision']==(old['revision']+1 if old else 1),'XD_SERVICE_REVISION_CONFLICT')
-            require(old is not None or len(data['projects'])<100,'XD_SERVICE_CAPACITY')
-            require(row['endpoint'] in policy['endpoints'] and (row['service'] is None or row['service'] in policy['services']),'XD_SERVICE_BINDING_UNAVAILABLE')
-            require(row['domain'] not in self.domains() and not any(r['id']!=row['id'] and r['domain']==row['domain'] for r in data['projects'].values()),'XD_SERVICE_DOMAIN_CONFLICT')
-            require(row['tls'] is None or row['tls'] in policy['certificates'] and row['domain'] in policy['certificates'][row['tls']]['domains'],'XD_SERVICE_CERTIFICATE_DOMAIN_MISMATCH')
-            endpoint=policy['endpoints'][row['endpoint']];gateway=policy['gateway']
-            require(not proxy_loop(endpoint,gateway),'XD_SERVICE_PROXY_LOOP')
-            require(row['monitor'] is None or row['monitor'] in self.monitors(),'XD_SERVICE_MONITOR_UNAVAILABLE')
-            require(row['service'] not in self.store.additional_bindings(),'XD_SERVICE_UNIT_ALREADY_BOUND')
-            # One service belongs to one project; observing it never grants other aliases.
-            require(row['service'] is None or not any(r['id']!=row['id'] and r['service']==row['service'] for r in data['projects'].values()),'XD_SERVICE_UNIT_ALREADY_BOUND')
-            data['projects'][row['id']]=row;self.store.write_hub(data)
+            self._save_project(row, self.data())
         return row
+
+    def _save_project(self, row, data, *, entry_owner=None):
+        self.validate_project(row)
+        policy=self.policy();old=data['projects'].get(row['id'])
+        require(row['revision']==(old['revision']+1 if old else 1),'XD_SERVICE_REVISION_CONFLICT')
+        require(old is not None or len(data['projects'])<100,'XD_SERVICE_CAPACITY')
+        require(row['endpoint'] in policy['endpoints'] and (row['service'] is None or row['service'] in policy['services']),'XD_SERVICE_BINDING_UNAVAILABLE')
+        require(row['domain'] not in self.domains() and not any(r['id']!=row['id'] and r['domain']==row['domain'] for r in data['projects'].values()),'XD_SERVICE_DOMAIN_CONFLICT')
+        require(row['tls'] is None or row['tls'] in policy['certificates'] and row['domain'] in policy['certificates'][row['tls']]['domains'],'XD_SERVICE_CERTIFICATE_DOMAIN_MISMATCH')
+        endpoint=policy['endpoints'][row['endpoint']];gateway=policy['gateway']
+        require(not proxy_loop(endpoint,gateway),'XD_SERVICE_PROXY_LOOP')
+        require(row['monitor'] is None or row['monitor'] in self.monitors(),'XD_SERVICE_MONITOR_UNAVAILABLE')
+        require(row['service'] not in self.store.additional_bindings(),'XD_SERVICE_UNIT_ALREADY_BOUND')
+        # One service belongs to one project; observing it never grants other aliases.
+        require(row['service'] is None or not any(r['id']!=row['id'] and r['service']==row['service'] for r in data['projects'].values()),'XD_SERVICE_UNIT_ALREADY_BOUND')
+        data['projects'][row['id']]=row
+        self.store.write_hub(data, entry_owner=entry_owner, new_entry=row['id'])
+
+
+    def add_entry(self, body):
+        require(isinstance(body, dict) and set(body) == {'project', 'endpoint', 'domain', 'tls', 'enabled'},
+                'XD_SERVICE_PROJECT_INVALID')
+        project = body['project']
+        identifier(project)
+        require(isinstance(body['domain'], str), 'XD_SERVICE_DOMAIN_INVALID')
+        with self.locked():
+            data = self.data()
+            parent = data['projects'].get(project)
+            require(parent and project not in self.store.entry_owners(), 'XD_SERVICE_PROJECT_NOT_FOUND')
+            row = {**parent, **{k: body[k] for k in ('endpoint', 'domain', 'tls', 'enabled')},
+                   'id': 'entry-' + fingerprint(body['domain'])[:32], 'revision': 1,
+                   'service': None}
+            self._save_project(row, data, entry_owner=project)
+        return row
+
+    def project_merge_preview(self, target, source, *, manual=False):
+        identifier(target)
+        identifier(source)
+        require(target != source, 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        listing = self.listing()
+        groups = {row['id']: row for row in listing['project_groups']}
+        project, other = groups.get(target), groups.get(source)
+        require(project and other and (manual or source in project['merge_candidates']),
+                'XD_SERVICE_PROJECT_MERGE_INVALID')
+        domains = {row['id']: row for row in listing['projects']}
+        entries = [domains[entry['id']] for group in (project, other) for entry in group['entries']]
+        result = {
+            'source': source, 'manual': manual, 'project': {'id': target, 'name': project['name']},
+            'entries': [
+                {'id': row['id'], 'domain': row['domain'], 'revision': row['revision'], 'enabled': row['enabled'],
+                 'target': listing['endpoints'].get(row['endpoint']),
+                 'directory': str(directory) if (directory := host_directory(row.get('directory'))) else row.get('directory'),
+                 'services': [listing['services'].get(alias, {}).get('unit', alias) for alias in row['bound_services']]}
+                for row in entries
+            ],
+        }
+        return {**result, 'fingerprint': fingerprint({**result, 'policy': listing['policy_sha256']})}
+
+    def merge_projects(self, target, body):
+        require(isinstance(body, dict) and set(body) in ({'source', 'fingerprint'}, {'source', 'fingerprint', 'manual'}),
+                'XD_SERVICE_PROJECT_MERGE_INVALID')
+        manual = body.get('manual', False)
+        require(type(manual) is bool, 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        with self.locked():
+            preview = self.project_merge_preview(target, body['source'], manual=manual)
+            require(body['fingerprint'] == preview['fingerprint'], 'XD_SERVICE_CONFIGURATION_CHANGED')
+            entries = [row['id'] for row in preview['entries'] if row['id'] != target]
+            self.store.assign_entries(target, entries)
+        return {'project': target, 'entries': entries}
 
     def bind_services(self,body):
         require(isinstance(body,dict) and set(body)=={'policy_sha256','bindings'},'XD_SERVICE_BATCH_INVALID')
@@ -269,6 +341,7 @@ class ServiceHub:
             policy=self.policy()
             require(body['policy_sha256']==fingerprint(policy),'XD_SERVICE_CONFIGURATION_CHANGED')
             projects=self.data()['projects']
+            entry_owners = self.store.entry_owners()
             owners=self.store.additional_bindings()
             owners.update({p['service']:p['id'] for p in projects.values() if p['service']})
             seen=set()
@@ -282,9 +355,12 @@ class ServiceHub:
                 row=projects.get(name)
                 require(row is not None,'XD_SERVICE_PROJECT_NOT_FOUND')
                 require(type(entry['revision']) is int and row['revision']==entry['revision'],'XD_SERVICE_REVISION_CONFLICT')
-                require(alias in policy['services'] and row['endpoint'] in policy['endpoints'],'XD_SERVICE_BINDING_UNAVAILABLE')
-                require(alias not in owners or owners[alias]==name,'XD_SERVICE_UNIT_ALREADY_BOUND')
-                if alias not in owners:additions.append((alias,name))
+                endpoint_available = any(p['endpoint'] in policy['endpoints'] for p in projects.values()
+                                         if p['id'] == name or entry_owners.get(p['id']) == name)
+                require(alias in policy['services'] and endpoint_available,'XD_SERVICE_BINDING_UNAVAILABLE')
+                owner = owners.get(alias)
+                require(owner is None or owner == name or entry_owners.get(owner) == name,'XD_SERVICE_UNIT_ALREADY_BOUND')
+                if owner is None:additions.append((alias,name))
             if additions:self.store.add_bindings(additions)
             return {'added':len(additions),'already_bound':len(entries)-len(additions)}
 
@@ -294,16 +370,27 @@ class ServiceHub:
             require(row is not None and isinstance(body,dict) and set(body)=={'revision','confirmation'},'XD_SERVICE_PROJECT_INVALID')
             require(body['revision']==row['revision'] and type(body['revision']) is int,'XD_SERVICE_REVISION_CONFLICT')
             require(body['confirmation']==row['name'],'XD_SERVICE_CONFIRMATION_REQUIRED')
+            require(identifier not in self.store.entry_owners().values(),'XD_SERVICE_PROJECT_HAS_ENTRIES')
             del data['projects'][identifier];self.store.write_hub(data)
 
     def bound(self,identifier,alias=None,*,policy=None):
         data=self.data();require(identifier in data['projects'],'XD_SERVICE_PROJECT_NOT_FOUND')
         row=data['projects'][identifier]
         if policy is None:policy=self.policy()
+        rows = data['projects']
+        endpoint_available = row['endpoint'] in policy['endpoints']
         if alias is not None:
-            require(alias==row['service'] or self.store.additional_bindings().get(alias)==identifier,'XD_SERVICE_BINDING_UNAVAILABLE')
-            row={**row,'service':alias}
-        require(row['endpoint'] in policy['endpoints'] and (row['service'] is None or row['service'] in policy['services']),'XD_SERVICE_BINDING_UNAVAILABLE')
+            entry_owners = self.store.entry_owners()
+            owner = next((p['id'] for p in rows.values() if p['service'] == alias), None)
+            if owner is None:
+                owner = self.store.additional_bindings().get(alias)
+            require(owner is not None and (owner == identifier or entry_owners.get(owner) == identifier),
+                    'XD_SERVICE_BINDING_UNAVAILABLE')
+            row = {**rows[owner], 'service': alias}
+            endpoint_available = any(p['endpoint'] in policy['endpoints'] for p in rows.values()
+                                     if p['id'] == identifier or entry_owners.get(p['id']) == identifier)
+        require(endpoint_available and (row['service'] is None or row['service'] in policy['services']),
+                'XD_SERVICE_BINDING_UNAVAILABLE')
         return row,policy
 
     def health(self,identifier):
@@ -374,7 +461,27 @@ class ServiceHub:
             rows.append({**row,'bound_services':aliases,'health':snapshot if fresh else None,'last_health':snapshot if matches else None,'endpoint_available':row['endpoint'] in policy['endpoints'],
                          'service_available':all(a in policy['services'] for a in aliases),
                          'monitor_available':row['monitor'] is None or row['monitor'] in monitors})
-        return {'projects':rows,'endpoints':policy['endpoints'],
+        entry_owners = self.store.entry_owners()
+        groups = {row['id']: [] for row in rows if row['id'] not in entry_owners}
+        for row in rows:
+            groups[entry_owners.get(row['id'], row['id'])].append(row)
+        directories = {row['id']: host_directory(row.get('directory')) for row in rows if row['id'] in groups}
+        project_groups = []
+        for root in rows:
+            if root['id'] not in groups:
+                continue
+            owner = root['id']
+            entries = [root] + [row for row in groups[owner] if row['id'] != owner]
+            directory = directories[owner]
+            project_groups.append({
+                **root, 'entries': [{k: row[k] for k in ('id', 'domain', 'endpoint', 'directory')} for row in entries],
+                'endpoint_available': any(row['endpoint_available'] for row in entries),
+                'bound_services': [alias for row in entries for alias in row['bound_services']],
+                'service_available': all(row['service_available'] for row in entries),
+                'merge_candidates': [pid for pid, path in directories.items()
+                                     if pid != owner and directory is not None and path == directory],
+            })
+        return {'projects':rows,'project_groups':project_groups,'entry_owners':entry_owners,'endpoints':policy['endpoints'],
             'services':{k:{'unit':v['unit'],'scope':v['scope'],'actions':v['actions']} for k,v in policy['services'].items()},
             'certificates':{k:{'domains':v['domains']} for k,v in policy['certificates'].items()},
             'policy_sha256':fingerprint(policy),'policy_revision':policy['revision'],'gateway_enabled':policy['gateway']['enabled'],

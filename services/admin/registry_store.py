@@ -238,11 +238,37 @@ class RegistryStore:
             BEGIN SELECT RAISE(ABORT,'duplicate service'); END""")
         db.executemany('INSERT INTO project_service_bindings(alias,project) VALUES(?,?)',bindings)
 
+    @staticmethod
+    def _has_project_entries(db):
+        return db.execute("SELECT 1 FROM sqlite_master WHERE name='project_entries' AND type='table'").fetchone() is not None
+
+    def entry_owners(self):
+        with self.connection() as db:
+            if not self._has_project_entries(db):
+                return {}
+            return dict(db.execute('SELECT entry, project FROM project_entries ORDER BY entry'))
+
+    @staticmethod
+    def _assign_entries(db, project, entries):
+        # Project rows are replaced by legacy writers in a single transaction.
+        db.execute("""CREATE TABLE IF NOT EXISTS project_entries (
+            entry TEXT PRIMARY KEY REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED,
+            project TEXT NOT NULL REFERENCES projects(id) DEFERRABLE INITIALLY DEFERRED,
+            CHECK(entry != project))""")
+        db.executemany("""INSERT INTO project_entries(entry,project) VALUES(?,?)
+            ON CONFLICT(entry) DO UPDATE SET project=excluded.project""", [(entry, project) for entry in entries])
+
+    def assign_entries(self, project, entries):
+        with self.connection(write=True) as db:
+            self._assign_entries(db, project, entries)
+
     def _save_hub(self,db,data):
         db.execute('DELETE FROM projects');db.execute('DELETE FROM native_operations')
         db.executemany('INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?,?,?)',[(r['id'],r['revision'],r['name'],r['endpoint'],r['domain'],r['service'],r['monitor'],r['delivery'],r['tls'],int(r['enabled']),r.get('directory')) for r in data['projects'].values()])
         if self._has_bindings(db):
             db.execute('DELETE FROM project_service_bindings WHERE project NOT IN (SELECT id FROM projects)')
+        if self._has_project_entries(db):
+            db.execute('DELETE FROM project_entries WHERE entry NOT IN (SELECT id FROM projects)')
         for r in data['operations']:
             db.execute('INSERT INTO native_operations VALUES(?,?,?,?,?,?,?,?,?,?)',(r['id'],r['project'],r['action'],r['at'],r['state'],r.get('policy_sha256'),r.get('idempotency_key'),r.get('request_sha256'),encoded(r['result']) if 'result' in r else None,r.get('error')))
 
@@ -258,8 +284,11 @@ class RegistryStore:
                 operations.append(value)
             return {'schema':1,'projects':projects,'operations':operations}
 
-    def write_hub(self,data):
-        with self.connection(write=True) as db:self._save_hub(db,data)
+    def write_hub(self, data, *, entry_owner=None, new_entry=None):
+        with self.connection(write=True) as db:
+            self._save_hub(db, data)
+            if entry_owner is not None:
+                self._assign_entries(db, entry_owner, [new_entry])
 
     def _save_monitors(self,db,data):
         db.execute('DELETE FROM monitor_bindings');db.execute('DELETE FROM monitor_apps')
