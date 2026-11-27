@@ -25,8 +25,12 @@
 .hub-binding-row .hub-check{margin:0 0 4px}
 .hub-binding-row .binding-owner{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:12px}
 .hub-binding-row p{font-size:.875rem;color:var(--muted);margin:6px 0}
-.binding-choices{display:grid;gap:4px;max-height:200px;overflow:auto}
-.binding-choices button{text-align:left;white-space:normal}
+.binding-picker{margin-top:12px;min-width:0}
+.binding-picker label{margin:8px 0 0}
+.binding-choices{display:grid;gap:4px;max-height:220px;overflow:auto;padding:4px;overscroll-behavior:contain}
+.binding-choices button{text-align:left;white-space:normal;min-width:0}
+.binding-choices button[aria-current=true]{border-color:var(--blue)}
+.binding-choice-name{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
 .binding-choices small{display:block;overflow-wrap:anywhere}
 
 .service-filter{display:flex;align-items:center;gap:8px;margin:12px 20px;color:var(--muted)}

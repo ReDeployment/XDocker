@@ -288,9 +288,19 @@ function hubEndpointAddress({host,port}){
 
 function bindingOptions(editor, row, query){
  const text=query.trim().toLowerCase();
- const matches=editor.projects.filter(p=>text?[p.name,p.id,p.domain].some(s=>s.toLowerCase().includes(text)):Object.hasOwn(row.evidence,p.id));
- if(!matches.length)return text?'未找到匹配的登记项目。':'输入项目名称、标识或域名查找。';
- return matches.map(p=>`<button type="button" data-bind-pick="${esc(p.id)}"><strong>${esc(p.name)}</strong><small>${esc(p.domain)}${row.evidence[p.id]?' · '+esc(bindingReasons(row.evidence[p.id])):''}</small></button>`).join('');
+ const matches=editor.projects.filter(p=>[p.name,p.id,p.domain].some(value=>value.toLowerCase().includes(text)));
+ if(!matches.length)return '<p role="status">'+(text?'未找到匹配的登记项目。':'暂无可绑定的登记项目。')+'</p>';
+ const priority=p=>p.id===row.project?0:p.id===row.suggested?1:Object.hasOwn(row.evidence,p.id)?2:3;
+ matches.sort((a,b)=>priority(a)-priority(b)||a.name.localeCompare(b.name,'zh-CN'));
+ return matches.map(p=>{
+   const current=p.id===row.project;
+   const recommended=p.id===row.suggested;
+   const reason=current?'':bindingReasons(row.evidence[p.id]);
+   return `<button type="button" data-bind-pick="${esc(p.id)}" ${current?'aria-current="true"':''}>
+     <span class="binding-choice-name"><strong>${esc(p.name)}</strong>
+     ${current?badge('当前归属','blue'):''}${recommended?badge('推荐','good'):''}</span>
+     <small>${esc(p.domain)}${reason?' · '+esc(reason):''}</small></button>`;
+ }).join('');
 }
 
 function bindingRow(editor,row){
@@ -301,15 +311,17 @@ function bindingRow(editor,row){
    row.unit_observed?'未匹配到登记项目的目录或监听地址。':'未读到该服务的 systemd 信息。';
  const candidates=editor.projects.filter(p=>Object.hasOwn(row.evidence,p.id));
  const reason=project?bindingReasons(row.evidence[project.id]):hint;
+ const search=editor.projects.length>6?'<label>筛选项目<input type="search" data-bind-search autocomplete="off" placeholder="名称、标识或域名"></label>':'';
  const clues=!project&&!row.editing?candidates.slice(0,3).map(p=>`<p><b>${esc(p.name)}</b> · ${esc(bindingReasons(row.evidence[p.id]))}</p>`).join(''):'';
  return `<article class="hub-binding-row" data-bind-row="${esc(row.alias)}">
    <label class="hub-check"><input type="checkbox" aria-label="本次绑定 ${esc(row.unit)}" ${row.included?'checked':''} ${project&&!row.editing?'':'disabled'}><strong>${esc(row.unit)}</strong></label>
    <small>${row.scope==='user'?'用户级':'系统级'} · ${esc(row.actions.map(a=>grantActions[a]).join('、'))}</small>
    <div class="binding-owner"><strong>${project?'归属项目　'+esc(project.name):'待确认'}</strong>
-   <button type="button" data-bind-edit>${row.editing?'收起选择':project?'更改项目':'选择项目'}</button></div>
+   <button type="button" data-bind-edit aria-expanded="${row.editing}">${row.editing?'收起选择':project?'更改项目':'选择项目'}</button></div>
    <p>${row.manual&&project?'已手动选择。':''}${esc(reason)}</p>${clues}
-   ${row.editing?`<label>查找登记项目<input type="search" data-bind-search autocomplete="off" placeholder="项目名称、标识或域名"></label>
-   <div class="binding-choices" data-bind-choices>${bindingOptions(editor,row,'')}</div>`:''}
+   ${row.editing?`<div class="binding-picker" data-bind-picker>
+   <div class="binding-choices" data-bind-choices role="group" aria-label="选择已登记项目">${bindingOptions(editor,row,'')}</div>
+   ${search}</div>`:''}
  </article>`;
 }
 
@@ -422,7 +434,10 @@ async function openBatchBindings(alias){
    if(event.target.type==='checkbox'){rowOf(event.target).included=event.target.checked;bindingCount(form);}
  });
  form.addEventListener('input',event=>{
-   if(event.target.matches('[data-bind-search]'))event.target.closest('article').querySelector('[data-bind-choices]').innerHTML=bindingOptions(editor,rowOf(event.target),event.target.value);
+   if(!event.target.matches('[data-bind-search]'))return;
+   const choices=event.target.closest('article').querySelector('[data-bind-choices]');
+   choices.innerHTML=bindingOptions(editor,rowOf(event.target),event.target.value);
+   choices.scrollTop=0;
  });
  form.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('[data-bind-search]'))event.preventDefault();});
  form.addEventListener('click',event=>{
@@ -433,7 +448,15 @@ async function openBatchBindings(alias){
      row.project=button.dataset.bindPick;row.included=true;row.manual=true;row.editing=false;
    }else{row.editing=!row.editing;}
    element.outerHTML=bindingRow(editor,row);
-   form.querySelector(`[data-bind-row="${row.alias}"] ${row.editing?'[data-bind-search]':'[data-bind-edit]'}`).focus();
+   const updated=form.querySelector(`[data-bind-row="${row.alias}"]`);
+   const toggle=updated.querySelector('[data-bind-edit]');
+   if(row.editing){
+     const picker=updated.querySelector('[data-bind-picker]');
+     (picker.querySelector('[data-bind-pick]')||toggle).focus({preventScroll:true});
+     picker.scrollIntoView({block:'nearest'});
+   }else{
+     toggle.focus();
+   }
    bindingCount(form);
  });
  bindingCount(form);
