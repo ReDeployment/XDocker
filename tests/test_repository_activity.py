@@ -93,6 +93,23 @@ class RepositoryActivityTests(unittest.TestCase):
         self.remote["merged"] = {(self.tip, "main"): 17}
         self.assertEqual(self.inspect()["summary"]["pending"], 1)
 
+    def test_branch_difference_exposes_local_and_remote_tips_and_excludes_current_branch_from_parallel(self):
+        git(self.project, "commit", "--allow-empty", "-m", "development update")
+        advanced = text_git(self.project, "rev-parse", "HEAD")
+        self.remote["heads"]["main"] = advanced
+        d = self.inspect()
+        feature = next(b for b in d["branches"] if b["name"] == "feature")
+        counts = {row["scope"]: (row["ahead"], row["behind"]) for row in feature["differences"]}
+        self.assertEqual(counts, {"本地": (1, 1), "GitHub": (0, 1)})
+        self.assertEqual(d["summary"]["parallel"], 1)
+
+        self.projects["one"]["directory"] = str(self.feature)
+        self.projects["two"]["directory"] = str(self.feature)
+        d = self.inspect()
+        self.assertEqual(d["summary"]["branch"], "feature")
+        self.assertEqual(d["summary"]["active"], 1)
+        self.assertEqual(d["summary"]["parallel"], 0)
+
     def test_registered_alias_uses_only_the_granted_real_checkout(self):
         alias = self.workspace.parent / "registered"
         alias.symlink_to(self.project)

@@ -13,6 +13,7 @@ from host_metrics import atomic_json, read_json
 from sync_runtime import SyncError, canonical, git, require, safe_path
 
 WEEK = 7 * 86400
+SNAPSHOT_SCHEMA = 2
 ZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -235,6 +236,22 @@ def contains(path, sha, target):
     return {0: True, 1: False}.get(code)
 
 
+def branch_distance(paths, branch, development):
+    if not development:
+        return None
+    if branch == development:
+        return {"ahead": 0, "behind": 0}
+    for path in paths:
+        try:
+            ahead, behind = output(
+                path, "rev-list", "--left-right", "--count", branch + "..." + development, "--"
+            ).split()
+            return {"ahead": int(ahead), "behind": int(behind)}
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def activity_scope(hub, key, settings=None):
     keys = ("activity-target:" + key, "activity-release:" + key)
     with hub.store.db(write=settings is not None) as db:
@@ -385,12 +402,21 @@ def observe(hub, group, roots, now, remote_reader=github_state):
                     break
         return ancestry[key]
 
+    full_repos = [path for path in group["roots"].values() if path not in shallow]
+    distances = {}
+
+    def distance(sha):
+        if sha not in distances:
+            distances[sha] = branch_distance(full_repos, sha, target_sha)
+        return distances[sha]
+
     def merged(sha):
         if (sha, target) in remote["merged"]:
             return True
         if not target_sha:
             return None
-        return ancestor(sha, target_sha)
+        compared = distance(sha)
+        return compared["ahead"] == 0 if compared is not None else ancestor(sha, target_sha)
 
     def push_status(ours, theirs):
         if not ours:
@@ -436,6 +462,12 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         push = push_status(ours, theirs)
         if name == target:
             summary["target_push"] = push
+        differences = []
+        for sha in sorted(tips):
+            scope = "本地" if sha in ours else ("GitHub" if live else "本机 origin")
+            if sha in ours and sha in theirs:
+                scope = "本地与远端" if live else "本地与本机 origin"
+            differences.append({"sha": sha, "scope": scope, **(distance(sha) or {})})
         latest = max([stamp] + [pr["updated"] for pr in pull])
         detail["branches"].append(
             {
@@ -446,6 +478,8 @@ def observe(hub, group, roots, now, remote_reader=github_state):
                 "remote_sha": sorted(theirs),
                 "latest": latest or None,
                 "merge": merge,
+                "differences": differences,
+                "parallel": bool(reasons) and name != summary["branch"],
                 "push": push,
                 "prs": pull,
                 "prs_known": remote["prs"] is not None,
@@ -457,6 +491,7 @@ def observe(hub, group, roots, now, remote_reader=github_state):
     branches.sort(key=lambda b: (not b["reasons"], -(b["latest"] or 0), b["name"]))
     summary.update(
         active=sum(bool(b["reasons"]) for b in branches),
+        parallel=sum(b["parallel"] for b in branches),
         pending=sum(b["merge"] == "pending" for b in branches) if target_sha else None,
         unknown_merges=sum(b["merge"] == "unknown" for b in branches),
         latest=max([b["latest"] or 0 for b in branches] + [w.get("commit_at", 0) for w in trees], default=0)
@@ -527,7 +562,10 @@ class ActivityMonitor:
                     "仓库检查未完成（" + (str(error) if isinstance(error, SyncError) else "读取失败") + "）"
                 ]
             repos[g["id"]] = d
-        atomic_json(self.file, {"at": now, "slot": slot(now), "request": request, "repos": repos})
+        atomic_json(
+            self.file,
+            {"schema": SNAPSHOT_SCHEMA, "at": now, "slot": slot(now), "request": request, "repos": repos},
+        )
         self.progress("complete", len(groups), len(groups), "")
 
     def progress(self, state, done, total, name):
@@ -540,8 +578,10 @@ class ActivityMonitor:
         while not stopping.is_set():
             try:
                 snap = self.snapshot()
-                if snap.get("slot") != slot(time.time()) or snap.get("request", "") != (
-                    self.hub.store.metadata("activity-request") or ""
+                if (
+                    snap.get("schema") != SNAPSHOT_SCHEMA
+                    or snap.get("slot") != slot(time.time())
+                    or snap.get("request", "") != (self.hub.store.metadata("activity-request") or "")
                 ):
                     self.collect(stopping=stopping)
             except (OSError, ValueError, KeyError, TypeError):

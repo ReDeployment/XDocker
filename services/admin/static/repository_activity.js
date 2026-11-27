@@ -1,8 +1,7 @@
 'use strict';
 
 const repositoryView = {scope:'all', detail:null, section:'branches', filter:'all', treeBranch:'', scopeDraft:null, request:0};
-const branchFilters = {all:'全部分支',active:'推进中',pending:'待合入'};
-const mergeLabels = {target:'开发主干',release:'发布分支',pending:'有待合入提交',merged:'已合入',unknown:'待核实'};
+const branchFilters = {all:'全部分支',parallel:'并行开发',pending:'待合入'};
 const observationDate = stamp => stamp ? date(stamp*1000) : '未取得';
 const activityOptions = (values,selected) => Object.entries(values).map(([key,label]) =>
   `<option value="${esc(key)}" ${key===selected?'selected':''}>${esc(label)}</option>`).join('');
@@ -24,7 +23,7 @@ function repositoryOverview(activity){
   const missing=all.length-available.length;
   const scopes={all:'全部登记',observed:'已识别仓库',missing:'目录待核对'};
   const list=all.filter(r=>repositoryView.scope==='all'||(repositoryView.scope==='missing')===(r.branch_count==null))
-    .sort((a,b)=>(b.active??-1)-(a.active??-1)||(b.latest||0)-(a.latest||0)||a.name.localeCompare(b.name));
+    .sort((a,b)=>(b.parallel??b.active??-1)-(a.parallel??a.active??-1)||(b.latest||0)-(a.latest||0)||a.name.localeCompare(b.name));
   const progress=activity.progress;
   const running=progress.state==='running';
   const state=running?`正在检查 ${progress.done} / ${progress.total} · ${esc(progress.name)}`:
@@ -33,22 +32,21 @@ function repositoryOverview(activity){
   const header=`<div class="repo-tools"><div><strong>${available.length} 个仓库 · ${missing} 项目录待核对</strong><small role="status">${state} · 每日 02:00（上海时间）</small></div>
     <div class="actions"><select aria-label="筛选仓库" id="repo-scope">${activityOptions(scopes,repositoryView.scope)}</select>
     <button type="button" data-repo-refresh ${!activity.available||running||activity.pending?'disabled':''}>立即检查</button></div></div>`;
-  function metric(row,key){
-    if(row[key]==null)return key==='pending'?'待合入 · 待核实':'待核实';
-    const label=(key==='active'&&row.partial)||(key==='pending'&&row.unknown_merges)?'已见 '+row[key]:row[key];
-    const caption=key==='pending'?label+' 条待合入':label;
-    return repoButton(row,key,caption,row.name+' · '+branchFilters[key]+' '+label);
-  }
   const rows=list.map(r=>{
     const identity=repoButton(r,'all',r.name,r.name+' · 查看仓库详情')+`<small>${esc(r.repository||r.notes[0]||'目录待核对')}</small>`;
     const branch=r.branch?`<code title="${esc(r.directory)}">${esc(r.branch)}</code>`:'未检测到';
-    const development=metric(r,'pending')+(r.target?'<small>→ '+esc(r.target)+(r.target_push==='本地有待推送提交'?' · 本地待推送':'')+'</small>':'');
-    const release=r.release?repoButton(r,'release',r.release.count==null?'待发布 · 待核实':r.release.count+' 个提交待发布',
-      r.name+' · 查看待发布提交')+'<small>→ '+esc(r.release.branch)+'</small>':'';
-    return '<tr>'+activityCell('仓库',identity)+activityCell('当前检出分支',branch)+activityCell('推进中',metric(r,'active'))+
-      activityCell('合入进度',development+(release?'<div class="repo-release-cell">'+release+'</div>':''))+activityCell('最近活动',observationDate(r.latest)+(r.partial&&r.branch_count!=null?'<small>'+esc(r.basis==='GitHub'?'部分数据待核实':r.basis)+'</small>':''))+'</tr>';
+    const development=r.target?'<strong>'+esc(r.target)+'</strong><small>'+
+      repoButton(r,'pending',r.pending==null?'待核实':r.pending+' 条待合入',r.name+' · 查看待合入分支')+'</small>'+
+      (r.pending!=null&&r.unknown_merges?'<small>'+r.unknown_merges+' 条待核实</small>':''):'待核实';
+    const release=r.release?'<strong>'+esc(r.release.branch)+'</strong><small>'+
+      repoButton(r,'release',r.release.count==null?'待核实':r.release.count+' 个提交待发布',
+        r.name+' · 查看待发布提交')+'</small>':r.branch_count==null?'待核实':'未设置';
+    const parallel=r.parallel==null?'待检查':repoButton(r,'parallel',(r.partial?'已发现 ':'')+r.parallel+' 条分支',r.name+' · 查看并行开发分支');
+    const basis=r.partial&&r.branch_count!=null?'<small>'+esc(r.basis==='GitHub'?'部分数据待核实':'按本机记录')+'</small>':'';
+    return '<tr>'+activityCell('仓库',identity)+activityCell('当前开发分支',branch)+
+      activityCell('开发主干',development)+activityCell('发布分支',release)+activityCell('并行开发',parallel+basis)+'</tr>';
   });
-  return `<section class="panel repo-panel">${header}${table(['仓库','当前检出分支','推进中','合入进度','最近活动'],rows)}</section>`;
+  return `<section class="panel repo-panel">${header}${table(['仓库','当前开发分支','开发主干','发布分支','并行开发'],rows)}</section>`;
 }
 
 async function openRepository(id,filter){
@@ -67,20 +65,45 @@ async function openRepository(id,filter){
     if(!dialog.open)dialog.showModal();
   }catch(error){if(seq===repositoryView.request)notice(error.message,true);}
 }
+function branchDifference(branch){
+  const comparisons=branch.differences||[];
+  if(!comparisons.length)return '待核实';
+  return '<div>'+comparisons.map(({sha,scope,ahead,behind})=>{
+    const counts=ahead==null?'待核实':ahead===0&&behind===0?'与主干一致':`独有 ${ahead} · 落后 ${behind}`;
+    return comparisons.length===1?counts:`<small>${esc(scope)} · ${esc(sha.slice(0,10))}</small><span>${counts}</span>`;
+  }).join('')+'</div>';
+}
+function branchDecision(branch,summary){
+  if(branch.merge==='target')return '开发主干';
+  if(branch.merge==='release')return '发布分支';
+  if(branch.merge==='merged'){
+    return branch.differences?.some(d=>d.ahead>0)?'已有 PR 合入记录':'无需合入';
+  }
+  if(branch.merge==='unknown')return '合入状态待核实';
+  if(branch.prs.some(pr=>pr.base===summary.target))return '查看合入 PR';
+  return branch.parallel||branch.name===summary.branch?'核对后合入':'核对是否仍需合入';
+}
 function branchTable(detail){
-  const list=detail.branches.filter(b=>repositoryView.filter==='all'||(repositoryView.filter==='active'?b.reasons.length:b.merge==='pending'));
+  const s=detail.summary;
+  const list=detail.branches.filter(b=>repositoryView.filter==='all'||(repositoryView.filter==='parallel'?b.parallel:b.merge==='pending'));
+  list.sort((a,b)=>Number(b.name===s.branch)-Number(a.name===s.branch)||Number(Boolean(b.parallel))-Number(Boolean(a.parallel)));
   const rows=list.map(b=>{
     const workspaces=b.directories.length?`<button class="repo-link" type="button" data-repo-worktrees="${esc(b.name)}">${b.directories.length} 个工作目录</button>`:'无检出目录';
-    const links=b.prs.map(pr=>`<a href="https://github.com/${esc(detail.summary.repository)}/pull/${pr.number}" target="_blank" rel="noreferrer">#${pr.number} → ${esc(pr.base)}</a>`).join(' · ');
-    const latest=b.sha.map(s=>esc(s.slice(0,10))+(b.tip_dates?.[s]?' · '+observationDate(b.tip_dates[s]):'')).join(' / ');
-    return '<tr>'+activityCell('分支',`<strong>${esc(b.name)}</strong><small>${latest}</small>`)+
-      activityCell('开发活动',(b.reasons.map(esc).join(' · ')||'暂无推进信号')+`<small>${workspaces}</small>`)+
-      activityCell('推送与合入',esc(b.push)+'<small>'+mergeLabels[b.merge]+'</small>')+
-      activityCell('开放 PR',links||(b.prs_known?'无':'未核实'))+'</tr>';
+    const links=b.prs.map(pr=>`<a href="https://github.com/${esc(s.repository)}/pull/${pr.number}" target="_blank" rel="noreferrer">PR #${pr.number} → ${esc(pr.base)}</a>`).join(' · ');
+    const latest=b.sha.map(sha=>esc(sha.slice(0,10))+(b.tip_dates?.[sha]?' · '+observationDate(b.tip_dates[sha]):'')).join(' / ');
+    const role=b.name===s.branch?'当前开发':b.parallel?'并行开发':'';
+    const status=`<span class="${b.merge==='pending'?'sync-source-issue':''}">${branchDecision(b,s)}</span>`;
+    const activity=b.reasons.map(esc).join(' · ');
+    return '<tr>'+activityCell('分支',`<strong>${esc(b.name)}</strong>${role?`<small>${role}</small>`:''}<small>${latest}</small>`)+
+      activityCell('与开发主干差异',branchDifference(b))+
+      activityCell('合入建议',status+`<small>${esc(b.push)}</small>`)+
+      activityCell('开发活动',(activity?`<span>${activity}</span>`:'')+`<small>${workspaces}</small>`+
+        `<small>${links||(b.prs_known?'无开放 PR':'PR 待核实')}</small>`)+'</tr>';
   });
-  return `<div class="repo-filter"><label>显示 <select id="repo-branch-filter">${activityOptions(branchFilters,repositoryView.filter)}</select></label><span>${list.length} 条</span></div>
-    ${table(['分支 / 最新提交','开发活动','推送与合入','开放 PR'],rows)}
-    <p class="sync-help">推进中按分支去重。除目标分支外，工作区有改动、有开放 PR，或近 7 天有待合入提交，均计入。</p>`;
+  const heading=s.target?'与 '+esc(s.target)+' 的差异':'与开发主干的差异';
+  return `<div class="repo-filter"><label>显示 <select id="repo-branch-filter">${activityOptions(branchFilters,repositoryView.filter)}</select></label><span>${list.length} 条分支</span></div>
+    ${table(['分支',heading,'合入建议','开发活动'],rows)}
+    <p class="sync-help">独有是该分支还有多少提交没进主干。落后是主干还有多少提交没进该分支。并行开发按未提交改动、开放 PR 和近 7 天的待合入提交判断。</p>`;
 }
 function worktreeTable(detail){
   const branchFilter=repositoryView.treeBranch;
@@ -115,9 +138,8 @@ function scopeOptions(branches,selected){
 }
 function renderRepositoryDetail(){
   const d=repositoryView.detail,r=d.summary;
-  const sections={branches:'分支 '+(r.branch_count??'—'),trees:'工作目录（worktree） '+(r.worktree_count??'—')};
-  if(r.release)sections.release='待发布提交';
-  sections.settings='检查范围';
+  const sections={branches:'分支差异',trees:'工作目录 '+(r.worktree_count??'')};
+  if(repositoryView.section==='release')sections.release='发布差异';
   const controls=Object.entries(sections).map(([id,label])=>`<button type="button" data-repo-tab="${id}" aria-pressed="${id===repositoryView.section}">${esc(label)}</button>`).join('');
   let body;
   if(repositoryView.section==='settings'){
@@ -137,7 +159,9 @@ function renderRepositoryDetail(){
   else if(repositoryView.section==='release')body=releaseTable(d);
   else body=repositoryView.section==='branches'?branchTable(d):worktreeTable(d);
   const notes=r.notes.map(esc).join(' · ');
-  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>${esc(r.repository||r.notes[0]||'目录待核对')} · 开发主干 ${esc(r.target||'待核实')}</small></div><button type="button" data-repo-close>关闭</button></div>
+  const configButton=`<button type="button" data-repo-tab="settings" aria-pressed="${repositoryView.section==='settings'}">配置分支</button>`;
+  const coverage=r.partial&&r.branch_count!=null?' · '+esc(r.basis||'部分数据待核实'):'';
+  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>开发主干 ${esc(r.target||'待核实')}${coverage}</small></div><div class="repo-head-actions">${configButton}<button type="button" data-repo-close>关闭</button></div></div>
     <div class="repo-tabs" role="group" aria-label="仓库详情分区">${controls}</div>${notes?`<p class="repo-note">${notes}</p>`:''}<div class="repo-body">${body}</div>`;
 }
 document.addEventListener('change',event=>{

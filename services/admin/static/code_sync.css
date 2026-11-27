@@ -83,7 +83,7 @@
 .repo-panel table, #repo-dialog table { width: 100%; min-width: 0; table-layout: fixed; }
 .repo-panel td, .repo-panel th, #repo-dialog td, #repo-dialog th { padding: 10px 12px; vertical-align: top; overflow-wrap: anywhere; }
 .repo-panel th:nth-child(1), .repo-panel th:nth-child(2) { width: 26%; }
-.repo-panel th:nth-child(3), .repo-panel th:nth-child(4) { width: 12%; }
+.repo-panel th:nth-child(3), .repo-panel th:nth-child(4) { width: 17%; }
 .repo-panel code { font-family: inherit; font-size: inherit; white-space: normal; background: none; padding: 0; }
 #repo-dialog { width: min(980px,calc(100vw - 24px)); max-height: 88vh; padding: 18px; }
 #repo-dialog .detail-head { align-items: flex-start; gap: 12px; overflow-wrap: anywhere; }
@@ -105,7 +105,12 @@
   .repo-tabs button { font-size: 13px; padding-inline: 5px; }
 }
 
-.repo-release-cell { margin-top: 6px; }
+#repo-dialog .repo-head-actions { display: flex; gap: 4px; flex: none; }
+#repo-dialog .repo-head-actions button { padding-inline: 8px; }
+.sync-push-nav { display: flex; flex-flow: row wrap; gap: 8px; margin-bottom: 12px; }
+.sync-push-nav button { color: var(--ink); border: 1px solid var(--line); background: white; padding: 7px 10px; }
+.sync-push-nav button:hover { background: #edf4ff; }
+.sync-push-nav [aria-current="page"] { color: var(--blue); border-color: #b9cffc; background: #edf4ff; }
 .repo-direction { overflow-wrap: anywhere; }
 #repo-target-form { align-items: end; margin: 4px 0 16px; }
 #repo-target-form label { flex: 1 1 180px; min-width: 0; }
@@ -115,4 +120,5 @@
 
 @container (max-width: 420px) {
   #repo-target-form label { flex-basis: 100%; }
+  #repo-dialog .detail-head { flex-wrap: wrap; }
 }

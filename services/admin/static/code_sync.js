@@ -105,11 +105,18 @@ function renderCodeSync(){
   if(projectFilter||reviewLink)body='<div class="sync-toolbar">'+projectFilter+reviewLink+'</div>'+body;
  }
  if(d?.mode_migration&&['schedules','targets'].includes(v))body+='<p class="sync-help">同步策略已升级为仅推送已有提交。重新启用原计划前，请核对分支与目标设备授权。</p>';
- const tabs=Object.entries(codeSyncViews).map(([key,label])=>({key,label,count:key==='settings'&&v!=='settings'&&issues.size?issues.size+' 待核对':undefined}));
+ const tabs=[{key:'sources',label:'仓库概览'},{key:'settings',label:'推送管理',count:issues.size?issues.size+' 待核对':undefined}];
+ const section=v==='sources'?'sources':'settings';
+ if(section==='settings'){
+  const controls=Object.entries(codeSyncViews).filter(([key])=>key!=='sources').map(([key,label])=>
+    `<button type="button" data-sync-section="${key}" aria-current="${key===v?'page':'false'}">${label}</button>`
+  ).join('');
+  body=`<nav class="sync-push-nav" aria-label="推送管理">${controls}</nav>`+body;
+ }
  const warnings=alerts.map(t=>`<div class="sync-alert" role="alert">${esc(t)}</div>`).join('');
- $('content').innerHTML='<div class="sync-workspace">'+warnings+verticalTabs('code-sync','代码同步分区',tabs,v,body)+'</div>';
+ $('content').innerHTML='<div class="sync-workspace">'+warnings+verticalTabs('code-sync','代码同步分区',tabs,section,body)+'</div>';
  if(innerWidth<=720){
-  const tab=$('view-code-sync-'+v),list=tab.parentElement;
+  const tab=$('view-code-sync-'+section),list=tab.parentElement;
   list.scrollLeft+=Math.min(0,tab.getBoundingClientRect().left-list.getBoundingClientRect().left)+Math.max(0,tab.getBoundingClientRect().right-list.getBoundingClientRect().right);
  }
 }
@@ -173,6 +180,13 @@ document.addEventListener('click',async event=>{
   return;
  }
  if(event.target.closest('#workspace-navigation [data-tab]'))$('sync-nav-toggle').setAttribute('aria-expanded','false');
+ const pushSection=event.target.closest('[data-sync-section]');
+ if(pushSection){
+  const key=pushSection.dataset.syncSection;
+  selectViewModule('code-sync',key);
+  document.querySelector('[data-sync-section="'+key+'"]')?.focus();
+  return;
+ }
  if(event.target.closest('[data-sync-open-review]')){
   codeSyncUI.selected='';codeSyncUI.reviewOnly=true;selectViewModule('code-sync','settings');return;
  }

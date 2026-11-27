@@ -8,7 +8,12 @@ function rpc(method,params={},sid=session){return new Promise((resolve,reject)=>
 async function evaluate(expression){const r=await rpc('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.text+': '+r.exceptionDetails.exception?.description);return r.result.value;}
 async function until(expression){for(let i=0;i<150;i++){if(await evaluate(expression))return;await sleep(100);}throw Error('UI timeout: '+expression);}
 async function click(selector){assert(await evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)return false;e.click();return true})()`),'Missing active control: '+selector);}
-async function pane(name){await click(`[data-view="code-sync"][data-view-tab="${name}"]`);await until(`document.querySelector('#view-code-sync-panel')?.getAttribute('aria-labelledby')==='view-code-sync-${name}'`);}
+async function pane(name){
+ const section=name==='sources'?'sources':'settings';
+ if(name==='sources'||name==='settings'||!await evaluate("document.querySelector('.sync-push-nav')"))await click(`#view-code-sync-${section}`);
+ if(name!=='sources'&&name!=='settings')await click(`[data-sync-section="${name}"]`);
+ await until(`document.querySelector('#view-code-sync-panel')?.getAttribute('aria-labelledby')==='view-code-sync-${section}'&&moduleViews['code-sync']==='${name}'`);
+}
 async function shot(name){if(process.env.SYNC_UI_ARTIFACTS){fs.mkdirSync(process.env.SYNC_UI_ARTIFACTS,{recursive:true});const r=await rpc('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(process.env.SYNC_UI_ARTIFACTS,name+'.png'),Buffer.from(r.data,'base64'));}}
 async function stop(child){if(!child||child.exitCode!==null)return;try{process.kill(-child.pid,'SIGINT');}catch{}for(let i=0;i<30&&child.exitCode===null;i++)await sleep(100);if(child.exitCode===null){try{process.kill(-child.pid,'SIGKILL');}catch{}}}
 async function form(values,operation=false){await evaluate(`(()=>{const f=document.querySelector(${JSON.stringify(operation?'#sync-operation':'#sync-form')});for(const [key,value] of Object.entries(${JSON.stringify(values)})){const e=f.elements.namedItem(key);if(e.type==='checkbox')e.checked=value;else e.value=value;}f.requestSubmit(f.querySelector('button[type=submit]'));})()`);}
@@ -58,19 +63,23 @@ async function main(){
  await until(`!document.querySelector('#sync-dialog').open&&codeSyncUI.data.sources.length===1`);assert(await evaluate(`document.querySelector('.sync-workspace').textContent.includes('未暂存 1 · 新文件 1')`));await click('[data-sync-details="example"]');await until(`document.querySelector('#detail-dialog').open`);
  assert(await evaluate(`document.querySelector('.sync-source-facts').textContent.includes(${JSON.stringify(info.directory)})`));
  await click('[data-sync-preview="example"]');await until(`document.querySelector('#detail-dialog').open`);assert(await evaluate(`document.querySelector('#detail-content').textContent.includes('这些工作区改动不会进入推送')`));await click('#close-detail');await shot('desktop-sources');
- await pane('sources');await click('[data-repo-refresh]');
+ await pane('sources');
+ assert.equal(await evaluate("document.querySelector('.sync-workspace [role=tablist]').innerText"),'仓库概览\n推送管理');
+ await click('[data-repo-refresh]');
  await until('(async()=>{await loadCodeSync();return codeSyncUI.data.activity.repositories.some(r=>r.active===1&&r.pending===1&&r.worktree_count===2)})()');
  for(const [width,height] of [[1440,900],[390,844],[320,700]]){
    await rpc('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<720});
    assert(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"));
+   assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.repo-panel th'),e=>e.textContent)"),['仓库','当前开发分支','开发主干','发布分支','并行开发']);
    await shot('repository-overview-'+width);
-   await click('[data-repo-filter="active"]');await until("document.querySelector('#repo-dialog')?.open");
-   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'active');
+   await click('[data-repo-filter="parallel"]');await until("document.querySelector('#repo-dialog')?.open");
+   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'parallel');
    assert(await evaluate("document.querySelector('#repo-dialog').innerText.includes('工作区有改动')&&document.querySelector('#repo-dialog a').textContent.includes('#7')"));
+   assert(await evaluate("document.querySelector('#repo-dialog tbody').innerText.includes('独有 1 · 落后 0')&&document.querySelector('#repo-dialog tbody').innerText.includes('查看合入 PR')"));
    await shot('active-branches-'+width);await click('[data-repo-worktrees="feature"]');assert.equal(await evaluate("document.querySelectorAll('#repo-dialog tbody tr').length"),1);await click('[data-repo-all-trees]');
    assert(await evaluate("document.querySelectorAll('#repo-dialog tbody tr').length===2&&document.querySelector('#repo-dialog').scrollWidth<=document.querySelector('#repo-dialog').clientWidth+1"));
    await shot('worktrees-'+width);await click('[data-repo-tab="branches"]');
-   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'active');
+   assert.equal(await evaluate("document.querySelector('#repo-branch-filter').value"),'parallel');
    await click('[data-repo-close]');await click('[data-repo-filter="pending"]');
    await until("document.querySelector('#repo-dialog')?.open&&document.querySelector('#repo-branch-filter').value==='pending'");
    await click('[data-repo-tab="settings"]');assert(await evaluate("document.querySelector('#repo-target-form').innerText.includes('仓库默认分支')"));
@@ -94,6 +103,7 @@ async function main(){
  await shot('release-settings-320');
  await saveScope();
  await until("(async()=>{await loadCodeSync();return !document.querySelector('#repo-dialog').open&&codeSyncUI.data.activity.repositories.some(r=>r.target==='feature'&&r.release?.count===1)})()");
+ assert(await evaluate("document.querySelector('.repo-panel [data-label=开发主干]').innerText.includes('feature')&&document.querySelector('.repo-panel [data-label=发布分支]').innerText.includes('release/v1')"));
  await click('[data-repo-filter="release"]');
  await until("document.querySelector('#repo-dialog')?.open&&document.querySelector('.repo-direction')");
  assert(await evaluate("document.querySelector('#repo-dialog tbody').innerText.includes('feature work')"));
