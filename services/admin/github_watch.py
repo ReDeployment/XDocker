@@ -60,9 +60,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kw):return None
 
 
-class GitHubReader:
+class RepositoryReader:
     def __init__(self,repo,token='',gh=False):
-        if repo not in PROJECTS.values():raise WatchError('repository-not-allowlisted')
+        if not re.fullmatch(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+',repo) or repo.split('/')[1] in ('.','..'):raise WatchError('invalid-repository')
         self.repo=repo;self.token=token;self.gh=gh
         self.opener=urllib.request.build_opener(NoRedirect)
         self.deadline=time.monotonic()+45
@@ -102,6 +102,12 @@ class GitHubReader:
         except (ValueError,UnicodeError):raise WatchError('github-response-invalid') from None
         if not isinstance(data,(dict,list)):raise WatchError('github-response-invalid')
         return data,more
+
+
+class GitHubReader(RepositoryReader):
+    def __init__(self,repo,token='',gh=False):
+        if repo not in PROJECTS.values():raise WatchError('repository-not-allowlisted')
+        super().__init__(repo,token,gh)
 
 
 def sequence(reader,path,key=None):
