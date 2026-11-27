@@ -29,21 +29,21 @@ function repositoryOverview(activity){
   const state=running?`正在检查 ${progress.done} / ${progress.total} · ${esc(progress.name)}`:
     activity.pending?'等待检查':progress.state==='failed'?'检查失败，等待重试':
     activity.at?'上次检查 '+observationDate(activity.at):'等待首次检查';
-  const header=`<div class="repo-tools"><div><strong>仓库概览</strong><small>${available.length} 个仓库 · ${missing} 项目录待核对</small></div>
+  const header=`<div class="repo-tools"><div><strong>${available.length} 个仓库 · ${missing} 项目录待核对</strong><small role="status">${state} · 每日 02:00（上海时间）</small></div>
     <div class="actions"><select aria-label="筛选仓库" id="repo-scope">${activityOptions(scopes,repositoryView.scope)}</select>
     <button type="button" data-repo-refresh ${!activity.available||running||activity.pending?'disabled':''}>立即检查</button></div></div>`;
   function metric(row,key){
     if(row[key]==null)return '待核实';
-    return repoButton(row,key,row[key],row.name+' · '+branchFilters[key]+' '+row[key]);
+    const label=(key==='active'&&row.partial)||(key==='pending'&&row.unknown_merges)?'已见 '+row[key]:row[key];
+    return repoButton(row,key,label,row.name+' · '+branchFilters[key]+' '+label);
   }
   const rows=list.map(r=>{
-    const identity=repoButton(r,'all',r.name,r.name+' · 查看仓库详情')+`<small>${esc(r.repository||'目录待核对')}</small>`;
+    const identity=repoButton(r,'all',r.name,r.name+' · 查看仓库详情')+`<small>${esc(r.repository||r.notes[0]||'目录待核对')}</small>`;
     const branch=r.branch?`<code title="${esc(r.directory)}">${esc(r.branch)}</code>`:'未检测到';
-    return '<tr>'+activityCell('仓库',identity)+activityCell('登记目录当前分支',branch)+activityCell('推进中',metric(r,'active'))+
+    return '<tr>'+activityCell('仓库',identity)+activityCell('当前检出分支',branch)+activityCell('推进中',metric(r,'active'))+
       activityCell('待合入',metric(r,'pending')+(r.target?'<small>→ '+esc(r.target)+(r.target_push==='本地有待推送提交'?' · 本地待推送':'')+'</small>':''))+activityCell('最近活动',observationDate(r.latest)+(r.partial&&r.branch_count!=null?'<small>'+esc(r.basis==='GitHub'?'部分数据待核实':r.basis)+'</small>':''))+'</tr>';
   });
-  return `<section class="panel repo-panel">${header}${table(['仓库','登记目录当前分支','推进中','待合入','最近活动'],rows)}</section>
-    <p class="sync-help" role="status">${state} · 每日 02:00（上海时间）检查</p>`;
+  return `<section class="panel repo-panel">${header}${table(['仓库','当前检出分支','推进中','待合入','最近活动'],rows)}</section>`;
 }
 
 async function openRepository(id,filter){
@@ -95,13 +95,13 @@ function renderRepositoryDetail(){
   const targets=activityOptions(Object.fromEntries(d.branches.map(b=>[b.name,b.name])),r.override);
   let body;
   if(repositoryView.section==='settings'){
-    body=`<dl class="sync-source-facts"><dt>登记项目</dt><dd>${r.projects.map(esc).join('、')}</dd><dt>登记目录</dt><dd>${r.directories.map(esc).join('<br>')}</dd><dt>分支数据来源</dt><dd>${esc(r.basis||'待核对目录')}</dd><dt>检查时间</dt><dd>${observationDate(r.at)}</dd></dl>`;
+    body=`<dl class="sync-source-facts"><dt>登记项目</dt><dd>${r.projects.map(esc).join('、')}</dd><dt>登记目录</dt><dd>${r.directories.map(path=>esc(path)+(r.directory_issues?.[path]?' · '+esc(r.directory_issues[path]):'')).join('<br>')}</dd><dt>分支数据来源</dt><dd>${esc(r.basis||'待核对目录')}</dd><dt>检查时间</dt><dd>${observationDate(r.at)}</dd></dl>`;
     if(d.branches.length&&codeSyncUI.data?.activity.available)body+=`<form id="repo-target-form"><label>合入目标 <select name="branch"><option value="">仓库默认分支</option>${targets}</select></label><button type="submit">保存并检查</button></form>`;
     body+='<p class="sync-help">待合入按分支提交与目标分支的历史关系核对，并参考最近 100 个已关闭 PR 的合入记录。更早的压缩或变基合入可能需要人工核对。</p>';
   }else if(r.branch_count==null)body='<p>请核对登记目录和本机读取范围。</p>';
   else body=repositoryView.section==='branches'?branchTable(d):worktreeTable(d);
   const notes=r.notes.map(esc).join(' · ');
-  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>${esc(r.repository||'目录待核对')} · 合入目标 ${esc(r.target||'待核实')}</small></div><button type="button" data-repo-close>关闭</button></div>
+  $('repo-dialog').innerHTML=`<div class="detail-head"><div><h2 id="repo-title">${esc(r.name)}</h2><small>${esc(r.repository||r.notes[0]||'目录待核对')} · 合入目标 ${esc(r.target||'待核实')}</small></div><button type="button" data-repo-close>关闭</button></div>
     <div class="repo-tabs" role="group" aria-label="仓库详情分区">${controls}</div>${notes?`<p class="repo-note">${notes}</p>`:''}<div class="repo-body">${body}</div>`;
 }
 document.addEventListener('change',event=>{

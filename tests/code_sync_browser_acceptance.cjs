@@ -76,6 +76,9 @@ async function main(){
    await click('[data-repo-tab="settings"]');assert(await evaluate("document.querySelector('#repo-target-form').innerText.includes('仓库默认分支')"));
    await click('[data-repo-close]');
  }
+ await click('[data-repo-filter="all"]');await until("document.querySelector('#repo-dialog')?.open");
+ await click('[data-repo-tab="settings"]');await evaluate("document.querySelector('#repo-target-form select').value='feature';document.querySelector('#repo-target-form').requestSubmit(document.querySelector('#repo-target-form button'))");
+ await until("(async()=>{await loadCodeSync();return !document.querySelector('#repo-dialog').open&&codeSyncUI.data.activity.repositories.some(r=>r.target==='feature')})()");
  await pane('settings');
  await rpc('Page.reload');
  await until(`performance.getEntriesByType('navigation')[0]?.type==='reload'&&typeof codeSyncUI!=='undefined'&&codeSyncUI.data?.sources.length===1`);

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from pathlib import Path
 from threading import Lock
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -68,6 +69,8 @@ def worktrees(path, roots, common):
                 output(wt, "rev-parse", "--path-format=absolute", "--git-common-dir") == common,
                 "目录已不属于此仓库",
             )
+            if not item["branch"] and item["head"]:
+                item["commit_at"] = int(output(wt, "show", "-s", "--format=%ct", item["head"]))
             raw = local_git(
                 wt,
                 "-c",
@@ -153,6 +156,7 @@ def github_state(hub, group):
             "rate-limited": "已达访问频率上限",
             "github-network-unconfirmed": "连接失败",
             "collection-time-budget": "读取超时",
+            "github-response-too-large": "单页数据超过读取上限",
         }.get(str(error), "读取未完成")
         remote["notes"].append("GitHub " + reason)
     return remote
@@ -169,19 +173,36 @@ def candidates(hub):
     for name, directory, expected, source in entries:
         root = None
         repo = expected
+        issue = ""
         try:
-            wt = safe_path(directory, roots)
-            require(wt.is_dir(), "missing")
+            require(
+                directory and Path(directory).is_absolute() and ".." not in Path(directory).parts,
+                "未登记有效的绝对路径",
+            )
+            # Service registrations can use a host alias. Only pass the authorized real path to Git.
+            real_directory = directory if source else str(Path(directory).resolve())
+            wt = safe_path(real_directory, roots)
+            require(wt.is_dir(), "登记目录不存在")
+            issue = "目录中未找到 Git 工作区"
             root = safe_path(output(wt, "rev-parse", "--show-toplevel"), roots)
+            issue = "未找到指向 GitHub 的 origin"
             actual = canonical(output(root, "remote", "get-url", "origin"))
             require(not expected or actual.lower() == expected.lower(), "仓库来源已变化")
             repo = actual
             common = str(
                 safe_path(output(root, "rev-parse", "--path-format=absolute", "--git-common-dir"), roots)
             )
-        except (OSError, ValueError):
+            issue = ""
+        except (OSError, ValueError, RuntimeError) as error:
             root = None
-        key = repo_id(repo or "path:" + directory + ":" + name)
+            reason = str(error)
+            if reason in {"未登记有效的绝对路径", "登记目录不存在", "仓库来源已变化"}:
+                issue = reason
+            elif reason in {"XD_SYNC_PATH_NOT_GRANTED", "XD_SYNC_SYMLINK_DENIED"}:
+                issue = "目录超出已授权的源码读取范围"
+            else:
+                issue = issue or "登记目录无法读取"
+        key = repo_id(repo or "path:" + (directory or name))
         group = groups.setdefault(
             key,
             {
@@ -190,6 +211,7 @@ def candidates(hub):
                 "repository": repo,
                 "projects": [],
                 "roots": {},
+                "issues": {},
                 "directories": [],
                 "credential": None,
             },
@@ -198,6 +220,8 @@ def candidates(hub):
             group["projects"].append(name)
         if directory not in group["directories"]:
             group["directories"].append(directory)
+        if issue:
+            group["issues"][directory] = issue
         if root:
             group["roots"].setdefault(common, str(root))
         if source.get("credential"):
@@ -221,7 +245,8 @@ def observe(hub, group, roots, now, remote_reader=github_state):
         latest=None,
         target="",
         basis="",
-        notes=[],
+        notes=list(dict.fromkeys(group["issues"].values())),
+        directory_issues=group["issues"],
         partial=True,
         branch_count=None,
         worktree_count=None,
@@ -229,7 +254,7 @@ def observe(hub, group, roots, now, remote_reader=github_state):
     )
     detail = {"summary": summary, "branches": [], "worktrees": []}
     if not group["roots"]:
-        summary["notes"] = ["登记目录中未找到可读取的 GitHub 仓库"]
+        summary["notes"] = summary["notes"] or ["登记目录中未找到可读取的 GitHub 仓库"]
         return detail
     remote = remote_reader(hub, group)
     summary["notes"].extend(remote["notes"])
@@ -364,7 +389,9 @@ def observe(hub, group, roots, now, remote_reader=github_state):
     summary.update(
         active=sum(bool(b["reasons"]) for b in branches),
         pending=sum(b["merge"] == "pending" for b in branches) if target_sha else None,
-        latest=max((b["latest"] or 0 for b in branches), default=0) or None,
+        unknown_merges=sum(b["merge"] == "unknown" for b in branches),
+        latest=max([b["latest"] or 0 for b in branches] + [w.get("commit_at", 0) for w in trees], default=0)
+        or None,
         worktree_count=len(trees),
         branch_count=len(branches),
         override=override or "",

@@ -93,6 +93,21 @@ class RepositoryActivityTests(unittest.TestCase):
         self.remote["merged"] = {(self.tip, "main"): 17}
         self.assertEqual(self.inspect()["summary"]["pending"], 1)
 
+    def test_registered_alias_uses_only_the_granted_real_checkout(self):
+        alias = self.workspace.parent / "registered"
+        alias.symlink_to(self.project)
+        self.projects["two"]["directory"] = str(alias)
+        groups, _ = candidates(self.hub)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["issues"], {})
+        forbidden = self.workspace / "outside"
+        forbidden.symlink_to(self.workspace.parent)
+        self.projects["two"]["directory"] = str(forbidden)
+        groups, _ = candidates(self.hub)
+        rejected = next(g for g in groups if "Two" in g["projects"])
+        self.assertFalse(rejected["roots"])
+        self.assertIn("授权", rejected["issues"][str(forbidden)])
+
     def test_missing_remote_and_target_are_unknown(self):
         unavailable = {"default": "", "heads": None, "prs": None, "merged": {}, "notes": ["无法连接"]}
         summary = self.inspect(unavailable)["summary"]
