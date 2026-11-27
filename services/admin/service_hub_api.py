@@ -50,7 +50,8 @@ def register_service_hub(app,state,audit,redactor,domains):
     @app.get('/api/service-hub/projects/<identifier>/merge-preview')
     def hub_merge_preview(identifier):
         try:
-            return jsonify(hub.project_merge_preview(identifier, request.args.get('source')))
+            return jsonify(hub.project_merge_preview(identifier, request.args.get('source'),
+                                                  manual=request.args.get('manual') == '1'))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return failure(exc)
 

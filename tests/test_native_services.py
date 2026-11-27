@@ -528,6 +528,35 @@ class HubAPITests(unittest.TestCase):
         self.assertEqual(self.post('/api/service-hub/entries', {**entry, 'project': 'court-api'}).status_code, 409)
         self.assertIn('court-extra.home.test', runtime.preview()['configuration'])
 
+    def test_manual_merge_keeps_each_entry_directory(self):
+        hub = self.app.extensions['service_hub']
+        hub.import_policy(policy())
+        client_checkout = hub.root.parent / 'clients'
+        admin_checkout = hub.root.parent / 'admin'
+        for checkout in (client_checkout, admin_checkout):
+            checkout.mkdir()
+        for pid, directory in [('clients', client_checkout), ('clients-alt', client_checkout), ('admin', admin_checkout)]:
+            hub.save(project(id=pid, name=pid, domain=pid + '.home.test', directory=str(directory)))
+        existing = hub.project_merge_preview('clients', 'clients-alt')
+        hub.merge_projects('clients', {'source': 'clients-alt', 'fingerprint': existing['fingerprint']})
+        before = self.app.extensions['native_gateway'].preview()
+        self.login()
+        preview = '/api/service-hub/projects/clients/merge-preview?source=admin'
+        write = '/api/service-hub/projects/clients/merge'
+        self.assertEqual(self.client.get(preview).status_code, 409)
+        plan = self.client.get(preview + '&manual=1').json
+        self.assertTrue(plan['manual'])
+        self.assertEqual([e['directory'] for e in plan['entries']], [str(client_checkout)] * 2 + [str(admin_checkout)])
+        body = {'source': 'admin', 'fingerprint': plan['fingerprint']}
+        self.assertEqual(self.post(write, body).json['error'], 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        self.assertEqual(self.post(write, {**body, 'manual': True}, csrf=False).status_code, 403)
+        self.assertEqual(self.post(write, {**body, 'manual': True}).status_code, 200)
+        self.assertEqual(self.app.extensions['native_gateway'].preview(), before)
+        roots = ServiceHub(hub.root.parent).listing()['project_groups']
+        self.assertEqual([p['id'] for p in roots], ['clients'])
+        self.assertEqual([(e['id'], e['directory']) for e in roots[0]['entries']],
+                         [('clients', str(client_checkout)), ('admin', str(admin_checkout)), ('clients-alt', str(client_checkout))])
+
     def test_auth_csrf_no_automatic_start_and_disabled_operations(self):
         self.assertEqual(self.client.get('/api/service-hub').status_code,401);self.login()
         self.app.extensions['service_hub'].import_policy(policy())

@@ -372,6 +372,28 @@ async function main(){
  await click('[data-hub-status="review-web"][data-hub-alias="'+mergedAlias+'"]');
  await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='review-worker.service'");
  await click('#close-detail');
+ await hubPage('projects');
+ await click('[data-hub-merge-project="review-web"][data-hub-merge-manual]');
+ assert(await evaluate("document.querySelector('#hub-merge-project-form h2').textContent==='手动归并'"));
+ assert(await evaluate("!document.querySelector('#hub-merge-project-form [name=source]:checked')"));
+ await evaluate(`(()=>{
+   const search=document.querySelector('[data-merge-search]');
+   search.value='PadelU';search.dispatchEvent(new Event('input',{bubbles:true}));
+ })()`);
+ assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-merge-option]:not([hidden]) input')].map(o=>o.value)"),['padelu']);
+ await click('#hub-merge-project-form [value=padelu]');
+ await until("document.querySelector('#hub-merge-project-form [type=submit]:enabled')");
+ assert(await evaluate(`(()=>{
+   const preview=document.querySelector('[data-merge-preview]');
+   return preview.querySelectorAll('article').length===4&&preview.textContent.includes(${JSON.stringify(info.padelu_directory)})&&
+     preview.textContent.includes(${JSON.stringify(info.review_directory)});
+ })()`),'Manual merge preview keeps directories for every route');
+ await shot('mobile-manual-project-merge');
+ await click('#hub-merge-project-form [type=submit]');
+ await until("!serviceHubUI.busy&&serviceHubUI.data.entry_owners.padelu==='review-web'");
+ await hubPage('services');
+ await until("document.querySelector('[data-service-project=review-web]').textContent.includes('tasks.service')");
+ assert(await evaluate("!document.querySelector('[data-service-project=padelu]')&&document.querySelector('[data-service-project=review-web]').textContent.includes('padelu-web.service')"));
  // Exercise restricted grants without entering any operation on the host.
  const permissions=await evaluate(`(()=>{
    const root=document.createElement('section');
@@ -388,6 +410,6 @@ async function main(){
    return {rows:bindings.length,readOnly,disabled,unavailable:root.textContent.includes('不可操作')&&!root.querySelector('button')};
  })()`);
  assert.deepEqual(permissions,{rows:1,readOnly:true,disabled:true,unavailable:true});
- assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,mergedProjectEntries:true,dockerRequired:false,consoleExceptions:0}));
+ assert.deepEqual(exceptions,[]);console.log(JSON.stringify({passed:true,desktop:'1440x1000',mobile:'390x844',hubPanes:3,sitePanes:2,unifiedSources:true,legacyGatewayRedirect:true,domain403Visible:true,gatewayRecoveryVisible:true,drafts:true,registerWithoutStart:true,health:true,gatewayPreviewAndApply:'isolated-adapter',serviceRestart:'one-fixed-grant',logRedaction:true,readGrantThenBind:true,batchReadGrants:true,reviewGrantAndBind:true,mergedProjectEntries:true,manualProjectMerge:true,dockerRequired:false,consoleExceptions:0}));
 }
 main().catch(async e=>{console.error(e.stack);if(ws&&session){try{console.error(JSON.stringify({exceptions,ui:await evaluate(`({login:document.querySelector('#login-error')?.textContent,content:document.querySelector('#content')?.innerText?.slice(0,1500),error:typeof serviceHubUI==='object'?serviceHubUI.error:'not loaded',formError:document.querySelector('#hub-form-error')?.textContent})`)}));await shot('failure');}catch{}}process.exitCode=1;}).finally(async()=>{if(ws)ws.close();await stop(chrome);await stop(fixture);if(fixture&&fixture.exitCode!==0){console.error('Fixture read-only assertion failed');process.exitCode=1;}if(tmp)fs.rmSync(tmp,{recursive:true,force:true});});

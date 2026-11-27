@@ -5,7 +5,7 @@ const hubMessages={XD_SERVICE_BINDING_UNAVAILABLE:'接入地址或服务授权�
 Object.assign(hubMessages,{XD_GATEWAY_ADDRESS_UNAVAILABLE:'网关监听地址尚未就绪，正在等待网络或 VPN 恢复。',XD_GATEWAY_BIND_FAILED:'网关监听失败，请核对主机网络与运行日志。',XD_GATEWAY_PENDING_CONFIGURATION:'存在尚未应用的修改，自动恢复不会发布这些修改。',XD_GATEWAY_ACTIVE_CONFIGURATION_CHANGED:'已应用的网关文件发生变化，请先人工核对。',XD_GATEWAY_RELOAD_FAILED:'网关启动或重新加载失败，正在核对恢复结果。',XD_GATEWAY_RESTORE_UNCONFIRMED:'网关恢复结果尚未确认。'});
 Object.assign(hubMessages,{
  XD_SERVICE_READ_MATCH_REQUIRED:'服务归属已变化或证据不足，请刷新后重新核对。',
- XD_SERVICE_PROJECT_MERGE_INVALID:'这两条登记已变化，或当前未匹配同一个实际目录。',
+ XD_SERVICE_PROJECT_MERGE_INVALID:'登记或目录条件已变化，请刷新后重新选择。',
  XD_SERVICE_PROJECT_HAS_ENTRIES:'这个项目下还有其他网站入口，请在网站入口逐条管理。',
  XD_SERVICE_GRANT_INVALID:'授权请求无效，请刷新后重试。',
  XD_SERVICE_BATCH_INVALID:'请选择要绑定的服务和关联项目。',
@@ -121,7 +121,10 @@ function registeredProjectsPanel(data){
    const failed=entries.find(hasFailedCheck);
    const multi=entries.length>1;
    const viewEntries=`<a href="#sites/overview" data-hub-site-project="${esc(p.id)}">管理 ${entries.length} 个入口 →</a>`;
-   const merge=p.merge_candidates?.length?hubButton('合并项目登记',{'merge-project':p.id},!data.configuration_writable):'';
+   const suggested=!!p.merge_candidates?.length;
+   const merge=projects.length>1&&p.merge_candidates
+     ?hubButton(suggested?'合并项目登记':'手动归并',{'merge-project':p.id,...(suggested?{}:{'merge-manual':'yes'})},
+       !data.configuration_writable):'';
    return `<tr>
    <td class="hub-project-name"><strong>${esc(p.name)}</strong><small>${esc(p.id)}</small>${p.directory?`<small>${esc(p.directory)}</small>`:''}</td>
    <td>${multi?viewEntries:hubEntry(p,data,applied)+`<small>${esc(hubEndpoint(p.endpoint,data))}</small>`}</td>
@@ -525,24 +528,29 @@ async function openBatchBindings(alias){
  bindingCount(form);
 }
 
-function openProjectMerge(id){
+function openProjectMerge(id,manual=false){
  const data=serviceHubUI.data;
  const projects=projectCatalog(data);
  const root=projects.find(p=>p.id===id);
- const choices=projects.filter(p=>root?.merge_candidates?.includes(p.id));
- if(!choices.length)return;
- const editor={kind:'project-merge',id,plan:null};
+ const choices=projects.filter(p=>p.id!==id&&(manual||root?.merge_candidates?.includes(p.id)));
+ if(!root||!choices.length)return;
+ const editor={kind:'project-merge',id,manual,plan:null};
  serviceHubUI.editor=editor;
- const single=choices.length===1?choices[0]:null;
+ const single=!manual&&choices.length===1?choices[0]:null;
+ const search=choices.length>6?`<label>筛选项目<input type="search" data-merge-search autocomplete="off"
+     placeholder="项目名称、标识或域名"></label>`:'';
  const selection=single
    ?`<p data-merge-summary>将 <strong>${esc(single.name)}</strong> 的网站入口归到 <strong>${esc(root.name)}</strong>。</p>`
    :`<p>保留项目 <strong>${esc(root.name)}</strong></p>
-   <fieldset><legend>选择要归并的旧登记</legend>${choices.map(p=>`<label class="hub-check">
+   <fieldset><legend>选择要归并的旧登记</legend><div class="merge-options">${choices.map(p=>`<label class="hub-check" data-merge-option>
      <input type="radio" name="source" value="${esc(p.id)}" required>
-     <span><strong>${esc(p.name)}</strong><small>${esc(p.domain)}</small></span></label>`).join('')}</fieldset>`;
+     <span><strong>${esc(p.name)}</strong><small>${esc(p.domain)}</small></span></label>`).join('')}</div>
+     <small data-merge-empty hidden>未找到匹配的登记。</small>${search}</fieldset>`;
+ const manualButton=!manual&&projects.length>choices.length+1
+     ?'<button type="button" data-merge-manual>手动选择其他登记</button>':'';
  const dialog=hubDialog();
- dialog.innerHTML=`<form id="hub-merge-project-form"><div class="detail-head"><h2>合并项目登记</h2></div>
-   <div class="hub-form-body">${selection}
+ dialog.innerHTML=`<form id="hub-merge-project-form"><div class="detail-head"><h2>${manual?'手动归并':'合并项目登记'}</h2></div>
+   <div class="hub-form-body">${selection}${manualButton}
    <div data-merge-preview></div></div><p id="hub-form-error" class="error" role="alert"></p>
    <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary" disabled>确认合并</button></div></form>`;
  const form=dialog.querySelector('form');
@@ -554,20 +562,36 @@ function openProjectMerge(id){
    const currentRequest=++request;
    editor.plan=null;submit.disabled=true;preview.textContent='正在核对入口和服务…';
    try{
-     const plan=await api('service-hub/projects/'+encodeURIComponent(root.id)+'/merge-preview?source='+encodeURIComponent(source));
+     const query=new URLSearchParams({source});
+     if(manual)query.set('manual','1');
+     const plan=await api('service-hub/projects/'+encodeURIComponent(root.id)+'/merge-preview?'+query);
      if(currentRequest!==request||!form.isConnected||!dialog.open)return;
-     preview.innerHTML=`<h3>归并后的入口</h3>${plan.entries.map(entry=>`<article>
+     const chosen=choices.find(p=>p.id===source);
+     const direction=manual?`<h3>将 ${esc(chosen.name)} 的入口归到 ${esc(root.name)}</h3>`:'<h3>归并后的入口</h3>';
+     preview.innerHTML=direction+plan.entries.map(entry=>`<article>
        <strong>${esc(entry.domain)}</strong>
        <small>${entry.target?esc(hubEndpointAddress(entry.target)):'接入地址待核对'}</small>
+       ${manual?`<small>${entry.directory?esc(entry.directory):'未登记代码目录'}</small>`:''}
        ${entry.services.length?`<small>已绑定 ${esc(entry.services.join('、'))}</small>`:''}
-     </article>`).join('')}`;
+     </article>`).join('');
      editor.plan=plan;submit.disabled=false;
    }catch(error){
      if(currentRequest===request&&form.isConnected)preview.textContent=hubText(error.message);
    }
  }
- form.addEventListener('change',previewSelection);
- dialog.showModal();
+ form.addEventListener('change',event=>{if(event.target.name==='source')previewSelection();});
+ form.querySelector('[data-merge-manual]')?.addEventListener('click',()=>openProjectMerge(id,true));
+ form.querySelector('[data-merge-search]')?.addEventListener('input',event=>{
+   const query=event.target.value.trim().toLowerCase();
+   const options=[...form.querySelectorAll('[data-merge-option]')];
+   options.forEach((label,index)=>{
+     const p=choices[index];
+     label.hidden=![p.name,p.id,p.domain].some(value=>value.toLowerCase().includes(query));
+   });
+   form.querySelector('.merge-options').scrollTop=0;
+   form.querySelector('[data-merge-empty]').hidden=options.some(label=>!label.hidden);
+ });
+ if(!dialog.open)dialog.showModal();
  previewSelection();
 }
 
@@ -603,7 +627,7 @@ document.addEventListener('submit',async event=>{
     message=`新增 ${result.added} 个服务绑定，${result.already_bound} 个已绑定。`;
   }else if(e.kind==='project-merge'){
     const result=await api('service-hub/projects/'+encodeURIComponent(e.id)+'/merge',
-      {source:e.plan.source,fingerprint:e.plan.fingerprint});
+      {source:e.plan.source,fingerprint:e.plan.fingerprint,...(e.manual?{manual:true}:{})});
     message=`已合并项目登记，共 ${result.entries.length+1} 个网站入口。`;
   }else if(e.kind==='project'){
     if(e.createEntry){
@@ -632,7 +656,7 @@ document.addEventListener('change',event=>{
 document.addEventListener('click',async event=>{
  const b=event.target.closest('[data-hub-merge-project],[data-hub-review-grant],[data-hub-batch-grant],[data-hub-grant],[data-hub-batch],[data-hub-entry],[data-hub-discard],[data-hub-refresh],[data-hub-edit],[data-hub-close],[data-hub-health],[data-hub-status],[data-hub-logs],[data-hub-action],[data-hub-preview],[data-hub-gateway],[data-hub-remove]');if(!b||b.disabled||!loggedIn)return;event.preventDefault();const d=b.dataset;
  try{
-  if(d.hubMergeProject){openProjectMerge(d.hubMergeProject);return;}
+  if(d.hubMergeProject){openProjectMerge(d.hubMergeProject,!!d.hubMergeManual);return;}
   if(d.hubReviewGrant){openReviewGrant(d.hubReviewGrant);return;}
   if(d.hubBatchGrant){openBatchReadGrants();return;}
   if(d.hubGrant){openReadGrant(d.hubGrant,d.hubScope,d.hubUnit);return;}

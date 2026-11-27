@@ -298,21 +298,23 @@ class ServiceHub:
             self._save_project(row, data, entry_owner=project)
         return row
 
-    def project_merge_preview(self, target, source):
+    def project_merge_preview(self, target, source, *, manual=False):
         identifier(target)
         identifier(source)
         require(target != source, 'XD_SERVICE_PROJECT_MERGE_INVALID')
         listing = self.listing()
         groups = {row['id']: row for row in listing['project_groups']}
         project, other = groups.get(target), groups.get(source)
-        require(project and other and source in project['merge_candidates'], 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        require(project and other and (manual or source in project['merge_candidates']),
+                'XD_SERVICE_PROJECT_MERGE_INVALID')
         domains = {row['id']: row for row in listing['projects']}
         entries = [domains[entry['id']] for group in (project, other) for entry in group['entries']]
         result = {
-            'source': source, 'project': {'id': target, 'name': project['name']},
+            'source': source, 'manual': manual, 'project': {'id': target, 'name': project['name']},
             'entries': [
                 {'id': row['id'], 'domain': row['domain'], 'revision': row['revision'], 'enabled': row['enabled'],
                  'target': listing['endpoints'].get(row['endpoint']),
+                 'directory': str(directory) if (directory := host_directory(row.get('directory'))) else row.get('directory'),
                  'services': [listing['services'].get(alias, {}).get('unit', alias) for alias in row['bound_services']]}
                 for row in entries
             ],
@@ -320,9 +322,12 @@ class ServiceHub:
         return {**result, 'fingerprint': fingerprint({**result, 'policy': listing['policy_sha256']})}
 
     def merge_projects(self, target, body):
-        require(isinstance(body, dict) and set(body) == {'source', 'fingerprint'}, 'XD_SERVICE_PROJECT_MERGE_INVALID')
+        require(isinstance(body, dict) and set(body) in ({'source', 'fingerprint'}, {'source', 'fingerprint', 'manual'}),
+                'XD_SERVICE_PROJECT_MERGE_INVALID')
+        manual = body.get('manual', False)
+        require(type(manual) is bool, 'XD_SERVICE_PROJECT_MERGE_INVALID')
         with self.locked():
-            preview = self.project_merge_preview(target, body['source'])
+            preview = self.project_merge_preview(target, body['source'], manual=manual)
             require(body['fingerprint'] == preview['fingerprint'], 'XD_SERVICE_CONFIGURATION_CHANGED')
             entries = [row['id'] for row in preview['entries'] if row['id'] != target]
             self.store.assign_entries(target, entries)
@@ -469,7 +474,7 @@ class ServiceHub:
             entries = [root] + [row for row in groups[owner] if row['id'] != owner]
             directory = directories[owner]
             project_groups.append({
-                **root, 'entries': [{k: row[k] for k in ('id', 'domain', 'endpoint')} for row in entries],
+                **root, 'entries': [{k: row[k] for k in ('id', 'domain', 'endpoint', 'directory')} for row in entries],
                 'endpoint_available': any(row['endpoint_available'] for row in entries),
                 'bound_services': [alias for row in entries for alias in row['bound_services']],
                 'service_available': all(row['service_available'] for row in entries),

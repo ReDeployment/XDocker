@@ -93,7 +93,13 @@ def owns_listener(endpoint, group, sockets, addresses):
 
 
 def registered_directories(projects):
-    return {project['id']: host_directory(project.get('directory')) for project in projects}
+    directories = {}
+    for project in projects:
+        entries = project.get('entries') or [project]
+        paths = {entry.get('directory') for entry in entries}
+        paths.add(project.get('directory'))
+        directories[project['id']] = {root for path in paths if (root := host_directory(path)) is not None}
+    return directories
 
 
 def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, directories):
@@ -105,8 +111,7 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, d
     for project in projects:
         key = project['id']
         reasons = {}
-        root = directories[key]
-        if root is not None and directory is not None and directory.is_relative_to(root):
+        if directory is not None and any(directory.is_relative_to(root) for root in directories[key]):
             by_dir.add(key)
             reasons['directory'] = str(directory)
         entries = project.get('entries') or [project]
@@ -118,7 +123,8 @@ def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, d
                 if len(entries) > 1:
                     reasons['entry_domain'] = entry['domain']
                 break
-        if any(name == key or name.startswith((key + '-', key + '.')) for name in (alias, grant['unit'])):
+        if any(name == entry['id'] or name.startswith((entry['id'] + '-', entry['id'] + '.'))
+               for entry in entries for name in (alias, grant['unit'])):
             by_name.add(key)
             reasons['name'] = True
         if reasons:

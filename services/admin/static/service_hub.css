@@ -72,3 +72,7 @@
 #hub-merge-project-form fieldset{min-width:0;margin:12px 0;padding:0 12px;border:1px solid var(--line);border-radius:8px}
 #hub-merge-project-form small{display:block;color:var(--muted)}
 #hub-merge-project-form article{padding:8px 0;border-bottom:1px solid var(--line)}
+
+#hub-merge-project-form .merge-options{max-height:200px;overflow:auto;overscroll-behavior:contain}
+#hub-merge-project-form [hidden]{display:none}
+#hub-merge-project-form [data-merge-manual]{margin-bottom:10px}
