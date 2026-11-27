@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+from time import time
 
 ROOT=Path(__file__).resolve().parents[1];sys.path[:0]=[str(ROOT/'services/admin'),str(ROOT/'tests')]
 from werkzeug.serving import make_server,WSGIRequestHandler
 from app import create_app
 from native_runtime import initialize
+from repository_activity import ActivityMonitor
 from docker_api import DockerError
 from code_sync import CodeSyncWorker,default_policy
 from sync_runtime import git,GitTransfer,text_git
@@ -28,6 +31,11 @@ def main():
         git(source,'init','-b','main');git(source,'config','user.name','Fixture');git(source,'config','user.email','fixture@example.invalid')
         (source/'app.py').write_text('print("fixture")\n');(source/'.gitignore').write_text('.env\n')
         git(source,'add','.');git(source,'commit','-m','initial');git(source,'remote','add','origin','https://github.com/example/project.git')
+        feature=workspace/'feature'
+        git(source,'worktree','add','-b','feature',str(feature))
+        (feature/'feature.py').write_text('feature = True')
+        git(feature,'add','.');git(feature,'commit','-m','feature work')
+        (feature/'feature.py').write_text('feature = False')
         original_head=text_git(source,'rev-parse','HEAD');original_index=(source/'.git/index').read_bytes();(source/'app.py').write_text('print("uncommitted fixture")\n')
         (source/'scratch.tmp').write_text('private untracked scratch')
         (source/'.env').write_text('PRIVATE_FIXTURE=not-for-upload')
@@ -40,12 +48,18 @@ def main():
         hub=app.extensions['code_sync'];policy=default_policy();policy.update(execution=True,source_roots=[str(workspace)],identities={'fixture':str(root/'fixture-key')});hub.import_policy(policy)
         hub.transfer=GitTransfer(private_directory(root/'cache'),resolver);hub.transport=lambda device,body:agent.handle({**body,'expected_agent_sha':agent_sha()})
         worker=CodeSyncWorker(hub);worker.start()
+        def remote_state(hub,group):
+            return {'default':'main','heads':{'main':original_head},'prs':[{'name':'feature','number':7,
+                    'base':'main','updated':time()}],'merged':{},'notes':[]}
+        stopping=threading.Event()
+        monitor=threading.Thread(target=ActivityMonitor(hub,remote_state).run,args=(stopping,),daemon=True)
+        monitor.start()
         server=make_server('127.0.0.1',0,app,threaded=True,request_handler=Quiet)
         print(json.dumps({'url':f'http://127.0.0.1:{server.server_port}/#code-sync','fixture_token':(state/'access-token').read_text().strip(),
                           'directory':str(source),'copy_directory':str(copy_path),'host_key':'ssh-ed25519 '+base64.b64encode(b'x'*40).decode()}),flush=True)
         try:server.serve_forever()
         except KeyboardInterrupt:pass
-        finally:worker.close();server.server_close();app.extensions['github_watch'].close()
+        finally:stopping.set();monitor.join(3);worker.close();server.server_close();app.extensions['github_watch'].close()
         assert all(m=='GET' for m in docker.calls)
         assert text_git(source,'rev-parse','HEAD')==original_head and (source/'.git/index').read_bytes()==original_index
         assert copy_path.is_dir() and not (copy_path/'.env').exists() and not (copy_path/'scratch.tmp').exists()

@@ -1,19 +1,55 @@
 """Authenticated configuration and durable code-sync requests; no raw command API."""
+import secrets
 from flask import jsonify,request
 from code_sync import CodeSync
 from sync_runtime import SyncError,require
+from repository_activity import ActivityMonitor
 
 
 def register_code_sync(app,state,audit):
     hub=CodeSync(state,operations=bool(app.config.get('NATIVE_MODE') and app.config.get('NATIVE_OPERATIONS_ENABLED')))
     app.extensions['code_sync']=hub
 
+    monitor=ActivityMonitor(hub)
+    native=bool(app.config.get('NATIVE_MODE'))
+
     def failed(error):return jsonify(error=str(error) if isinstance(error,SyncError) else 'XD_SYNC_STATE_UNAVAILABLE'),409
 
     @app.get('/api/code-sync')
     def sync_listing():
-        try:return jsonify(hub.listing())
+        try:return jsonify(**hub.listing(),activity={**monitor.status(),'available':native})
         except (OSError,ValueError,TypeError,KeyError) as error:return failed(error)
+
+    @app.get('/api/code-sync/activity/<key>')
+    def activity_detail(key):
+        try:
+            item=monitor.snapshot().get('repos',{}).get(key)
+            if not item:return jsonify(error='该仓库尚无检查记录'),404
+            return jsonify(item)
+        except (OSError,ValueError) as error:return failed(error)
+
+    @app.post('/api/code-sync/activity/refresh')
+    def activity_refresh():
+        try:
+            require(native and request.get_json()=={},'XD_SYNC_INPUT_INVALID')
+            hub.store.metadata('activity-request',secrets.token_hex(12))
+            return jsonify(queued=True),202
+        except (ValueError,OSError) as error:return failed(error)
+
+    @app.post('/api/code-sync/activity/<key>/target')
+    def activity_target(key):
+        try:
+            request.max_content_length=4096
+            data=request.get_json()
+            require(native and isinstance(data,dict) and set(data)=={'branch'},'XD_SYNC_INPUT_INVALID')
+            item=monitor.snapshot().get('repos',{}).get(key)
+            require(item and item['summary']['repository'] and data['branch'] in
+                    ['',*(b['name'] for b in item['branches'])],'XD_SYNC_INPUT_INVALID')
+            hub.store.metadata('activity-target:'+key,data['branch'])
+            hub.store.metadata('activity-request',secrets.token_hex(12))
+            audit('repository-check-target',key,'saved')
+            return jsonify(queued=True)
+        except (OSError,ValueError) as error:return failed(error)
 
     @app.post('/api/code-sync/<kind>')
     def sync_save(kind):

@@ -51,6 +51,9 @@ def main():
     command+=['native_runtime:create_native_app()']
     child=subprocess.Popen(command,cwd=ROOT/'services/admin',env=env)
     stopping=threading.Event()
+    from repository_activity import ActivityMonitor
+    activity_worker=threading.Thread(target=ActivityMonitor(sync_worker.hub).run,args=(stopping,),daemon=True)
+    activity_worker.start()
     def sampler():
         while not stopping.is_set():
             try:collect(state/'host-metrics',include_docker=not args.without_docker)
@@ -70,6 +73,7 @@ def main():
     finally:
         shutdown()
         sync_worker.close()
+        activity_worker.join(timeout=2)
         if worker:worker.join(timeout=2)
         if gateway_worker:gateway_worker.join(timeout=2)
     raise SystemExit(code)

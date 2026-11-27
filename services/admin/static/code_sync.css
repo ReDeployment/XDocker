@@ -72,3 +72,34 @@
   .sync-sources td:nth-child(3) { grid-row: 2; }
   .sync-row-actions button { min-height: 44px; }
 }
+
+.repo-panel, #repo-dialog { container-type: inline-size; min-width: 0; }
+.repo-tools, .repo-tabs, .repo-filter, #repo-target-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.repo-tools { justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.repo-panel small, #repo-dialog small { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.repo-tools .actions { margin: 0; }
+.repo-panel select, #repo-dialog select { max-width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: white; }
+:is(.repo-panel,#repo-dialog) .repo-link { padding: 3px 0; font-weight: 600; color: var(--blue); border: none; background: transparent; text-align: left; overflow-wrap: anywhere; }
+.repo-panel table, #repo-dialog table { width: 100%; min-width: 0; table-layout: fixed; }
+.repo-panel td, .repo-panel th, #repo-dialog td, #repo-dialog th { padding: 10px 12px; vertical-align: top; overflow-wrap: anywhere; }
+.repo-panel th:nth-child(1), .repo-panel th:nth-child(2) { width: 26%; }
+.repo-panel th:nth-child(3), .repo-panel th:nth-child(4) { width: 12%; }
+.repo-panel code { font-family: inherit; font-size: inherit; white-space: normal; background: none; padding: 0; }
+#repo-dialog { width: min(980px,calc(100vw - 24px)); max-height: 88vh; padding: 18px; }
+#repo-dialog .detail-head { align-items: flex-start; gap: 12px; overflow-wrap: anywhere; }
+#repo-dialog .detail-head h2 { margin: 0 0 3px; }
+.repo-tabs { margin: 14px 0 8px; border-bottom: 1px solid var(--line); gap: 4px; }
+.repo-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; }
+.repo-tabs [aria-pressed="true"] { color: var(--blue); border-bottom-color: var(--blue); }
+.repo-filter { margin: 8px 0; font-size: 13px; color: var(--muted); }
+.repo-note { margin: 10px 0; color: #794017; background: #fff6e9; padding: 8px 10px; font-size: 13px; overflow-wrap: anywhere; }
+#repo-dialog dd { overflow-wrap: anywhere; }
+@container (max-width: 640px) {
+  :is(.repo-panel,#repo-dialog) table, :is(.repo-panel,#repo-dialog) tbody { display: block; }
+  :is(.repo-panel,#repo-dialog) thead { position: absolute; clip-path: inset(50%); height: 1px; overflow: hidden; }
+  :is(.repo-panel,#repo-dialog) tr { display: grid; padding: 10px 12px; gap: 4px; border-bottom: 1px solid var(--line); }
+  :is(.repo-panel,#repo-dialog) td { display: grid; grid-template-columns: 7em minmax(0,1fr); align-items: baseline; gap: 0 7px; padding: 0; border: 0; }
+  :is(.repo-panel,#repo-dialog) td::before { content: attr(data-label); font-size: 12px; color: var(--muted); }
+  :is(.repo-panel,#repo-dialog) td small { grid-column: 2; }
+  .repo-tabs button { font-size: 13px; padding-inline: 5px; }
+}
