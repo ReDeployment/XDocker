@@ -317,13 +317,36 @@ async function main(){
  })()`));
  await evaluate("serviceHubUI.serviceFilter='all';renderServiceHubPage()");
  await hubPage('projects');
+ await evaluate(`(async()=>{
+   await api('service-hub/projects',{id:'review-alt',name:'Review Alt',endpoint:'example',domain:'review-alt.home.test',directory:${JSON.stringify(info.review_directory)},
+     service:null,tls:null,monitor:null,delivery:'external',enabled:false,revision:1});
+   await loadServiceHub();
+ })()`);
+ await click('[data-hub-merge-project="review-web"]');
+ assert(await evaluate(`(()=>{
+   const form=document.querySelector('#hub-merge-project-form');
+   return form.textContent.includes('选择要归并的旧登记')&&form.querySelectorAll('[name=source]').length===2&&
+     !form.querySelector('[name=source]:checked')&&form.querySelector('[type=submit]').disabled;
+ })()`));
+ await click('#hub-merge-project-form [value=review-alt]');
+ await until("document.querySelector('[data-merge-preview]').textContent.includes('review-alt.home.test')");
+ await click('#hub-merge-project-form [value=review-api]');
+ await until("document.querySelector('[data-merge-preview]').textContent.includes('review-api.home.test')");
+ assert(!await evaluate("document.querySelector('[data-merge-preview]').textContent.includes('review-alt.home.test')"));
+ await click('#hub-merge-project-form [data-hub-close]');
+ await evaluate(`(async()=>{
+   await api('service-hub/projects/review-alt/remove',{revision:1,confirmation:'Review Alt'});
+   await loadServiceHub();
+ })()`);
  for(const width of [1440,390]){
   await rpc('Emulation.setDeviceMetricsOverride',{width,height:width===390?844:1000,deviceScaleFactor:1,mobile:width===390});
   await click('[data-hub-merge-project="review-web"]');
   await until("document.querySelector('#hub-merge-project-form [type=submit]:enabled')");
   assert(await evaluate(`(()=>{
    const screen=document.querySelector('#hub-merge-project-form'),preview=screen.querySelector('[data-merge-preview]');
-   return preview.textContent.includes('review-api.home.test')&&preview.textContent.includes('review-web.home.test')&&
+   return !screen.querySelector('[name=source]')&&
+     screen.querySelector('[data-merge-summary]').textContent==='将 review-api 的网站入口归到 review-web。'&&
+     preview.textContent.includes('review-api.home.test')&&preview.textContent.includes('review-web.home.test')&&
      preview.textContent.includes('review-worker.service')&&screen.querySelector('[type=submit]').getBoundingClientRect().bottom<=innerHeight+1;
   })()`));
   await shot(width===390?'mobile-project-merge':'desktop-project-merge');

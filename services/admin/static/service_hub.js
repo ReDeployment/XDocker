@@ -529,30 +529,34 @@ function openProjectMerge(id){
  const data=serviceHubUI.data;
  const projects=projectCatalog(data);
  const root=projects.find(p=>p.id===id);
- const choices=projects.filter(p=>root?.merge_candidates.includes(p.id));
+ const choices=projects.filter(p=>root?.merge_candidates?.includes(p.id));
  if(!choices.length)return;
  const editor={kind:'project-merge',id,plan:null};
  serviceHubUI.editor=editor;
- const options=choices.map(p=>`<label class="hub-check"><input type="radio" name="source" value="${esc(p.id)}" ${choices.length===1?'checked':''} required>
-     <span><strong>${esc(p.name)}</strong><small>${esc(p.domain)}</small></span></label>`).join('');
+ const single=choices.length===1?choices[0]:null;
+ const selection=single
+   ?`<p data-merge-summary>将 <strong>${esc(single.name)}</strong> 的网站入口归到 <strong>${esc(root.name)}</strong>。</p>`
+   :`<p>保留项目 <strong>${esc(root.name)}</strong></p>
+   <fieldset><legend>选择要归并的旧登记</legend>${choices.map(p=>`<label class="hub-check">
+     <input type="radio" name="source" value="${esc(p.id)}" required>
+     <span><strong>${esc(p.name)}</strong><small>${esc(p.domain)}</small></span></label>`).join('')}</fieldset>`;
  const dialog=hubDialog();
  dialog.innerHTML=`<form id="hub-merge-project-form"><div class="detail-head"><h2>合并项目登记</h2></div>
-   <div class="hub-form-body"><p>保留项目 <strong>${esc(root.name)}</strong></p>
-   <fieldset><legend>选择要并入的项目</legend>${options}</fieldset>
+   <div class="hub-form-body">${selection}
    <div data-merge-preview></div></div><p id="hub-form-error" class="error" role="alert"></p>
    <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary" disabled>确认合并</button></div></form>`;
  const form=dialog.querySelector('form');
  const submit=form.querySelector('[type=submit]'), preview=form.querySelector('[data-merge-preview]');
  let request=0;
  async function previewSelection(){
-   const source=form.querySelector('[name=source]:checked')?.value;
+   const source=single?.id||form.querySelector('[name=source]:checked')?.value;
    if(!source)return;
    const currentRequest=++request;
    editor.plan=null;submit.disabled=true;preview.textContent='正在核对入口和服务…';
    try{
      const plan=await api('service-hub/projects/'+encodeURIComponent(root.id)+'/merge-preview?source='+encodeURIComponent(source));
      if(currentRequest!==request||!form.isConnected||!dialog.open)return;
-     preview.innerHTML=`<h3>合并后归到 ${esc(plan.project.name)}</h3>${plan.entries.map(entry=>`<article>
+     preview.innerHTML=`<h3>归并后的入口</h3>${plan.entries.map(entry=>`<article>
        <strong>${esc(entry.domain)}</strong>
        <small>${entry.target?esc(hubEndpointAddress(entry.target)):'接入地址待核对'}</small>
        ${entry.services.length?`<small>已绑定 ${esc(entry.services.join('、'))}</small>`:''}
