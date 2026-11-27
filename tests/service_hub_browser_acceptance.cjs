@@ -122,9 +122,12 @@ async function main(){
   const showFilter=value=>evaluate(`(()=>{const f=document.querySelector('[data-project-service-filter]');f.value=${JSON.stringify(value)};f.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await showFilter('discovered');
   assert.equal(await evaluate("document.querySelectorAll('[data-service-project]').length"),1);
+  assert.equal(await evaluate("document.querySelector('[data-hub-grant=padelu]').textContent"),'授权');
+  assert(!await evaluate("!!document.querySelector('[data-service-project=padelu] [data-hub-logs]')"));
   await click('[data-hub-grant="padelu"]');
   assert(await evaluate(`(()=>{const form=document.querySelector('#hub-read-grant-form');const box=form.querySelector('[type=submit]').getBoundingClientRect();
-    return form.textContent.includes('PadelU')&&form.textContent.includes('padelu-web.service')&&form.textContent.includes('127.0.0.1:15173')&&
+    return form.querySelector('[type=submit]').textContent==='确认授权'&&form.textContent.includes('最近 100 行日志')&&
+           form.textContent.includes('PadelU')&&form.textContent.includes('padelu-web.service')&&form.textContent.includes('127.0.0.1:15173')&&
            box.right<=innerWidth&&box.bottom<=innerHeight;})()`));
   await shot(width===390?'mobile-read-grant':'desktop-read-grant');
   await click('#hub-read-grant-form [data-hub-close]');
@@ -216,6 +219,8 @@ async function main(){
  await click('#hub-batch-form [type=submit]');
  await until("!serviceHubUI.busy&&document.querySelector('[data-hub-status=padelu]')&&document.querySelector('[data-project-service-filter]').value==='bound'");
  assert(!await evaluate("!!document.querySelector('[data-hub-action=padelu]')"));
+ assert.equal(await evaluate("document.querySelector('[data-hub-status=padelu]').textContent"),'查看状态');
+ assert.equal(await evaluate("document.querySelector('[data-hub-logs=padelu]').textContent"),'查看日志');
  await click('[data-hub-status=padelu]');
  await until("document.querySelector('#detail-dialog').open&&document.querySelector('#detail-title').textContent==='padelu-web.service'");
  await click('#close-detail');

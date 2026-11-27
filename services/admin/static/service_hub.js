@@ -143,8 +143,8 @@ function boundServiceControls(project,grant,alias,operationsEnabled){
    const reason=!project.endpoint_available?'项目目标绑定失效':writes.length&&!operationsEnabled?'运行操作未开启':'';
    const buttons=[];
    if(project.endpoint_available){
-     buttons.push(hubButton('状态',{status:project.id,alias}));
-     if(grant.actions.includes('logs'))buttons.push(hubButton('最近日志',{logs:project.id,alias}));
+     buttons.push(hubButton('查看状态',{status:project.id,alias}));
+     if(grant.actions.includes('logs'))buttons.push(hubButton('查看日志',{logs:project.id,alias}));
      if(canOperate)buttons.push(hubButton('服务操作',{action:project.id,alias}));
    }
    return {permission,reason,buttons};
@@ -179,7 +179,7 @@ function projectServicePanel(data, bindButton){
      if(alias){
        next=hubButton('核对绑定',{batch:'yes','bind-alias':alias},!data.configuration_writable||!data.batch_binding_available||!project.endpoint_available);
      }else if(candidate.can_grant_read&&project.endpoint_available&&data.operations_enabled){
-       next=hubButton('授权查看状态和日志',{grant:project.id,unit,scope});
+       next=hubButton('授权',{grant:project.id,unit,scope});
      }else{
        const reason=!data.operations_enabled?'主机未开启管理操作。':issues.length?'请刷新并重新检查主机服务。':
          !suggested?'请核对项目目录和登记端口后刷新。':!project.endpoint_available?'请先修复项目的接入地址。':
@@ -328,11 +328,11 @@ function openReadGrant(projectId,scope,unit){
  if(!project||!match)return;
  serviceHubUI.editor={kind:'read-grant',id:projectId,body:{scope,unit,revision:project.revision,policy_sha256:data.policy_sha256}};
  const dialog=hubDialog();
- dialog.innerHTML=`<form id="hub-read-grant-form"><div class="detail-head"><h2>授权查看状态和日志</h2></div>
+ dialog.innerHTML=`<form id="hub-read-grant-form"><div class="detail-head"><h2>授权给 XDocker</h2></div>
    <div class="hub-form-body"><p><strong>${esc(project.name)}</strong> · ${esc(project.domain)}</p>
    <p>${esc(unit)}（${scope==='user'?'用户级':'系统级'}）</p>
    <p>${esc(bindingReasons(match.reasons))}</p>
-   <p>允许 XDocker 读取这个服务的状态和最近 100 行日志。授权后可继续绑定到项目。</p>
+   <p>允许 XDocker 查看此服务的运行状态和最近 100 行日志。绑定项目后，可在服务行查看。</p>
    <p id="hub-form-error" class="error" role="alert"></p></div>
    <div class="dialog-actions">${hubButton('取消',{close:'yes'})}<button type="submit" class="primary">确认授权</button></div></form>`;
  dialog.showModal();
@@ -396,7 +396,7 @@ document.addEventListener('submit',async event=>{
   if(e.kind==='read-grant'){
     await api('service-hub/projects/'+encodeURIComponent(e.id)+'/read-grants',e.body);
     serviceHubUI.serviceFilter='pending';
-    message='已授权查看状态和日志。点击该服务的「核对绑定」即可关联项目。';
+    message=e.body.unit+' 已授权。点击「核对绑定」即可关联项目。';
   }else if(e.kind==='bindings'){
     const bindings=batchSelections().map(row=>({...row,revision:e.revisions.get(row.project)}));
     const result=await api('service-hub/bindings',{bindings,policy_sha256:e.policy});
