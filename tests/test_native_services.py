@@ -271,11 +271,14 @@ class HubAPITests(unittest.TestCase):
         hub = self.app.extensions['service_hub']
         value = policy()
         hub.import_policy(value)
-        hub.save(project(directory='/work/example'))
+        directory = hub.root.parent / 'work' / 'example'
+        working = directory / 'backend'
+        working.mkdir(parents=True)
+        hub.save(project(directory=str(directory)))
         def reader(command, **kwargs):
             output = ''
             if command[0] == 'systemctl' and '--user' in command:
-                output = 'Id=worker.service\nLoadState=loaded\nWorkingDirectory=/work/example/tasks'
+                output = f'Id=worker.service\nLoadState=loaded\nWorkingDirectory={working}'
             return {'code': 0, 'stdout': output, 'truncated': False}
         self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
         self.assertNotIn('project_services', self.client.get('/api/service-hub').json)
@@ -293,13 +296,16 @@ class HubAPITests(unittest.TestCase):
     def test_web_read_grant_rechecks_host_and_preserves_gateway(self):
         hub = self.app.extensions['service_hub']
         hub.import_policy(policy())
-        hub.save(project(directory='/work/example'))
+        directory = hub.root.parent / 'work' / 'example'
+        working = directory / 'backend'
+        working.mkdir(parents=True)
+        hub.save(project(directory=str(directory)))
         def reader(command, **kwargs):
             output = ''
             if command[0] == 'systemctl':
                 units = ['worker.service', 'xdocker-native.service', 'example-name.service']
                 output = '\n\n'.join('Id=' + u + '\nLoadState=loaded\nWorkingDirectory=' +
-                                     ('/other' if 'name' in u else '/work/example/backend') for u in units)
+                                     ('/other' if 'name' in u else str(working)) for u in units)
             return {'code': 0, 'stdout': output, 'truncated': False}
         self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
         path = '/api/service-hub/projects/example/read-grants'
@@ -348,8 +354,12 @@ class HubAPITests(unittest.TestCase):
         hub = self.app.extensions['service_hub']
         hub.import_policy(policy())
         projects = ['first', 'second']
+        work = hub.root.parent / 'work'
         for name in projects:
-            hub.save(project(id=name, domain=name + '.home.test', directory='/work/' + name))
+            (work / name / 'web').mkdir(parents=True)
+            hub.save(project(id=name, domain=name + '.home.test', directory=str(work / name)))
+        workspace_alias = work.with_name('workspace-alias')
+        workspace_alias.symlink_to(work, target_is_directory=True)
         listing = hub.listing()
         entries = [{'project': name, 'revision': 1, 'unit': name + '.service', 'scope': 'user'} for name in projects]
         body = {'grants': entries, 'policy_sha256': listing['policy_sha256']}
@@ -359,7 +369,7 @@ class HubAPITests(unittest.TestCase):
             output = ''
             if command[0] == 'systemctl' and '--user' in command:
                 inventories.append(command)
-                output = '\n\n'.join(f'Id={p}.service\nLoadState=loaded\nWorkingDirectory=/work/{p}/web' for p in projects)
+                output = '\n\n'.join(f"Id={p}.service\nLoadState=loaded\nWorkingDirectory={workspace_alias / p / 'web'}" for p in projects)
             return {'code': 0, 'stdout': output, 'truncated': False}
         self.app.config.update(NATIVE_MODE=True, SERVICE_HUB_MATCH_RUNNER=reader)
         self.assertEqual(self.post(path, body).status_code, 401)

@@ -1,7 +1,7 @@
 """Match registered projects to observed systemd services and authorize confirmed read access."""
 from ipaddress import ip_address
 import json
-from pathlib import PurePosixPath
+from pathlib import Path
 
 from native_services import UNIT, ServiceError, fingerprint, read_host, require, validate_policy
 
@@ -93,19 +93,39 @@ def owns_listener(endpoint, group, sockets, addresses):
     return bool(owners) and all(belongs(owner) for owner in owners)
 
 
-def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses):
-    working = fields.get('WorkingDirectory', '')
-    directory = PurePosixPath(working) if working.startswith('/') and not (
-        fields.get('RootImage') or fields.get('RootDirectory', '') not in ('', '/')) else None
+def host_directory(value):
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute() or '..' in path.parts:
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+        if resolved != Path('/') and resolved.is_dir():
+            return resolved
+    except (OSError, RuntimeError, ValueError):
+        # Missing paths, inaccessible directories and symlink loops cannot prove ownership.
+        return None
+    return None
+
+
+def registered_directories(projects):
+    return {project['id']: host_directory(project.get('directory')) for project in projects}
+
+
+def match_grant(alias, grant, fields, projects, endpoints, sockets, addresses, directories):
+    directory = None
+    if not fields.get('RootImage') and fields.get('RootDirectory', '') in ('', '/'):
+        directory = host_directory(fields.get('WorkingDirectory'))
     evidence = {}
     by_dir, by_port, by_name = set(), set(), set()
     for project in projects:
         key = project['id']
         reasons = {}
-        root = project.get('directory')
-        if root and PurePosixPath(root) != PurePosixPath('/') and directory and '..' not in directory.parts and directory.is_relative_to(root):
+        root = directories[key]
+        if root is not None and directory is not None and directory.is_relative_to(root):
             by_dir.add(key)
-            reasons['directory'] = working
+            reasons['directory'] = str(directory)
         endpoint = endpoints.get(project['endpoint'])
         if endpoint and owns_listener(endpoint, fields.get('ControlGroup'), sockets, addresses):
             by_port.add(key)
@@ -133,9 +153,10 @@ def binding_preview(listing, runner=read_host):
         properties = unit_properties(grants, runner) if runner else {}
         sockets = listeners(runner) if properties else {}
         addresses = local_addresses(runner) if sockets else set()
+        directories = registered_directories(projects)
         for alias, grant in grants.items():
             fields = properties.get((grant['scope'], grant['unit']), {})
-            rows.append(match_grant(alias, grant, fields, projects, listing['endpoints'], sockets, addresses))
+            rows.append(match_grant(alias, grant, fields, projects, listing['endpoints'], sockets, addresses, directories))
     return {'rows': rows, 'policy_sha256': listing['policy_sha256'],
             'projects': [{key: project[key] for key in ('id', 'revision', 'name', 'domain')} for project in projects]}
 
@@ -154,12 +175,13 @@ def project_services(listing, runner=read_host):
     owned = {alias for project in projects for alias in project['bound_services']}
     sockets = listeners(runner, issues)
     addresses = local_addresses(runner, issues) if sockets else set()
+    directories = registered_directories(projects)
     for scope, unit in sorted(units.keys() | grants.keys()):
         alias = grants.get((scope, unit))
         if alias in owned:
             continue
         result = match_grant(alias or unit, {'scope': scope, 'unit': unit}, units.get((scope, unit), {}),
-                             projects, listing['endpoints'], sockets, addresses)
+                             projects, listing['endpoints'], sockets, addresses, directories)
         for key, reasons in result['evidence'].items():
             if result['suggested'] and key != result['suggested']:
                 continue

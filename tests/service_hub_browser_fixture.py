@@ -42,6 +42,10 @@ def main():
             raise DockerError('Fixture has no other Docker resources')
     with tempfile.TemporaryDirectory(prefix='xdocker-hub-browser-') as raw:
         root=Path(raw).resolve();state=root/'state';initialize(state,ROOT)
+        padelu = root / 'padelu'
+        (padelu / 'jobs').mkdir(parents=True)
+        padelu_alias = root / 'padelu-link'
+        padelu_alias.symlink_to(padelu, target_is_directory=True)
         unit=root/'example.service';unit.write_text('[Service]\nExecStart=/usr/bin/example\n')
         runner=FakeSystemd(unit);adapter=SystemdServices(runner)
         grant={'scope':'user','unit':'example.service','actions':['status','logs','restart'],'definition_sha256':None}
@@ -55,7 +59,7 @@ def main():
                 if units == ['*.service']:
                     units = ['padelu-web.service', 'tasks.service', 'worker.service', 'browser-project-backend.service', 'unrelated.service'] if '--user' in command else []
                 output = '\n\n'.join(f'Id={unit}\nLoadState=loaded\nControlGroup=/fixture/{unit}'
-                                      + ('\nWorkingDirectory=/fixture/padelu/jobs' if unit in ('tasks.service', 'worker.service') else '')
+                                      + (f'\nWorkingDirectory={padelu_alias}/jobs' if unit in ('tasks.service', 'worker.service') else '')
                                       for unit in units)
             elif command[0] == 'ss' and '-4' in command:
                 output = 'LISTEN 0 5 127.0.0.1:3000 0.0.0.0:* cgroup:/fixture/browser-project-backend.service'
@@ -84,7 +88,7 @@ def main():
         atomic_json(state/'host-metrics/report.json',sample_report())
         app.extensions['resource_monitor'].save({'id':'example-resources','revision':1,'name':'资源分组','targets':[FIRST]})
         server=make_server('127.0.0.1',0,app,threaded=True,request_handler=Quiet)
-        print(json.dumps({'url':f'http://127.0.0.1:{server.server_port}/#service-hub','fixture_token':(state/'access-token').read_text().strip()}),flush=True)
+        print(json.dumps({'url':f'http://127.0.0.1:{server.server_port}/#service-hub','fixture_token':(state/'access-token').read_text().strip(),'padelu_directory':str(padelu)}),flush=True)
         try:server.serve_forever()
         except KeyboardInterrupt:pass
         finally:server.server_close();app.extensions['github_watch'].close()

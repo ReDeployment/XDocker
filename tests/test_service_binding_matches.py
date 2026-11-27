@@ -1,25 +1,33 @@
 from ipaddress import ip_address
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/admin'))
-from service_binding_matches import binding_preview, match_grant, owns_listener, project_services, read_host
+from service_binding_matches import binding_preview, match_grant, owns_listener, project_services, read_host, registered_directories
 
 
 class BindingMatchTests(unittest.TestCase):
     def setUp(self):
-        self.projects = [{'id': key, 'endpoint': key, 'directory': '/apps/shared',
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        (self.root / 'shared' / 'backend').mkdir(parents=True)
+        (self.root / 'shared-old').mkdir()
+        (self.root / 'shared-copy').mkdir()
+        self.projects = [{'id': key, 'endpoint': key, 'directory': str(self.root / 'shared'),
                           'name': key, 'revision': 1, 'domain': key + '.example.test',
                           'bound_services': [], 'endpoint_available': True} for key in ('web', 'api')]
         self.endpoints = {key: {'host': '127.0.0.1', 'port': port} for key, port in [('web', 3000), ('api', 8080)]}
         self.grant = {'scope': 'user', 'unit': 'demo.service', 'actions': ['status']}
-        self.fields = {'WorkingDirectory': '/apps/shared/backend', 'ControlGroup': '/units/demo.service'}
+        self.fields = {'WorkingDirectory': str(self.root / 'shared' / 'backend'), 'ControlGroup': '/units/demo.service'}
         self.sockets = {(4, 8080): [(ip_address('127.0.0.1'), '/units/demo.service/worker')]}
 
     def match(self, alias='demo'):
-        return match_grant(alias, self.grant, self.fields, self.projects, self.endpoints, self.sockets, set())
+        return match_grant(alias, self.grant, self.fields, self.projects, self.endpoints, self.sockets, set(),
+                           registered_directories(self.projects))
 
     def test_system_service_can_observe_its_own_login_manager(self):
         command = ['systemctl', '--user', 'show', '--', 'example.service']
@@ -43,19 +51,50 @@ class BindingMatchTests(unittest.TestCase):
 
     def test_conflicting_hints_need_a_choice(self):
         self.assertIsNone(self.match('web-worker')['suggested'])
-        self.projects[1]['directory'] = '/apps/other'
+        self.projects[1]['directory'] = str(self.root / 'shared-copy')
         self.assertIsNone(self.match()['suggested'])
 
     def test_directory_boundary_and_name_only(self):
         self.sockets.clear()
-        self.projects[0]['directory'] = '/apps/shared-old'
+        self.projects[0]['directory'] = str(self.root / 'shared-old')
         self.assertEqual(self.match()['suggested'], 'api')
-        self.fields['WorkingDirectory'] = '/apps/shared-copy'
+        self.fields['WorkingDirectory'] = str(self.root / 'shared-copy')
         row = self.match('api-worker')
         self.assertIsNone(row['suggested'])
         self.assertEqual(row['evidence'], {'api': {'name': True}})
-        self.fields.update(WorkingDirectory='/apps/shared', RootDirectory='/chroot')
+        self.fields.update(WorkingDirectory=str(self.root / 'shared'), RootDirectory='/chroot')
         self.assertFalse(self.match()['evidence'])
+
+    def test_worktree_path_alias_and_port_can_identify_a_deployment(self):
+        link = self.root / 'workspace'
+        link.symlink_to(self.root / 'shared', target_is_directory=True)
+        worktree = self.root / 'shared' / 'backend'
+        self.projects[0]['directory'] = str(self.root / 'shared-old')
+        self.fields['WorkingDirectory'] = str(link / 'backend')
+        self.sockets.clear()
+        row = self.match()
+        self.assertEqual(row['suggested'], 'api')
+        self.assertEqual(row['evidence']['api']['directory'], str(worktree))
+
+        # A second registration of the same directory is ambiguous until a port distinguishes it.
+        self.projects[0]['directory'] = str(link)
+        self.assertIsNone(self.match()['suggested'])
+        self.sockets[(4, 8080)] = [(ip_address('127.0.0.1'), self.fields['ControlGroup'])]
+        self.assertEqual(self.match()['suggested'], 'api')
+
+    def test_missing_or_outside_directory_does_not_count_as_project_evidence(self):
+        shared = self.root / 'shared'
+        outside = shared / 'outside'
+        outside.symlink_to(self.root / 'shared-copy', target_is_directory=True)
+        broken = shared / 'broken'
+        broken.symlink_to(self.root / 'absent', target_is_directory=True)
+        loop = shared / 'loop'
+        loop.symlink_to(loop, target_is_directory=True)
+        self.sockets.clear()
+        for path in (outside, broken, loop, shared / 'missing'):
+            with self.subTest(path=path):
+                self.fields['WorkingDirectory'] = str(path)
+                self.assertEqual(self.match()['evidence'], {})
 
     def test_local_wildcard_scope_and_shared_port(self):
         wildcard = ip_address('0.0.0.0')
